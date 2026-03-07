@@ -17,10 +17,6 @@ class TranscriptionError(VoxError):
     """Whisper API error."""
 
 
-class FormatterError(VoxError):
-    """LLM formatting error."""
-
-
 class InjectionError(VoxError):
     """Text injection (clipboard/paste) error."""
 

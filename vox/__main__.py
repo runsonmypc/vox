@@ -37,7 +37,7 @@ def main() -> None:
         datefmt="%H:%M:%S",
     )
     # Silence noisy third-party loggers even in verbose mode
-    for noisy in ("httpx", "httpcore", "openai", "anthropic"):
+    for noisy in ("httpx", "httpcore", "openai"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
     log = logging.getLogger("vox")
 
@@ -61,9 +61,6 @@ def main() -> None:
 
     if not config.openai_api_key:
         log.error("OPENAI_API_KEY not set. Set it in config file or environment.")
-        sys.exit(1)
-    if not config.anthropic_api_key:
-        log.error("ANTHROPIC_API_KEY not set. Set it in config file or environment.")
         sys.exit(1)
 
     # Check system dependencies

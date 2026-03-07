@@ -2,9 +2,8 @@
 # Copy to ~/.config/vox/config.toml
 
 [api]
-# API keys (can also be set via environment variables)
+# API key (can also be set via OPENAI_API_KEY environment variable)
 # openai_api_key = "sk-..."
-# anthropic_api_key = "sk-ant-..."
 
 [hotkey]
 key = "right_shift"
@@ -20,10 +19,6 @@ max_recording_seconds = 30
 model = "gpt-4o-mini-transcribe-2025-12-15"
 # language = "en"         # Force language (auto-detect if unset)
 
-[formatter]
-model = "claude-haiku-4-5-20251001"
-skip_formatting_max_words = 3
-
 [sounds]
 enabled = true
 
@@ -34,12 +29,6 @@ enabled = true
 # [snippets]
 # "my email" = "alex@example.com"
 # "my address" = "123 Main St, Springfield, IL"
-
-# Per-app style overrides
-# [styles]
-# TERMINAL = "Use concise, command-like language"
-# CHAT = "Use casual, conversational tone"
-# EMAIL = "Use professional, polished tone"
 
 # Window class overrides (WM_CLASS -> app type)
 # [window_classes]

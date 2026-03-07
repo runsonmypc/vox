@@ -16,8 +16,6 @@ DEFAULT_CONFIG_PATH = Path.home() / ".config" / "vox" / "config.toml"
 class Config:
     # API keys
     openai_api_key: str = ""
-    anthropic_api_key: str = ""
-
     # Hotkey
     hotkey: str = "right_shift"
     hotkey_fallback: str = "ctrl+space"
@@ -31,12 +29,7 @@ class Config:
     # Whisper
     whisper_model: str = "gpt-4o-mini-transcribe-2025-12-15"
     whisper_language: str | None = None
-    whisper_prompt: str = "Transcribe only the spoken words. Use proper capitalization and punctuation. Remove filler words (um, uh, like, you know). If there is no speech, output an empty string."
-
-    # Formatter
-    formatter_model: str = "claude-haiku-4-5-20251001"
-    skip_formatting: bool = True
-    skip_formatting_max_words: int = 3
+    whisper_prompt: str = "The speaker is a software developer. Transcribe only the spoken words. Use proper capitalization and punctuation. If there is no speech, output an empty string."
 
     # Snippets: trigger phrase -> expansion
     snippets: dict[str, str] = field(default_factory=dict)
@@ -77,7 +70,6 @@ def load_config(path: Path | None = None) -> Config:
 
         _apply_section(config, data, "api", {
             "openai_api_key": "openai_api_key",
-            "anthropic_api_key": "anthropic_api_key",
         })
         _apply_section(config, data, "hotkey", {
             "key": "hotkey",
@@ -94,12 +86,6 @@ def load_config(path: Path | None = None) -> Config:
             "language": "whisper_language",
             "prompt": "whisper_prompt",
         })
-        _apply_section(config, data, "formatter", {
-            "model": "formatter_model",
-            "skip_formatting": "skip_formatting",
-            "skip_formatting_max_words": "skip_formatting_max_words",
-        })
-
         if "snippets" in data:
             config.snippets = dict(data["snippets"])
         if "dictionary" in data:
@@ -116,8 +102,6 @@ def load_config(path: Path | None = None) -> Config:
     # Env var fallback for API keys
     if not config.openai_api_key:
         config.openai_api_key = os.environ.get("OPENAI_API_KEY", "")
-    if not config.anthropic_api_key:
-        config.anthropic_api_key = os.environ.get("ANTHROPIC_API_KEY", "")
 
     return config
 

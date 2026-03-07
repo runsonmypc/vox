@@ -9,7 +9,6 @@ from enum import Enum
 
 from .audio import Recorder, has_speech
 from .config import Config, load_config
-from .formatter import Formatter
 from .hotkey import HotkeyListener
 from .injector import inject_text
 from .sounds import SoundPlayer
@@ -36,7 +35,6 @@ async def _main(config: Config) -> None:
 
     recorder = Recorder(config)
     transcriber = Transcriber(config)
-    formatter = Formatter(config)
     sounds = SoundPlayer(config)
     hotkey = HotkeyListener(config, loop, queue)
 
@@ -47,7 +45,7 @@ async def _main(config: Config) -> None:
     recording_context = None
     log.info("Vox ready. Press %s to toggle recording.", config.hotkey)
 
-    reload_task = asyncio.create_task(_config_reloader(config, formatter, sounds))
+    reload_task = asyncio.create_task(_config_reloader(config, sounds))
 
     try:
         while True:
@@ -89,7 +87,7 @@ async def _main(config: Config) -> None:
                     stop_context = detect_active_window(config)
 
                     asyncio.create_task(_process(
-                        wav_data, config, transcriber, formatter, sounds,
+                        wav_data, transcriber, sounds,
                         stop_context, screen_capture_future,
                     ))
                     state = State.IDLE
@@ -106,14 +104,12 @@ async def _main(config: Config) -> None:
 
 async def _process(
     wav_data: bytes,
-    config: Config,
     transcriber: Transcriber,
-    formatter: Formatter,
     sounds: SoundPlayer,
     context: AppContext,
     screen_capture_future: asyncio.Future | None,
 ) -> None:
-    """Process recorded audio: transcribe, format, inject."""
+    """Process recorded audio: transcribe and inject."""
     try:
         t0 = time.monotonic()
 
@@ -132,20 +128,16 @@ async def _process(
             return
 
         # Transcribe with context
-        raw_text = await transcriber.transcribe(wav_data, context)
-        if not raw_text:
+        text = await transcriber.transcribe(wav_data, context)
+        if not text:
             log.warning("Empty transcription result")
             sounds.play("error")
             return
 
-        log.info("Transcript: %s", raw_text)
-
-        # Format (skipped when skip_formatting is True)
-        formatted = await formatter.format(raw_text, context)
-        log.info("Formatted: %s", formatted)
+        log.info("Transcript: %s", text)
 
         # Inject
-        inject_text(formatted, context.app_type)
+        inject_text(text, context.app_type)
 
         elapsed = time.monotonic() - t0
         log.info("Done in %.1fs", elapsed)
@@ -155,7 +147,7 @@ async def _process(
         sounds.play("error")
 
 
-async def _config_reloader(config: Config, formatter: Formatter, sounds: SoundPlayer) -> None:
+async def _config_reloader(config: Config, sounds: SoundPlayer) -> None:
     """Poll config file mtime and reload hot-reloadable settings every 2s."""
     if config.config_path is None or not config.config_path.exists():
         return
@@ -180,7 +172,6 @@ async def _config_reloader(config: Config, formatter: Formatter, sounds: SoundPl
             config.window_classes = new_config.window_classes
             config.sounds_enabled = new_config.sounds_enabled
 
-            formatter._config = new_config
             sounds._enabled = new_config.sounds_enabled
 
             log.info("Config reloaded from %s", config.config_path)
