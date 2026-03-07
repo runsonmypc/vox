@@ -37,6 +37,7 @@ class HotkeyListener:
         self._press_time: float = 0
         self._last_toggle_time: float = 0
         self._debounce_ms = 50
+        self._min_hold_ms = 80  # filter out synthetic/phantom key events
 
         # Resolve key
         self._hotkey_key = self._resolve_key(self._hotkey_name)
@@ -96,8 +97,9 @@ class HotkeyListener:
         if key_name == self._hotkey_name:
             with self._lock:
                 was_solo = self._modifier_pressed and not self._other_key_pressed
+                held_ms = (time.monotonic() - self._press_time) * 1000
                 self._modifier_pressed = False
-            if was_solo:
+            if was_solo and held_ms >= self._min_hold_ms:
                 self._fire_toggle()
             return
 
