@@ -19,8 +19,8 @@ from .errors import AudioError
 
 log = logging.getLogger(__name__)
 
-# Minimum fraction of frames that must contain speech (15%)
-_MIN_SPEECH_RATIO = 0.15
+# Minimum total speech duration to consider audio as containing speech
+_MIN_SPEECH_MS = 300
 
 
 def has_speech(wav_bytes: bytes) -> bool:
@@ -31,26 +31,21 @@ def has_speech(wav_bytes: bytes) -> bool:
             sample_rate = wf.getframerate()
             pcm = wf.readframes(wf.getnframes())
 
-        vad = webrtcvad.Vad(3)  # aggressiveness 0-3 (3 = most aggressive filtering)
+        vad = webrtcvad.Vad(1)  # aggressiveness 0-3 (1 = lenient, fewer false negatives)
 
         # WebRTC VAD needs 10/20/30ms frames at 8/16/32/48kHz
         frame_ms = 30
         frame_bytes = 2 * sample_rate * frame_ms // 1000  # 16-bit = 2 bytes/sample
 
         speech_frames = 0
-        total_frames = 0
         for i in range(0, len(pcm) - frame_bytes + 1, frame_bytes):
             frame = pcm[i : i + frame_bytes]
-            total_frames += 1
             if vad.is_speech(frame, sample_rate):
                 speech_frames += 1
 
-        if total_frames == 0:
-            return False
-
-        ratio = speech_frames / total_frames
-        log.debug("VAD: %d/%d frames speech (%.0f%%)", speech_frames, total_frames, ratio * 100)
-        return ratio >= _MIN_SPEECH_RATIO
+        speech_ms = speech_frames * frame_ms
+        log.debug("VAD: %dms speech detected", speech_ms)
+        return speech_ms >= _MIN_SPEECH_MS
     except Exception as e:
         log.debug("VAD check failed: %s", e)
         return True  # assume speech on error to avoid dropping valid audio
