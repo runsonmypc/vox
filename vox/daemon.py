@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import time
 from enum import Enum
 
@@ -15,7 +14,7 @@ from .hotkey import HotkeyListener
 from .injector import inject_text
 from .sounds import SoundPlayer
 from .transcribe import Transcriber
-from .window import detect_active_window
+from .window import AppContext, detect_active_window, start_screen_capture
 
 log = logging.getLogger(__name__)
 
@@ -44,9 +43,10 @@ async def _main(config: Config) -> None:
     hotkey.start()
 
     state = State.IDLE
+    screen_capture_future: asyncio.Future | None = None
+    recording_context = None
     log.info("Vox ready. Press %s to toggle recording.", config.hotkey)
 
-    # Start config hot-reload task
     reload_task = asyncio.create_task(_config_reloader(config, formatter, sounds))
 
     try:
@@ -55,9 +55,13 @@ async def _main(config: Config) -> None:
 
             if event == "toggle":
                 if state == State.IDLE:
-                    # Start recording
                     state = State.RECORDING
                     sounds.play("start")
+
+                    # Capture window context NOW and start OCR in background
+                    recording_context = detect_active_window(config)
+                    screen_capture_future = start_screen_capture(recording_context)
+
                     try:
                         recorder.start()
                         log.info("Recording...")
@@ -65,9 +69,9 @@ async def _main(config: Config) -> None:
                         log.error("Failed to start recording: %s", e)
                         sounds.play("error")
                         state = State.IDLE
+                        screen_capture_future = None
 
                 elif state == State.RECORDING:
-                    # Stop recording and process
                     state = State.PROCESSING
                     sounds.play("stop")
                     log.info("Processing...")
@@ -78,16 +82,20 @@ async def _main(config: Config) -> None:
                         log.error("Failed to stop recording: %s", e)
                         sounds.play("error")
                         state = State.IDLE
+                        screen_capture_future = None
                         continue
 
-                    # Process in background to not block toggle detection
+                    # Re-detect window at stop time (user may have switched focus)
+                    stop_context = detect_active_window(config)
+
                     asyncio.create_task(_process(
-                        wav_data, config, transcriber, formatter, sounds, queue
+                        wav_data, config, transcriber, formatter, sounds,
+                        stop_context, screen_capture_future,
                     ))
-                    state = State.IDLE  # Ready for next recording immediately
+                    state = State.IDLE
+                    screen_capture_future = None
 
                 elif state == State.PROCESSING:
-                    # Ignore toggle while processing
                     log.debug("Ignoring toggle during processing")
     except asyncio.CancelledError:
         pass
@@ -102,14 +110,21 @@ async def _process(
     transcriber: Transcriber,
     formatter: Formatter,
     sounds: SoundPlayer,
-    queue: asyncio.Queue,
+    context: AppContext,
+    screen_capture_future: asyncio.Future | None,
 ) -> None:
     """Process recorded audio: transcribe, format, inject."""
     try:
         t0 = time.monotonic()
 
-        # Detect window context (at stop time, as planned)
-        context = detect_active_window(config)
+        # Get screen text from the background capture (started at recording time)
+        if screen_capture_future is not None:
+            try:
+                screen_text = await screen_capture_future
+                context.screen_text = screen_text
+                log.debug("Screen context: %d chars", len(screen_text))
+            except Exception as e:
+                log.warning("Screen capture failed: %s", e)
 
         # Transcribe with context
         raw_text = await transcriber.transcribe(wav_data, context)
@@ -120,7 +135,7 @@ async def _process(
 
         log.info("Transcript: %s", raw_text)
 
-        # Format
+        # Format (skipped when skip_formatting is True)
         formatted = await formatter.format(raw_text, context)
         log.info("Formatted: %s", formatted)
 
@@ -154,17 +169,13 @@ async def _config_reloader(config: Config, formatter: Formatter, sounds: SoundPl
             last_mtime = current_mtime
             new_config = load_config(config.config_path)
 
-            # Hot-reload only safe fields
             config.snippets = new_config.snippets
             config.dictionary = new_config.dictionary
             config.styles = new_config.styles
             config.window_classes = new_config.window_classes
             config.sounds_enabled = new_config.sounds_enabled
 
-            # Update formatter's config reference
             formatter._config = new_config
-
-            # Update sounds
             sounds._enabled = new_config.sounds_enabled
 
             log.info("Config reloaded from %s", config.config_path)

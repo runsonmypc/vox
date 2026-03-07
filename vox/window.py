@@ -1,10 +1,12 @@
-"""Active window detection, app classification, and screen context via AT-SPI."""
+"""Active window detection, app classification, and screen context via AT-SPI + OCR."""
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import shutil
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from enum import Enum
 
@@ -21,6 +23,9 @@ Atspi.init()
 
 # Max total chars of screen text to capture
 _MAX_CONTEXT_CHARS = 2000
+
+# Thread pool for OCR (runs in background during recording)
+_ocr_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ocr")
 
 
 class AppType(Enum):
@@ -81,9 +86,10 @@ class AppContext:
 
 
 def detect_active_window(config: Config) -> AppContext:
-    """Detect the currently active window, classify it, and read screen text."""
+    """Detect the currently active window and classify it (no screen text yet)."""
     wm_class = ""
     title = ""
+    win_id = ""
     pid = ""
 
     try:
@@ -112,22 +118,58 @@ def detect_active_window(config: Config) -> AppContext:
 
     app_type = _classify(wm_class, title, config)
 
-    # Read screen text: try AT-SPI first, tmux fallback for terminals
-    screen_text = _read_atspi_text(pid)
-    if not screen_text and app_type == AppType.TERMINAL:
-        screen_text = _read_tmux_pane()
-
     ctx = AppContext(
         wm_class=wm_class,
         window_title=title,
         app_type=app_type,
-        screen_text=screen_text,
     )
-    log.debug(
-        "Window: class=%r title=%r type=%s screen_text=%d chars",
-        wm_class, title, app_type.value, len(screen_text),
-    )
+    ctx._win_id = win_id
+    ctx._pid = pid
+    log.debug("Window: class=%r title=%r type=%s", wm_class, title, app_type.value)
     return ctx
+
+
+def start_screen_capture(ctx: AppContext) -> asyncio.Future:
+    """Start screen text capture in background. Returns a future with the result.
+
+    Call this when recording starts. By the time recording stops,
+    the screen text will be ready.
+    """
+    loop = asyncio.get_running_loop()
+    win_id = getattr(ctx, "_win_id", "")
+    pid = getattr(ctx, "_pid", "")
+    app_type = ctx.app_type
+    return loop.run_in_executor(_ocr_pool, _capture_screen_text, win_id, pid, app_type)
+
+
+def _capture_screen_text(win_id: str, pid: str, app_type: AppType) -> str:
+    """Capture screen text — tries AT-SPI, then OCR, then tmux. Runs in thread."""
+    # Try AT-SPI first (fast, ~10ms)
+    text = _read_atspi_text(pid)
+    if text and len(text) > 100:
+        log.debug("Screen text from AT-SPI: %d chars", len(text))
+        return text
+
+    # Try OCR (slower, ~1-2s, but works for everything)
+    if win_id and shutil.which("maim") and shutil.which("tesseract"):
+        ocr_text = _read_ocr(win_id)
+        if ocr_text:
+            log.debug("Screen text from OCR: %d chars", len(ocr_text))
+            return ocr_text
+
+    # Tmux fallback for terminals
+    if app_type == AppType.TERMINAL:
+        tmux_text = _read_tmux_pane()
+        if tmux_text:
+            log.debug("Screen text from tmux: %d chars", len(tmux_text))
+            return tmux_text
+
+    # AT-SPI might have returned something small (e.g. ghostty tab titles)
+    if text:
+        log.debug("Screen text from AT-SPI (partial): %d chars", len(text))
+        return text
+
+    return ""
 
 
 def _read_atspi_text(pid: str) -> str:
@@ -173,13 +215,30 @@ def _collect_text(obj, chunks: list[str], depth: int) -> None:
                 cc = Atspi.Text.get_character_count(child)
                 if cc > 0:
                     text = Atspi.Text.get_text(child, 0, min(cc, 500))
-                    # Skip placeholder-only text
                     cleaned = text.strip().replace("\ufffc", "").replace("\ufffd", "").strip()
                     if cleaned:
                         chunks.append(cleaned)
             _collect_text(child, chunks, depth + 1)
         except Exception:
             continue
+
+
+def _read_ocr(win_id: str) -> str:
+    """Screenshot the window and OCR it with tesseract."""
+    try:
+        result = subprocess.run(
+            f'maim -i {win_id} --format=png | tesseract stdin stdout 2>/dev/null',
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        text = result.stdout.strip()
+        if text:
+            return text[:_MAX_CONTEXT_CHARS]
+    except (subprocess.TimeoutExpired, Exception) as e:
+        log.debug("OCR failed: %s", e)
+    return ""
 
 
 def _read_tmux_pane() -> str:
