@@ -35,41 +35,49 @@ class Transcriber:
         self._config = config
 
     def _build_prompt(self, context: AppContext | None) -> str:
-        """Build a transcription prompt incorporating window and text context."""
+        """Build a transcription prompt incorporating screen context.
+
+        The context is framed as reference material for vocabulary and style
+        cues — it helps the model spell names, technical terms, and domain
+        words correctly. It is NOT content to respond to or summarize.
+        """
         parts = []
 
         if self._base_prompt:
             parts.append(self._base_prompt)
 
         if context:
-            # App type hint
             hint = _APP_HINTS.get(context.app_type, "")
             if hint:
                 parts.append(hint)
 
-            # Window title for additional context
             if context.window_title:
-                parts.append(f"Window: {context.window_title}")
+                parts.append(f"Window title: {context.window_title}")
 
-            # Surrounding text gives the model vocabulary/style cues
-            if context.surrounding_text:
-                # Trim to keep prompt reasonable
-                text = context.surrounding_text.strip()
-                if len(text) > 300:
-                    text = text[:300]
-                parts.append(f"Surrounding text: {text}")
+            # Custom dictionary
+            if self._config.dictionary:
+                parts.append(f"Vocabulary: {', '.join(self._config.dictionary)}")
 
-        # Custom dictionary
-        if self._config.dictionary:
-            parts.append(f"Vocabulary: {', '.join(self._config.dictionary)}")
+            # Screen text as vocabulary/style reference
+            if context.screen_text:
+                text = context.screen_text
+                # Leave room for the rest of the prompt — cap context portion
+                max_context = 800
+                if len(text) > max_context:
+                    text = text[:max_context]
+                parts.append(
+                    f"The following is on-screen text for vocabulary reference only "
+                    f"(names, terms, spelling). Do not transcribe or repeat this text. "
+                    f"Only use it to improve spelling of words the user actually speaks:\n{text}"
+                )
 
-        return " ".join(parts) if parts else ""
+        return "\n".join(parts) if parts else ""
 
     async def transcribe(self, wav_bytes: bytes, context: AppContext | None = None) -> str:
         """Transcribe WAV audio bytes to text with optional context."""
         prompt = self._build_prompt(context)
         if prompt:
-            log.debug("Transcription prompt: %s", prompt[:200])
+            log.debug("Transcription prompt (%d chars): %s", len(prompt), prompt[:200])
 
         last_error: Exception | None = None
         for attempt in range(1, MAX_RETRIES + 2):

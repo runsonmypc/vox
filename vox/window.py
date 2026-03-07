@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import logging
+import shutil
 import subprocess
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 
 import gi
@@ -17,6 +18,9 @@ log = logging.getLogger(__name__)
 
 # Initialize AT-SPI once
 Atspi.init()
+
+# Max total chars of screen text to capture
+_MAX_CONTEXT_CHARS = 2000
 
 
 class AppType(Enum):
@@ -66,9 +70,6 @@ _DEFAULT_CLASSES: dict[str, AppType] = {
     "brave-browser": AppType.BROWSER,
 }
 
-# Max chars of surrounding text to capture for context
-_MAX_CONTEXT_CHARS = 500
-
 
 @dataclass
 class AppContext:
@@ -76,14 +77,14 @@ class AppContext:
     wm_class: str
     window_title: str
     app_type: AppType
-    surrounding_text: str = ""
-    caret_offset: int = -1
+    screen_text: str = ""
 
 
 def detect_active_window(config: Config) -> AppContext:
-    """Detect the currently active window, classify it, and read surrounding text."""
+    """Detect the currently active window, classify it, and read screen text."""
     wm_class = ""
     title = ""
+    pid = ""
 
     try:
         win_id = subprocess.check_output(
@@ -94,7 +95,10 @@ def detect_active_window(config: Config) -> AppContext:
             ["xdotool", "getactivewindow", "getwindowname"], stderr=subprocess.DEVNULL, text=True
         ).strip()
 
-        # Get WM_CLASS via xprop
+        pid = subprocess.check_output(
+            ["xdotool", "getwindowpid", win_id], stderr=subprocess.DEVNULL, text=True
+        ).strip()
+
         xprop_out = subprocess.check_output(
             ["xprop", "-id", win_id, "WM_CLASS"], stderr=subprocess.DEVNULL, text=True
         ).strip()
@@ -108,77 +112,96 @@ def detect_active_window(config: Config) -> AppContext:
 
     app_type = _classify(wm_class, title, config)
 
-    # Read surrounding text via AT-SPI
-    surrounding_text, caret_offset = _read_focused_text()
+    # Read screen text: try AT-SPI first, tmux fallback for terminals
+    screen_text = _read_atspi_text(pid)
+    if not screen_text and app_type == AppType.TERMINAL:
+        screen_text = _read_tmux_pane()
 
     ctx = AppContext(
         wm_class=wm_class,
         window_title=title,
         app_type=app_type,
-        surrounding_text=surrounding_text,
-        caret_offset=caret_offset,
+        screen_text=screen_text,
     )
     log.debug(
-        "Window: class=%r title=%r type=%s context=%d chars",
-        wm_class, title, app_type.value, len(surrounding_text),
+        "Window: class=%r title=%r type=%s screen_text=%d chars",
+        wm_class, title, app_type.value, len(screen_text),
     )
     return ctx
 
 
-def _read_focused_text() -> tuple[str, int]:
-    """Walk the AT-SPI tree to find the focused text element and read its content."""
+def _read_atspi_text(pid: str) -> str:
+    """Read all text from the AT-SPI app matching the given PID."""
+    if not pid:
+        return ""
     try:
         desktop = Atspi.get_desktop(0)
-        result = _find_focused_text(desktop, depth=0)
-        if result:
-            return result
+        for i in range(desktop.get_child_count()):
+            app = desktop.get_child_at_index(i)
+            if app is None:
+                continue
+            try:
+                if str(app.get_process_id()) == pid:
+                    chunks: list[str] = []
+                    _collect_text(app, chunks, depth=0)
+                    text = "\n".join(chunks)
+                    if len(text) > _MAX_CONTEXT_CHARS:
+                        text = text[:_MAX_CONTEXT_CHARS]
+                    return text
+            except Exception:
+                continue
     except Exception as e:
-        log.debug("AT-SPI text read failed: %s", e)
-    return "", -1
+        log.debug("AT-SPI read failed: %s", e)
+    return ""
 
 
-def _find_focused_text(obj, depth: int) -> tuple[str, int] | None:
-    """Recursively find the focused element with a Text interface."""
-    if depth > 12:
-        return None
+def _collect_text(obj, chunks: list[str], depth: int) -> None:
+    """Recursively collect text content from an AT-SPI accessible tree."""
+    if depth > 20 or len(chunks) > 200:
+        return
     try:
         n = obj.get_child_count()
     except Exception:
-        return None
-
+        return
     for i in range(n):
         try:
             child = obj.get_child_at_index(i)
             if child is None:
                 continue
-
-            state_set = child.get_state_set()
-            if state_set.contains(Atspi.StateType.FOCUSED):
-                ifaces = child.get_interfaces()
-                if "Text" in ifaces:
-                    char_count = Atspi.Text.get_character_count(child)
-                    if char_count > 0:
-                        # Read text around the caret, up to _MAX_CONTEXT_CHARS
-                        caret = Atspi.Text.get_caret_offset(child)
-                        start = max(0, caret - _MAX_CONTEXT_CHARS // 2)
-                        end = min(char_count, start + _MAX_CONTEXT_CHARS)
-                        text = Atspi.Text.get_text(child, start, end)
-                        return text, caret
-
-            # Recurse into children
-            result = _find_focused_text(child, depth + 1)
-            if result:
-                return result
+            ifaces = child.get_interfaces()
+            if "Text" in ifaces:
+                cc = Atspi.Text.get_character_count(child)
+                if cc > 0:
+                    text = Atspi.Text.get_text(child, 0, min(cc, 500))
+                    # Skip placeholder-only text
+                    cleaned = text.strip().replace("\ufffc", "").replace("\ufffd", "").strip()
+                    if cleaned:
+                        chunks.append(cleaned)
+            _collect_text(child, chunks, depth + 1)
         except Exception:
             continue
-    return None
+
+
+def _read_tmux_pane() -> str:
+    """Read the most recently active tmux pane's visible content."""
+    if not shutil.which("tmux"):
+        return ""
+    try:
+        text = subprocess.check_output(
+            ["tmux", "capture-pane", "-p"],
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=2,
+        )
+        return text.strip()[:_MAX_CONTEXT_CHARS]
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError):
+        return ""
 
 
 def _classify(wm_class: str, title: str, config: Config) -> AppType:
     """Classify window into an AppType."""
     wm_lower = wm_class.lower()
 
-    # Check user overrides first
     for pattern, type_str in config.window_classes.items():
         if pattern.lower() in wm_lower:
             try:
@@ -186,12 +209,10 @@ def _classify(wm_class: str, title: str, config: Config) -> AppType:
             except ValueError:
                 log.warning("Invalid app type in config: %r", type_str)
 
-    # Check defaults
     for pattern, app_type in _DEFAULT_CLASSES.items():
         if pattern in wm_lower:
             return app_type
 
-    # Special case: vim/nvim in terminal title -> EDITOR
     title_lower = title.lower()
     if any(indicator in title_lower for indicator in ("nvim", "vim ", "- vim", "neovim")):
         return AppType.EDITOR
