@@ -6,20 +6,14 @@ import asyncio
 import logging
 import shutil
 import subprocess
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from enum import Enum
 
-import gi
-gi.require_version("Atspi", "2.0")
-from gi.repository import Atspi
-
 from .config import Config
 
 log = logging.getLogger(__name__)
-
-# Initialize AT-SPI once
-Atspi.init()
 
 # Max total chars of screen text to capture
 _MAX_CONTEXT_CHARS = 2000
@@ -173,54 +167,21 @@ def _capture_screen_text(win_id: str, pid: str, app_type: AppType) -> str:
 
 
 def _read_atspi_text(pid: str) -> str:
-    """Read all text from the AT-SPI app matching the given PID."""
+    """Read AT-SPI text in a subprocess to isolate potential segfaults."""
     if not pid:
         return ""
     try:
-        desktop = Atspi.get_desktop(0)
-        for i in range(desktop.get_child_count()):
-            app = desktop.get_child_at_index(i)
-            if app is None:
-                continue
-            try:
-                if str(app.get_process_id()) == pid:
-                    chunks: list[str] = []
-                    _collect_text(app, chunks, depth=0)
-                    text = "\n".join(chunks)
-                    if len(text) > _MAX_CONTEXT_CHARS:
-                        text = text[:_MAX_CONTEXT_CHARS]
-                    return text
-            except Exception:
-                continue
+        result = subprocess.run(
+            [sys.executable, "-m", "vox._atspi_reader", pid, str(_MAX_CONTEXT_CHARS)],
+            capture_output=True, text=True, timeout=3,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except subprocess.TimeoutExpired:
+        log.debug("AT-SPI subprocess timed out")
     except Exception as e:
         log.debug("AT-SPI read failed: %s", e)
     return ""
-
-
-def _collect_text(obj, chunks: list[str], depth: int) -> None:
-    """Recursively collect text content from an AT-SPI accessible tree."""
-    if depth > 20 or len(chunks) > 200:
-        return
-    try:
-        n = obj.get_child_count()
-    except Exception:
-        return
-    for i in range(n):
-        try:
-            child = obj.get_child_at_index(i)
-            if child is None:
-                continue
-            ifaces = child.get_interfaces()
-            if "Text" in ifaces:
-                cc = Atspi.Text.get_character_count(child)
-                if cc > 0:
-                    text = Atspi.Text.get_text(child, 0, min(cc, 500))
-                    cleaned = text.strip().replace("\ufffc", "").replace("\ufffd", "").strip()
-                    if cleaned:
-                        chunks.append(cleaned)
-            _collect_text(child, chunks, depth + 1)
-        except Exception:
-            continue
 
 
 def _read_ocr(win_id: str) -> str:

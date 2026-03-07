@@ -31,7 +31,7 @@ class Config:
     # Whisper
     whisper_model: str = "gpt-4o-mini-transcribe-2025-12-15"
     whisper_language: str | None = None
-    whisper_prompt: str = "Use proper capitalization and punctuation. Remove filler words (um, uh, like, you know)."
+    whisper_prompt: str = "Transcribe only the spoken words. Use proper capitalization and punctuation. Remove filler words (um, uh, like, you know). If there is no speech, output an empty string."
 
     # Formatter
     formatter_model: str = "claude-haiku-4-5-20251001"

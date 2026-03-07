@@ -7,7 +7,7 @@ import logging
 import time
 from enum import Enum
 
-from .audio import Recorder
+from .audio import Recorder, has_speech
 from .config import Config, load_config
 from .formatter import Formatter
 from .hotkey import HotkeyListener
@@ -125,6 +125,11 @@ async def _process(
                 log.debug("Screen context: %d chars", len(screen_text))
             except Exception as e:
                 log.warning("Screen capture failed: %s", e)
+
+        # Skip non-speech audio (avoids prompt leakage bug in gpt-4o-mini-transcribe)
+        if not has_speech(wav_data):
+            log.info("No speech detected, skipping transcription")
+            return
 
         # Transcribe with context
         raw_text = await transcriber.transcribe(wav_data, context)

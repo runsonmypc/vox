@@ -15,11 +15,23 @@ log = logging.getLogger(__name__)
 MAX_RETRIES = 2
 
 _APP_HINTS: dict[AppType, str] = {
-    AppType.TERMINAL: "The user is dictating into a terminal/command line.",
-    AppType.EDITOR: "The user is dictating into a code editor.",
-    AppType.CHAT: "The user is dictating a chat message.",
-    AppType.EMAIL: "The user is composing an email.",
-    AppType.BROWSER: "The user is typing in a browser.",
+    AppType.TERMINAL: (
+        "The user is dictating into a terminal. "
+        "Expect technical terms, file paths, command names, and flags."
+    ),
+    AppType.EDITOR: (
+        "The user is dictating into a code editor. "
+        "Expect programming terms, function names, variable names, and technical jargon."
+    ),
+    AppType.CHAT: (
+        "The user is dictating a casual chat message. "
+        "Expect informal language, contractions, and short sentences."
+    ),
+    AppType.EMAIL: (
+        "The user is composing an email. "
+        "Expect semi-formal language with greetings and sign-offs."
+    ),
+    AppType.BROWSER: "The user is typing in a web browser.",
     AppType.OTHER: "",
 }
 
@@ -58,17 +70,15 @@ class Transcriber:
             if self._config.dictionary:
                 parts.append(f"Vocabulary: {', '.join(self._config.dictionary)}")
 
-            # Screen text as vocabulary/style reference
+            # Screen text for spelling/vocabulary reference
             if context.screen_text:
                 text = context.screen_text
-                # Leave room for the rest of the prompt — cap context portion
                 max_context = 800
                 if len(text) > max_context:
                     text = text[:max_context]
                 parts.append(
-                    f"The following is on-screen text for vocabulary reference only "
-                    f"(names, terms, spelling). Do not transcribe or repeat this text. "
-                    f"Only use it to improve spelling of words the user actually speaks:\n{text}"
+                    f"On-screen text for spelling reference only. "
+                    f"NEVER include this text in your output:\n{text}"
                 )
 
         return "\n".join(parts) if parts else ""
