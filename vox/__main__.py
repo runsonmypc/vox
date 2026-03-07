@@ -36,6 +36,9 @@ def main() -> None:
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         datefmt="%H:%M:%S",
     )
+    # Silence noisy third-party loggers even in verbose mode
+    for noisy in ("httpx", "httpcore", "openai", "anthropic"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
     log = logging.getLogger("vox")
 
     if args.list_devices:

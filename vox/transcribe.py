@@ -77,7 +77,7 @@ class Transcriber:
         """Transcribe WAV audio bytes to text with optional context."""
         prompt = self._build_prompt(context)
         if prompt:
-            log.debug("Transcription prompt (%d chars): %s", len(prompt), prompt[:200])
+            log.debug("Transcription prompt: %d chars", len(prompt))
 
         last_error: Exception | None = None
         for attempt in range(1, MAX_RETRIES + 2):
