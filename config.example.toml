@@ -1,0 +1,48 @@
+# Vox configuration
+# Copy to ~/.config/vox/config.toml
+
+[api]
+# API keys (can also be set via environment variables)
+# openai_api_key = "sk-..."
+# anthropic_api_key = "sk-ant-..."
+
+[hotkey]
+key = "right_shift"
+fallback = "ctrl+space"
+
+[audio]
+# device = 0              # Audio input device index (use --list-devices)
+sample_rate = 16000
+channels = 1
+max_recording_seconds = 30
+
+[whisper]
+model = "gpt-4o-mini-transcribe-2025-12-15"
+# language = "en"         # Force language (auto-detect if unset)
+
+[formatter]
+model = "claude-haiku-4-5-20251001"
+skip_formatting_max_words = 3
+
+[sounds]
+enabled = true
+
+# Custom dictionary - words to preserve as-is
+# dictionary = ["FastAPI", "PostgreSQL", "Kubernetes"]
+
+# Snippets - exact match on raw transcript -> expansion (skips LLM)
+# [snippets]
+# "my email" = "alex@example.com"
+# "my address" = "123 Main St, Springfield, IL"
+
+# Per-app style overrides
+# [styles]
+# TERMINAL = "Use concise, command-like language"
+# CHAT = "Use casual, conversational tone"
+# EMAIL = "Use professional, polished tone"
+
+# Window class overrides (WM_CLASS -> app type)
+# [window_classes]
+# "Slack" = "CHAT"
+# "Discord" = "CHAT"
+# "Thunderbird" = "EMAIL"

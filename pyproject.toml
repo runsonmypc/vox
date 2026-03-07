@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vox"
+version = "0.1.0"
+description = "Voice-to-text daemon for Linux"
+requires-python = ">=3.12"
+dependencies = [
+    "pynput>=1.7.6",
+    "sounddevice>=0.4.6",
+    "numpy>=1.24",
+    "openai>=1.12",
+    "anthropic>=0.18",
+]
+
+[tool.setuptools.packages.find]
+include = ["vox*"]
+
+[project.scripts]
+vox = "vox.__main__:main"
