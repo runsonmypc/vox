@@ -7,6 +7,7 @@ import logging
 import time
 from enum import Enum
 
+from .attenuation import get_volume, set_volume
 from .audio import Recorder, has_speech
 from .config import Config, load_config
 from .hotkey import HotkeyListener
@@ -43,6 +44,7 @@ async def _main(config: Config) -> None:
     state = State.IDLE
     screen_capture_future: asyncio.Future | None = None
     recording_context = None
+    saved_volume: float | None = None
     log.info("Vox ready. Press %s to toggle recording.", config.hotkey)
 
     reload_task = asyncio.create_task(_config_reloader(config, sounds))
@@ -63,13 +65,24 @@ async def _main(config: Config) -> None:
                     try:
                         recorder.start()
                         log.info("Recording...")
+                        if config.attenuation_enabled:
+                            saved_volume = get_volume()
+                            if saved_volume is not None:
+                                set_volume(saved_volume * config.attenuation_level)
                     except Exception as e:
                         log.error("Failed to start recording: %s", e)
+                        if saved_volume is not None:
+                            set_volume(saved_volume)
+                            saved_volume = None
                         sounds.play("error")
                         state = State.IDLE
                         screen_capture_future = None
 
                 elif state == State.RECORDING:
+                    if saved_volume is not None:
+                        set_volume(saved_volume)
+                        saved_volume = None
+
                     state = State.PROCESSING
                     sounds.play("stop")
                     log.info("Processing...")
@@ -171,6 +184,8 @@ async def _config_reloader(config: Config, sounds: SoundPlayer) -> None:
             config.styles = new_config.styles
             config.window_classes = new_config.window_classes
             config.sounds_enabled = new_config.sounds_enabled
+            config.attenuation_enabled = new_config.attenuation_enabled
+            config.attenuation_level = new_config.attenuation_level
 
             sounds._enabled = new_config.sounds_enabled
 

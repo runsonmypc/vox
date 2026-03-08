@@ -22,6 +22,10 @@ model = "gpt-4o-mini-transcribe-2025-12-15"
 [sounds]
 enabled = true
 
+[attenuation]
+enabled = true
+level = 0.5    # reduce system volume to 50% of current while recording
+
 # Custom dictionary - words to preserve as-is
 # dictionary = ["FastAPI", "PostgreSQL", "Kubernetes"]
 

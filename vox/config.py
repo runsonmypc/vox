@@ -46,6 +46,10 @@ class Config:
     # Sounds
     sounds_enabled: bool = True
 
+    # Attenuation
+    attenuation_enabled: bool = True
+    attenuation_level: float = 0.5
+
     @property
     def config_path(self) -> Path | None:
         return self._config_path
@@ -98,6 +102,11 @@ def load_config(path: Path | None = None) -> Config:
         if "sounds" in data:
             if "enabled" in data["sounds"]:
                 config.sounds_enabled = data["sounds"]["enabled"]
+
+        _apply_section(config, data, "attenuation", {
+            "enabled": "attenuation_enabled",
+            "level": "attenuation_level",
+        })
 
     # Env var fallback for API keys
     if not config.openai_api_key:
