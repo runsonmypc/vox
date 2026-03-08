@@ -71,6 +71,15 @@ def main() -> None:
         log.error("%s", e)
         sys.exit(1)
 
+    # Prevent multiple instances via abstract Unix socket
+    import socket
+    _lock_socket = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+    try:
+        _lock_socket.bind("\0vox-daemon")
+    except OSError:
+        log.error("Another vox instance is already running.")
+        sys.exit(1)
+
     log.info("Starting vox daemon...")
 
     from .daemon import run
