@@ -59,13 +59,13 @@ class HotkeyListener:
             self._listener.stop()
             self._listener = None
 
-    def _fire_toggle(self) -> None:
+    def _fire_toggle(self, source: str) -> None:
         now = time.monotonic()
         if (now - self._last_toggle_time) * 1000 < self._debounce_ms:
             return
         self._last_toggle_time = now
         self._loop.call_soon_threadsafe(self._queue.put_nowait, "toggle")
-        log.debug("Toggle fired")
+        log.info("Toggle fired via %s", source)
 
     def _on_press(self, key: keyboard.Key | keyboard.KeyCode | None) -> None:
         key_name = self._key_name(key)
@@ -73,6 +73,8 @@ class HotkeyListener:
         # Solo modifier detection
         if key_name == self._hotkey_name:
             with self._lock:
+                if self._modifier_pressed:
+                    return  # ignore auto-repeat
                 self._modifier_pressed = True
                 self._other_key_pressed = False
                 self._press_time = time.monotonic()
@@ -82,7 +84,7 @@ class HotkeyListener:
         if self._fallback_keys:
             self._combo_state.add(key_name)
             if self._fallback_keys <= self._combo_state:
-                self._fire_toggle()
+                self._fire_toggle(f"fallback combo (keys: {self._combo_state})")
                 self._combo_state.clear()
                 return
 
@@ -100,7 +102,9 @@ class HotkeyListener:
                 held_ms = (time.monotonic() - self._press_time) * 1000
                 self._modifier_pressed = False
             if was_solo and held_ms >= self._min_hold_ms:
-                self._fire_toggle()
+                self._fire_toggle(f"solo {self._hotkey_name} ({held_ms:.0f}ms)")
+            elif was_solo:
+                log.debug("Ignoring short press: %.0fms (min %dms)", held_ms, self._min_hold_ms)
             return
 
         # Remove from combo state

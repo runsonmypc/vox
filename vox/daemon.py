@@ -56,7 +56,7 @@ async def _main(config: Config) -> None:
             if event == "toggle":
                 if state == State.IDLE:
                     state = State.RECORDING
-                    sounds.play("start")
+                    sounds.play("start", blocking=True)
 
                     # Capture window context NOW and start OCR in background
                     recording_context = detect_active_window(config)

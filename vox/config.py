@@ -18,7 +18,7 @@ class Config:
     openai_api_key: str = ""
     # Hotkey
     hotkey: str = "right_shift"
-    hotkey_fallback: str = "ctrl+space"
+    hotkey_fallback: str = ""
 
     # Audio
     audio_device: int | None = None
@@ -29,7 +29,7 @@ class Config:
     # Whisper
     whisper_model: str = "gpt-4o-mini-transcribe-2025-12-15"
     whisper_language: str | None = None
-    whisper_prompt: str = "The speaker is a software developer. Transcribe only the spoken words. Use proper capitalization and punctuation. If there is no speech, output an empty string."
+    whisper_prompt: str = "The speaker is a software developer. Transcribe only the spoken words. Use proper capitalization and punctuation. Do NOT omit, summarize, or truncate anything. Output every word as spoken, even after long pauses. If there is no speech, output an empty string."
 
     # Snippets: trigger phrase -> expansion
     snippets: dict[str, str] = field(default_factory=dict)
@@ -108,11 +108,31 @@ def load_config(path: Path | None = None) -> Config:
             "level": "attenuation_level",
         })
 
+    # Load .env file (project root) into environment if present
+    _load_dotenv(config_path.parent if config_path != DEFAULT_CONFIG_PATH else Path.cwd())
+
     # Env var fallback for API keys
     if not config.openai_api_key:
         config.openai_api_key = os.environ.get("OPENAI_API_KEY", "")
 
     return config
+
+
+def _load_dotenv(directory: Path) -> None:
+    """Load KEY=VALUE pairs from .env file into os.environ (won't overwrite)."""
+    env_file = directory / ".env"
+    if not env_file.is_file():
+        return
+    with open(env_file) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            key = key.strip()
+            value = value.strip().strip("\"'")
+            if key and key not in os.environ:
+                os.environ[key] = value
 
 
 def _apply_section(config: Config, data: dict, section: str, mapping: dict[str, str]) -> None:

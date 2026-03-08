@@ -68,8 +68,8 @@ class SoundPlayer:
                 "error": _error_sound(),
             }
 
-    def play(self, name: str) -> None:
-        """Play a named sound (non-blocking)."""
+    def play(self, name: str, blocking: bool = False) -> None:
+        """Play a named sound. If blocking=True, wait for it to finish."""
         if not self._enabled:
             return
         sound = self._sounds.get(name)
@@ -78,5 +78,7 @@ class SoundPlayer:
             return
         try:
             sd.play(sound, samplerate=44100)
+            if blocking:
+                sd.wait()
         except Exception as e:
             log.warning("Failed to play sound %r: %s", name, e)
