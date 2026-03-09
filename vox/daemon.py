@@ -174,7 +174,10 @@ async def _config_reloader(config: Config, sounds: SoundPlayer) -> None:
     while True:
         await asyncio.sleep(2)
         try:
-            current_mtime = config.config_path.stat().st_mtime
+            try:
+                current_mtime = config.config_path.stat().st_mtime
+            except OSError:
+                continue
             if current_mtime <= last_mtime:
                 continue
 
