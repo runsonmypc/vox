@@ -58,8 +58,12 @@ class Config:
         self._config_path: Path | None = None
 
 
+_dotenv_loaded = False
+
+
 def load_config(path: Path | None = None) -> Config:
     """Load config from TOML file with env var fallback for API keys."""
+    global _dotenv_loaded
     config = Config()
 
     config_path = path or DEFAULT_CONFIG_PATH
@@ -99,17 +103,18 @@ def load_config(path: Path | None = None) -> Config:
         if "window_classes" in data:
             config.window_classes = dict(data["window_classes"])
 
-        if "sounds" in data:
-            if "enabled" in data["sounds"]:
-                config.sounds_enabled = data["sounds"]["enabled"]
-
+        _apply_section(config, data, "sounds", {
+            "enabled": "sounds_enabled",
+        })
         _apply_section(config, data, "attenuation", {
             "enabled": "attenuation_enabled",
             "level": "attenuation_level",
         })
 
-    # Load .env file (project root) into environment if present
-    _load_dotenv(config_path.parent if config_path != DEFAULT_CONFIG_PATH else Path.cwd())
+    # Load .env file once (project root) into environment if present
+    if not _dotenv_loaded:
+        _load_dotenv(config_path.parent if config_path != DEFAULT_CONFIG_PATH else Path.cwd())
+        _dotenv_loaded = True
 
     # Env var fallback for API keys
     if not config.openai_api_key:

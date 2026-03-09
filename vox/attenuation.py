@@ -36,9 +36,11 @@ def set_volume(level: float) -> None:
     """Set default sink volume (0.0-1.0) via wpctl."""
     level = max(0.0, min(1.0, level))
     try:
-        subprocess.run(
+        result = subprocess.run(
             ["wpctl", "set-volume", "@DEFAULT_AUDIO_SINK@", str(round(level, 4))],
-            capture_output=True, timeout=2,
+            capture_output=True, text=True, timeout=2,
         )
+        if result.returncode != 0:
+            log.warning("wpctl set-volume failed: %s", result.stderr.strip())
     except Exception as e:
         log.warning("Failed to set volume: %s", e)

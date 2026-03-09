@@ -162,16 +162,18 @@ async def _process(
 
 async def _config_reloader(config: Config, sounds: SoundPlayer) -> None:
     """Poll config file mtime and reload hot-reloadable settings every 2s."""
-    if config.config_path is None or not config.config_path.exists():
+    if config.config_path is None:
         return
 
-    last_mtime = config.config_path.stat().st_mtime
+    last_mtime: float = 0
+    try:
+        last_mtime = config.config_path.stat().st_mtime
+    except OSError:
+        pass
 
     while True:
         await asyncio.sleep(2)
         try:
-            if config.config_path is None or not config.config_path.exists():
-                continue
             current_mtime = config.config_path.stat().st_mtime
             if current_mtime <= last_mtime:
                 continue
