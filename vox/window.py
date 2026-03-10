@@ -77,6 +77,8 @@ class AppContext:
     window_title: str
     app_type: AppType
     screen_text: str = ""
+    win_id: str = ""
+    pid: str = ""
 
 
 def detect_active_window(config: Config) -> AppContext:
@@ -87,40 +89,36 @@ def detect_active_window(config: Config) -> AppContext:
     pid = ""
 
     try:
-        win_id = subprocess.check_output(
-            ["xdotool", "getactivewindow"], stderr=subprocess.DEVNULL, text=True
-        ).strip()
+        # Single xdotool call: get window ID, name, and PID
+        out = subprocess.check_output(
+            ["xdotool", "getactivewindow", "getwindowname",
+             "getactivewindow", "getwindowpid",
+             "getactivewindow"],
+            stderr=subprocess.DEVNULL, text=True,
+        ).strip().splitlines()
+        if len(out) >= 3:
+            title = out[0]
+            pid = out[1]
+            win_id = out[2]
 
-        title = subprocess.check_output(
-            ["xdotool", "getactivewindow", "getwindowname"], stderr=subprocess.DEVNULL, text=True
-        ).strip()
-
-        pid = subprocess.check_output(
-            ["xdotool", "getwindowpid", win_id], stderr=subprocess.DEVNULL, text=True
-        ).strip()
-
-        xprop_out = subprocess.check_output(
-            ["xprop", "-id", win_id, "WM_CLASS"], stderr=subprocess.DEVNULL, text=True
-        ).strip()
-        if "=" in xprop_out:
-            parts = xprop_out.split("=", 1)[1].strip()
-            quoted = [s.strip().strip('"') for s in parts.split(",")]
-            wm_class = quoted[-1] if quoted else ""
+        if win_id:
+            xprop_out = subprocess.check_output(
+                ["xprop", "-id", win_id, "WM_CLASS"], stderr=subprocess.DEVNULL, text=True
+            ).strip()
+            if "=" in xprop_out:
+                parts = xprop_out.split("=", 1)[1].strip()
+                quoted = [s.strip().strip('"') for s in parts.split(",")]
+                wm_class = quoted[-1] if quoted else ""
 
     except (subprocess.CalledProcessError, FileNotFoundError):
         log.warning("Failed to detect active window via xdotool")
 
     app_type = _classify(wm_class, title, config)
-
-    ctx = AppContext(
-        wm_class=wm_class,
-        window_title=title,
-        app_type=app_type,
-    )
-    ctx._win_id = win_id
-    ctx._pid = pid
     log.debug("Window: class=%r title=%r type=%s", wm_class, title, app_type.value)
-    return ctx
+    return AppContext(
+        wm_class=wm_class, window_title=title, app_type=app_type,
+        win_id=win_id, pid=pid,
+    )
 
 
 def start_screen_capture(ctx: AppContext) -> asyncio.Future:
@@ -130,10 +128,7 @@ def start_screen_capture(ctx: AppContext) -> asyncio.Future:
     the screen text will be ready.
     """
     loop = asyncio.get_running_loop()
-    win_id = getattr(ctx, "_win_id", "")
-    pid = getattr(ctx, "_pid", "")
-    app_type = ctx.app_type
-    return loop.run_in_executor(_ocr_pool, _capture_screen_text, win_id, pid, app_type)
+    return loop.run_in_executor(_ocr_pool, _capture_screen_text, ctx.win_id, ctx.pid, ctx.app_type)
 
 
 def _capture_screen_text(win_id: str, pid: str, app_type: AppType) -> str:
@@ -145,7 +140,7 @@ def _capture_screen_text(win_id: str, pid: str, app_type: AppType) -> str:
         return text
 
     # Try OCR (slower, ~1-2s, but works for everything)
-    if win_id and shutil.which("maim") and shutil.which("tesseract"):
+    if win_id and _has_ocr():
         ocr_text = _read_ocr(win_id)
         if ocr_text:
             log.debug("Screen text from OCR: %d chars", len(ocr_text))
@@ -164,6 +159,13 @@ def _capture_screen_text(win_id: str, pid: str, app_type: AppType) -> str:
         return text
 
     return ""
+
+
+def _has_ocr(*, _cache: dict[str, bool] = {}) -> bool:
+    """Check (once) whether maim and tesseract are available."""
+    if "v" not in _cache:
+        _cache["v"] = bool(shutil.which("maim") and shutil.which("tesseract"))
+    return _cache["v"]
 
 
 def _read_atspi_text(pid: str) -> str:
@@ -197,7 +199,7 @@ def _read_ocr(win_id: str) -> str:
         text = result.stdout.strip()
         if text:
             return text[:_MAX_CONTEXT_CHARS]
-    except (subprocess.TimeoutExpired, Exception) as e:
+    except Exception as e:
         log.debug("OCR failed: %s", e)
     return ""
 

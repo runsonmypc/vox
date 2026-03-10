@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import logging
-import struct
-import math
 from pathlib import Path
 
 import numpy as np

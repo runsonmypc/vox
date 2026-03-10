@@ -12,7 +12,7 @@ from .window import AppContext, AppType
 
 log = logging.getLogger(__name__)
 
-MAX_RETRIES = 2
+MAX_ATTEMPTS = 3
 
 _APP_HINTS: dict[AppType, str] = {
     AppType.TERMINAL: (
@@ -90,7 +90,7 @@ class Transcriber:
             log.debug("Transcription prompt: %d chars", len(prompt))
 
         last_error: Exception | None = None
-        for attempt in range(1, MAX_RETRIES + 2):
+        for attempt in range(1, MAX_ATTEMPTS + 1):
             try:
                 kwargs: dict = {
                     "model": self._model,
@@ -108,5 +108,5 @@ class Transcriber:
                 return text
             except Exception as e:
                 last_error = e
-                log.warning("Whisper API error (attempt %d/%d): %s", attempt, MAX_RETRIES + 1, e)
-        raise TranscriptionError(f"Whisper API failed after {MAX_RETRIES + 1} attempts: {last_error}")
+                log.warning("Whisper API error (attempt %d/%d): %s", attempt, MAX_ATTEMPTS, e)
+        raise TranscriptionError(f"Whisper API failed after {MAX_ATTEMPTS} attempts: {last_error}")
