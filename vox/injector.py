@@ -7,10 +7,34 @@ import shutil
 import subprocess
 import time
 
+from Xlib import XK, display as xdisplay
+from Xlib.ext import xtest
+
 from .errors import DependencyError, InjectionError
 from .window import AppType
 
 log = logging.getLogger(__name__)
+
+# Xlib display for fast key injection (lazy init)
+_display: xdisplay.Display | None = None
+
+
+def _get_display() -> xdisplay.Display:
+    global _display
+    if _display is None:
+        _display = xdisplay.Display()
+    return _display
+
+
+def _xlib_paste(d: xdisplay.Display) -> None:
+    """Send Ctrl+V via XTest fake input events."""
+    ctrl_keycode = d.keysym_to_keycode(XK.XK_Control_L)
+    v_keycode = d.keysym_to_keycode(XK.XK_v)
+    xtest.fake_input(d, xtest.X.KeyPress, ctrl_keycode)
+    xtest.fake_input(d, xtest.X.KeyPress, v_keycode)
+    xtest.fake_input(d, xtest.X.KeyRelease, v_keycode)
+    xtest.fake_input(d, xtest.X.KeyRelease, ctrl_keycode)
+    d.flush()
 
 
 def check_dependencies() -> None:
@@ -28,7 +52,22 @@ def check_dependencies() -> None:
 
 
 def inject_text(text: str, app_type: AppType) -> None:
-    """Inject text at cursor by saving clipboard, setting text, pasting, then restoring."""
+    """Inject text at cursor via clipboard paste, or xdotool type for games/unknown apps."""
+    # Games and unknown apps: clipboard paste via XTest (xdotool's --clearmodifiers breaks it)
+    if app_type == AppType.OTHER:
+        try:
+            proc = subprocess.Popen(
+                ["xclip", "-selection", "clipboard"],
+                stdin=subprocess.PIPE,
+            )
+            proc.communicate(input=text.encode())
+            time.sleep(0.05)
+            _xlib_paste(_get_display())
+            log.debug("Injected %d chars via Xlib paste", len(text))
+        except Exception as e:
+            raise InjectionError(f"Xlib paste failed: {e}") from e
+        return
+
     # Save current clipboard
     original_clipboard: str | None = None
     try:
