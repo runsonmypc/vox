@@ -74,7 +74,7 @@ class Recorder:
                 callback=self._callback,
             )
             self._stream.start()
-            log.debug("Recording started (device=%s, rate=%d)", self._device, self._sample_rate)
+            log.info("Recording started (device=%s, rate=%d)", self._device, self._sample_rate)
         except Exception as e:
             raise AudioError(f"Failed to start recording: {e}") from e
 

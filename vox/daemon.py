@@ -64,7 +64,6 @@ async def _main(config: Config) -> None:
 
                     try:
                         recorder.start()
-                        log.info("Recording...")
                         if config.attenuation_enabled:
                             saved_volume = get_volume()
                             if saved_volume is not None:
@@ -146,8 +145,6 @@ async def _process(
             log.warning("Empty transcription result")
             sounds.play("error")
             return
-
-        log.info("Transcript: %s", text)
 
         # Inject
         inject_text(text, context.app_type)

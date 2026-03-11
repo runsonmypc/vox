@@ -104,7 +104,7 @@ class Transcriber:
 
                 result = await self._client.audio.transcriptions.create(**kwargs)
                 text = result.strip() if isinstance(result, str) else result.text.strip()
-                log.debug("Transcription (attempt %d): %r", attempt, text)
+                log.info("Transcript: %s", text)
                 return text
             except Exception as e:
                 last_error = e
