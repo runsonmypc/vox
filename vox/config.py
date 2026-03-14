@@ -111,9 +111,10 @@ def load_config(path: Path | None = None) -> Config:
             "level": "attenuation_level",
         })
 
-    # Load .env file once (project root) into environment if present
+    # Load .env file once from project root and config dir
     if not _dotenv_loaded:
-        _load_dotenv(config_path.parent if config_path != DEFAULT_CONFIG_PATH else Path.cwd())
+        _load_dotenv(Path(__file__).resolve().parent.parent)  # repo root
+        _load_dotenv(config_path.parent)
         _dotenv_loaded = True
 
     # Env var fallback for API keys
