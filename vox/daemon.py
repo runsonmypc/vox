@@ -42,6 +42,7 @@ async def _main(config: Config) -> None:
     hotkey.start()
 
     state = State.IDLE
+    process_task: asyncio.Task | None = None
     screen_capture_future: asyncio.Future | None = None
     recording_context = None
     saved_volume: float | None = None
@@ -98,15 +99,21 @@ async def _main(config: Config) -> None:
                     # Re-detect window at stop time (user may have switched focus)
                     stop_context = detect_active_window(config)
 
-                    asyncio.create_task(_process(
-                        wav_data, transcriber, sounds,
+                    process_task = asyncio.create_task(_process(
+                        wav_data, transcriber, sounds, queue,
                         stop_context, screen_capture_future,
                     ))
-                    state = State.IDLE
                     screen_capture_future = None
 
                 elif state == State.PROCESSING:
-                    log.debug("Ignoring toggle during processing")
+                    log.info("Ignoring toggle during processing")
+                    sounds.play("busy")
+
+            elif event == "process_done":
+                if state == State.PROCESSING:
+                    state = State.IDLE
+                    process_task = None
+                    log.info("Processing complete, ready")
     except asyncio.CancelledError:
         pass
     finally:
@@ -118,6 +125,7 @@ async def _process(
     wav_data: bytes,
     transcriber: Transcriber,
     sounds: SoundPlayer,
+    queue: asyncio.Queue[str],
     context: AppContext,
     screen_capture_future: asyncio.Future | None,
 ) -> None:
@@ -155,6 +163,8 @@ async def _process(
     except Exception as e:
         log.error("Processing error: %s", e)
         sounds.play("error")
+    finally:
+        queue.put_nowait("process_done")
 
 
 async def _config_reloader(config: Config, sounds: SoundPlayer) -> None:

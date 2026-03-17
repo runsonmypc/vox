@@ -53,6 +53,14 @@ def _error_sound() -> np.ndarray:
     return np.concatenate([t1, gap, t2])
 
 
+def _busy_sound() -> np.ndarray:
+    """Quick double-tap tone."""
+    sr = 44100
+    tap = _generate_tone(600, 0.05, sr, 0.2)
+    gap = np.zeros(int(sr * 0.04), dtype=np.float32)
+    return np.concatenate([tap, gap, tap])
+
+
 class SoundPlayer:
     """Plays audio feedback sounds."""
 
@@ -64,6 +72,7 @@ class SoundPlayer:
                 "start": _start_sound(),
                 "stop": _stop_sound(),
                 "error": _error_sound(),
+                "busy": _busy_sound(),
             }
 
     def play(self, name: str, blocking: bool = False) -> None:
