@@ -24,12 +24,12 @@ class Config:
     audio_device: int | None = None
     sample_rate: int = 16000
     channels: int = 1
-    max_recording_seconds: int = 30
+    max_recording_seconds: int = 300
 
     # Whisper
     whisper_model: str = "gpt-4o-mini-transcribe-2025-12-15"
     whisper_language: str | None = None
-    whisper_prompt: str = "The speaker is a software developer. Transcribe only the spoken words. Use proper capitalization and punctuation. Do NOT omit, summarize, or truncate anything. Output every word as spoken, even after long pauses. If there is no speech, output an empty string."
+    whisper_prompt: str = "Transcribe exactly what was said, word for word. Do not rephrase, reword, clean up, paraphrase, or summarize. Preserve the speaker's phrasing, filler words, false starts, and informal speech as spoken. Only add punctuation and capitalization. Do not omit or truncate anything. If there is no speech, output an empty string."
 
     # Snippets: trigger phrase -> expansion
     snippets: dict[str, str] = field(default_factory=dict)

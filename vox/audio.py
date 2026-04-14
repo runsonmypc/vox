@@ -91,6 +91,11 @@ class Recorder:
         audio = np.concatenate(list(self._chunks))
         # Enforce max length
         if len(audio) > self._max_frames:
+            log.warning(
+                "Recording truncated from %.1fs to %ds (max_recording_seconds limit)",
+                len(audio) / self._sample_rate,
+                self._max_frames // self._sample_rate,
+            )
             audio = audio[: self._max_frames]
 
         log.debug("Recorded %d frames (%.1fs)", len(audio), len(audio) / self._sample_rate)

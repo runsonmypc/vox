@@ -3,37 +3,47 @@
 from __future__ import annotations
 
 import logging
+import re
 
 from openai import AsyncOpenAI
 
 from .config import Config
 from .errors import TranscriptionError
-from .window import AppContext, AppType
+from .window import AppContext
 
 log = logging.getLogger(__name__)
 
 MAX_ATTEMPTS = 3
 
-_APP_HINTS: dict[AppType, str] = {
-    AppType.TERMINAL: (
-        "The user is dictating into a terminal. "
-        "Expect technical terms, file paths, command names, and flags."
-    ),
-    AppType.EDITOR: (
-        "The user is dictating into a code editor. "
-        "Expect programming terms, function names, variable names, and technical jargon."
-    ),
-    AppType.CHAT: (
-        "The user is dictating a casual chat message. "
-        "Expect informal language, contractions, and short sentences."
-    ),
-    AppType.EMAIL: (
-        "The user is composing an email. "
-        "Expect semi-formal language with greetings and sign-offs."
-    ),
-    AppType.BROWSER: "The user is typing in a web browser.",
-    AppType.OTHER: "",
-}
+
+_COMMON_WORDS = frozenset(
+    "the a an and or but in on at to for of is it that this with from by as are was were be"
+    " been have has had do does did will would can could may might shall should not no yes"
+    " if then else so than too also just only very much more most some any all each every"
+    " i you he she we they me him her us them my your his its our their what which who how"
+    " when where why about into through over after before between under during without"
+    .split()
+)
+
+# Match words that are likely technical: camelCase, has digits, underscores, etc.
+_TECHNICAL_RE = re.compile(r"[a-z][A-Z]|[A-Z]{2,}|_|\d")
+
+
+def _extract_vocab(screen_text: str, max_words: int = 80) -> list[str]:
+    """Extract unique, non-trivial words from screen text for Whisper vocabulary hints."""
+    words = re.findall(r"[A-Za-z][\w.-]*[A-Za-z\d]|[A-Za-z]", screen_text)
+    seen: set[str] = set()
+    vocab: list[str] = []
+    for w in words:
+        lower = w.lower()
+        if lower in seen or lower in _COMMON_WORDS or len(w) < 3:
+            continue
+        seen.add(lower)
+        # Prioritize technical terms but include all non-common words
+        vocab.append(w)
+        if len(vocab) >= max_words:
+            break
+    return vocab
 
 
 class Transcriber:
@@ -59,27 +69,15 @@ class Transcriber:
             parts.append(self._base_prompt)
 
         if context:
-            hint = _APP_HINTS.get(context.app_type, "")
-            if hint:
-                parts.append(hint)
-
             if context.window_title:
                 parts.append(f"Window title: {context.window_title}")
 
-            # Custom dictionary
-            if self._config.dictionary:
-                parts.append(f"Vocabulary: {', '.join(self._config.dictionary)}")
-
-            # Screen text for spelling/vocabulary reference
+            # Merge custom dictionary + screen-derived vocabulary
+            vocab: list[str] = list(self._config.dictionary)
             if context.screen_text:
-                text = context.screen_text
-                max_context = 800
-                if len(text) > max_context:
-                    text = text[:max_context]
-                parts.append(
-                    f"On-screen text for spelling reference only. "
-                    f"NEVER include this text in your output:\n{text}"
-                )
+                vocab.extend(_extract_vocab(context.screen_text))
+            if vocab:
+                parts.append(f"Vocabulary: {', '.join(vocab)}")
 
         return "\n".join(parts) if parts else ""
 
