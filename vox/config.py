@@ -27,7 +27,7 @@ class Config:
     max_recording_seconds: int = 300
 
     # Whisper
-    whisper_model: str = "gpt-4o-mini-transcribe-2025-12-15"
+    whisper_model: str = "whisper-1"
     whisper_language: str | None = None
     whisper_prompt: str = "Transcribe exactly what was said, word for word. Do not rephrase, reword, clean up, paraphrase, or summarize. Preserve the speaker's phrasing, filler words, false starts, and informal speech as spoken. Only add punctuation and capitalization. Do not omit or truncate anything. If there is no speech, output an empty string."
 
