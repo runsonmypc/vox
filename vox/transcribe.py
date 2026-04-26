@@ -57,28 +57,34 @@ class Transcriber:
         self._config = config
 
     def _build_prompt(self, context: AppContext | None) -> str:
-        """Build a transcription prompt incorporating screen context.
+        """Build a vocabulary-only prompt for Whisper.
 
-        The context is framed as reference material for vocabulary and style
-        cues — it helps the model spell names, technical terms, and domain
-        words correctly. It is NOT content to respond to or summarize.
+        Whisper's prompt parameter is treated as example-output that biases
+        style, not as instructions. We send only a bare comma-separated list
+        of proper nouns and technical terms so it influences spelling without
+        biasing phrasing.
         """
-        parts = []
-
-        if self._base_prompt:
-            parts.append(self._base_prompt)
-
+        vocab: list[str] = list(self._config.dictionary)
         if context:
             if context.window_title:
-                parts.append(f"Window title: {context.window_title}")
-
-            # Merge custom dictionary + screen-derived vocabulary
-            vocab: list[str] = list(self._config.dictionary)
+                vocab.extend(_extract_vocab(context.window_title))
             if context.screen_text:
                 vocab.extend(_extract_vocab(context.screen_text))
-            if vocab:
-                parts.append(f"Vocabulary: {', '.join(vocab)}")
 
+        seen: set[str] = set()
+        unique_vocab: list[str] = []
+        for w in vocab:
+            lower = w.lower()
+            if lower in seen:
+                continue
+            seen.add(lower)
+            unique_vocab.append(w)
+
+        parts = []
+        if self._base_prompt:
+            parts.append(self._base_prompt)
+        if unique_vocab:
+            parts.append(", ".join(unique_vocab))
         return "\n".join(parts) if parts else ""
 
     async def transcribe(self, wav_bytes: bytes, context: AppContext | None = None) -> str:
