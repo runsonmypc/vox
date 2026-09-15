@@ -5,10 +5,16 @@ from __future__ import annotations
 import logging
 import shutil
 import subprocess
+import sys
 import time
 
-from Xlib import XK, display as xdisplay
-from Xlib.ext import xtest
+# Xlib is Linux-only; avoid failing on macOS where Xlib is not installed
+if sys.platform != "darwin":
+    try:
+        from Xlib import XK, display as xdisplay
+        from Xlib.ext import xtest
+    except ImportError:
+        pass
 
 from .errors import DependencyError, InjectionError
 from .window import AppType
@@ -16,18 +22,21 @@ from .window import AppType
 log = logging.getLogger(__name__)
 
 # Xlib display for fast key injection (lazy init)
-_display: xdisplay.Display | None = None
+_display = None
 
 
-def _get_display() -> xdisplay.Display:
+def _get_display():
     global _display
     if _display is None:
+        from Xlib import display as xdisplay
         _display = xdisplay.Display()
     return _display
 
 
-def _xlib_paste(d: xdisplay.Display) -> None:
+def _xlib_paste(d) -> None:
     """Send Ctrl+V via XTest fake input events."""
+    from Xlib import XK
+    from Xlib.ext import xtest
     ctrl_keycode = d.keysym_to_keycode(XK.XK_Control_L)
     v_keycode = d.keysym_to_keycode(XK.XK_v)
     xtest.fake_input(d, xtest.X.KeyPress, ctrl_keycode)
@@ -37,8 +46,33 @@ def _xlib_paste(d: xdisplay.Display) -> None:
     d.flush()
 
 
+def check_accessibility_permission(prompt: bool = False) -> bool:
+    """Check if current process has macOS Accessibility permissions via AXIsProcessTrusted."""
+    if sys.platform != "darwin":
+        return True
+    try:
+        from ApplicationServices import AXIsProcessTrusted, AXIsProcessTrustedWithOptions, kAXTrustedCheckOptionPrompt
+        if prompt:
+            return bool(AXIsProcessTrustedWithOptions({kAXTrustedCheckOptionPrompt: True}))
+        return bool(AXIsProcessTrusted())
+    except ImportError:
+        try:
+            import ctypes
+            app_services = ctypes.cdll.LoadLibrary(
+                "/System/Library/Frameworks/ApplicationServices.framework/ApplicationServices"
+            )
+            return bool(app_services.AXIsProcessTrusted())
+        except Exception:
+            return True
+
+
 def check_dependencies() -> None:
-    """Check that xdotool and xclip are installed."""
+    """Check that required system dependencies are installed."""
+    if sys.platform == "darwin":
+        if not shutil.which("osascript"):
+            raise DependencyError("Missing system dependency: osascript")
+        return
+
     missing = []
     if not shutil.which("xdotool"):
         missing.append("xdotool")

@@ -64,12 +64,20 @@ def main() -> None:
         sys.exit(1)
 
     # Check system dependencies
-    from .injector import check_dependencies
+    from .injector import check_accessibility_permission, check_dependencies
     try:
         check_dependencies()
     except DependencyError as e:
         log.error("%s", e)
         sys.exit(1)
+
+    # Check macOS permissions
+    if sys.platform == "darwin" and not check_accessibility_permission():
+        log.warning(
+            "macOS Accessibility permission is not granted to this process.\n"
+            "Global hotkeys and text injection require Accessibility permissions.\n"
+            "Enable Accessibility in System Settings -> Privacy & Security -> Accessibility."
+        )
 
     # Prevent multiple instances via advisory file lock
     import fcntl
