@@ -105,7 +105,6 @@ class StreamingTranscriber:
 
         headers = {
             "Authorization": f"Bearer {self._config.openai_api_key}",
-            "OpenAI-Beta": "realtime=v1",
         }
 
         sig = inspect.signature(websockets.connect)
