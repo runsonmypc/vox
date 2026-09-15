@@ -5,8 +5,8 @@
 
 ## 2. Audio Capture and Streaming Pipeline
 
-- [ ] 2.1 Update `vox/audio.py` to provide 24kHz PCM16 audio chunks suitable for OpenAI Realtime input while maintaining 16-bit little-endian format, verifying output chunk rates and byte format
-- [ ] 2.2 Add an asynchronous chunk generator / queue to `Recorder` enabling live streaming consumption during recording while preserving the complete turn audio buffer in memory, verified by a unit test
+- [x] 2.1 Update `vox/audio.py` to provide 24kHz PCM16 audio chunks suitable for OpenAI Realtime input while maintaining 16-bit little-endian format, verifying output chunk rates and byte format
+- [x] 2.2 Add an asynchronous chunk generator / queue to `Recorder` enabling live streaming consumption during recording while preserving the complete turn audio buffer in memory, verified by a unit test
 
 ## 3. Streaming Transcription Engine
 

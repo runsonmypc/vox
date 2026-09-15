@@ -22,7 +22,7 @@ class Config:
 
     # Audio
     audio_device: int | None = None
-    sample_rate: int = 16000
+    sample_rate: int = 48000
     channels: int = 1
     max_recording_seconds: int = 300
 
