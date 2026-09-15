@@ -96,8 +96,13 @@ def load_config(path: Path | None = None) -> Config:
         })
         if "snippets" in data:
             config.snippets = dict(data["snippets"])
-        if "dictionary" in data:
-            config.dictionary = list(data["dictionary"])
+        dict_val = data.get("dictionary")
+        if dict_val is None and "attenuation" in data and "dictionary" in data["attenuation"]:
+            dict_val = data["attenuation"]["dictionary"]
+        if dict_val is None and "whisper" in data and "dictionary" in data["whisper"]:
+            dict_val = data["whisper"]["dictionary"]
+        if dict_val is not None:
+            config.dictionary = list(dict_val)
         if "styles" in data:
             config.styles = dict(data["styles"])
         if "window_classes" in data:
