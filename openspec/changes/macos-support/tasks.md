@@ -17,9 +17,9 @@
 
 ## 4. Audio Attenuation and Service Files
 
-- [ ] 4.1 Implement macOS audio volume attenuation in `vox/attenuation.py` using AppleScript volume commands, verifying volume is lowered during recording and restored after
-- [ ] 4.2 Update `start.sh` to use portable POSIX path resolution and verify execution on macOS
-- [ ] 4.3 Create `com.runsonmypc.vox.plist` LaunchAgent property list file and verify with `plutil -lint`
+- [x] 4.1 Implement macOS audio volume attenuation in `vox/attenuation.py` using AppleScript volume commands, verifying volume is lowered during recording and restored after
+- [x] 4.2 Update `start.sh` to use portable POSIX path resolution and verify execution on macOS
+- [x] 4.3 Create `com.runsonmypc.vox.plist` LaunchAgent property list file and verify with `plutil -lint`
 
 ## 5. End-to-End Verification
 

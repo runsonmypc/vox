@@ -11,7 +11,7 @@ from pathlib import Path
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="vox",
-        description="Voice-to-text daemon for Linux",
+        description="Voice-to-text daemon for Linux and macOS",
     )
     parser.add_argument(
         "--config", "-c",
