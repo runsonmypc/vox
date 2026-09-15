@@ -1,6 +1,6 @@
 ## 1. Dependencies and Single-Instance Lock
 
-- [ ] 1.1 Update `pyproject.toml` to specify platform-conditional dependencies (including `pyobjc-framework-vision; sys_platform == 'darwin'`) and verify with `uv pip install -e .`
+- [x] 1.1 Update `pyproject.toml` to specify platform-conditional dependencies (including `pyobjc-framework-vision; sys_platform == 'darwin'`) and verify with `uv pip install -e .`
 - [ ] 1.2 Replace abstract Unix socket lock in `vox/__main__.py` with `fcntl.flock` advisory file locking and verify mutual exclusion by attempting to run two concurrent instances
 - [ ] 1.3 Add macOS startup permission checks (`AXIsProcessTrusted`) in `vox/injector.py` and `vox/__main__.py`, verifying helpful warning messages when permissions are absent
 
