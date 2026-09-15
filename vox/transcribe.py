@@ -25,25 +25,70 @@ _COMMON_WORDS = frozenset(
     .split()
 )
 
+# Generic macOS UI menu words to ignore from screen OCR
+_UI_IGNORE_WORDS = frozenset(
+    "file edit view window help session scripts preferences settings tab terminal"
+    " shell profiles search find replace undo redo copy paste cut close minimize"
+    " zoom hide quit enter exit select tools options developer format run debug"
+    " history bookmarks prof iles"
+    .split()
+)
+
 # Match words that are likely technical: camelCase, has digits, underscores, etc.
 _TECHNICAL_RE = re.compile(r"[a-z][A-Z]|[A-Z]{2,}|_|\d")
 
 
-def _extract_vocab(screen_text: str, max_words: int = 80) -> list[str]:
-    """Extract unique, non-trivial words from screen text for Whisper vocabulary hints."""
-    words = re.findall(r"[A-Za-z][\w.-]*[A-Za-z\d]|[A-Za-z]", screen_text)
+def _extract_vocab(screen_text: str, max_words: int = 25) -> list[str]:
+    """Extract unique, technical words from screen text for Whisper vocabulary hints."""
+    words = re.findall(r"[A-Za-z][\w.-]*[A-Za-z\d]|[A-Za-z]+", screen_text)
     seen: set[str] = set()
     vocab: list[str] = []
     for w in words:
         lower = w.lower()
-        if lower in seen or lower in _COMMON_WORDS or len(w) < 3:
+        if lower in seen or lower in _COMMON_WORDS or lower in _UI_IGNORE_WORDS or len(w) < 3:
             continue
         seen.add(lower)
-        # Prioritize technical terms but include all non-common words
-        vocab.append(w)
-        if len(vocab) >= max_words:
-            break
+        # Only prioritize technical terms or proper nouns
+        if _TECHNICAL_RE.search(w) or w[0].isupper():
+            vocab.append(w)
+            if len(vocab) >= max_words:
+                break
     return vocab
+
+
+def is_prompt_hallucination(transcript: str, prompt: str) -> bool:
+    """Detect if Whisper hallucinated by echoing back the vocabulary prompt on silence."""
+    if not transcript or not prompt:
+        return False
+
+    t_norm = transcript.strip().rstrip(".").lower()
+    p_norm = prompt.strip().rstrip(".").lower()
+
+    # Exact or near-exact match
+    if t_norm == p_norm:
+        return True
+
+    # Check if transcript consists of prompt terms separated by commas
+    terms = [w.strip().lower() for w in prompt.replace("\n", ",").split(",") if w.strip()]
+    if not terms:
+        return False
+    term_set = set(terms)
+
+    # If transcript has comma-separated list structure
+    tokens = [t.strip().strip(".?!,:;\"'").lower() for t in transcript.split(",") if t.strip()]
+    if len(tokens) >= 3:
+        matches = sum(1 for t in tokens if t in term_set)
+        if matches / len(tokens) >= 0.7:
+            return True
+
+    # Also check if >80% of all words in the transcript are from the vocabulary list
+    words = [w.strip(".?!,:;\"'").lower() for w in transcript.split() if w.strip()]
+    if len(words) >= 5:
+        matches = sum(1 for w in words if w in term_set)
+        if matches / len(words) >= 0.8:
+            return True
+
+    return False
 
 
 class Transcriber:
@@ -67,9 +112,9 @@ class Transcriber:
         vocab: list[str] = list(self._config.dictionary)
         if context:
             if context.window_title:
-                vocab.extend(_extract_vocab(context.window_title))
+                vocab.extend(_extract_vocab(context.window_title, max_words=10))
             if context.screen_text:
-                vocab.extend(_extract_vocab(context.screen_text))
+                vocab.extend(_extract_vocab(context.screen_text, max_words=25))
 
         seen: set[str] = set()
         unique_vocab: list[str] = []
@@ -79,6 +124,9 @@ class Transcriber:
                 continue
             seen.add(lower)
             unique_vocab.append(w)
+
+        # Cap vocabulary list to 40 most relevant terms to avoid prompt leakage
+        unique_vocab = unique_vocab[:40]
 
         parts = []
         if self._base_prompt:
@@ -108,6 +156,12 @@ class Transcriber:
 
                 result = await self._client.audio.transcriptions.create(**kwargs)
                 text = result.strip() if isinstance(result, str) else result.text.strip()
+
+                # Guard against Whisper echoing back the prompt on empty/silent audio
+                if prompt and is_prompt_hallucination(text, prompt):
+                    log.warning("Detected Whisper prompt hallucination (silence echo), dropping transcript")
+                    return ""
+
                 log.info("Transcript: %s", text)
                 return text
             except Exception as e:

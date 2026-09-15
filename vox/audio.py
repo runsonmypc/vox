@@ -20,31 +20,46 @@ from .errors import AudioError
 log = logging.getLogger(__name__)
 
 # Minimum total speech duration to consider audio as containing speech
-_MIN_SPEECH_MS = 300
+_MIN_SPEECH_MS = 400
+# Minimum RMS energy threshold for 16-bit PCM audio (rejects pure silence/background hiss)
+_MIN_RMS_ENERGY = 120.0
 
 
 def has_speech(wav_bytes: bytes) -> bool:
-    """Check if WAV audio contains speech using WebRTC VAD."""
+    """Check if WAV audio contains speech using WebRTC VAD and energy threshold."""
     try:
         buf = io.BytesIO(wav_bytes)
         with wave.open(buf, "rb") as wf:
             sample_rate = wf.getframerate()
             pcm = wf.readframes(wf.getnframes())
 
-        vad = webrtcvad.Vad(1)  # aggressiveness 0-3 (1 = lenient, fewer false negatives)
+        if not pcm:
+            return False
+
+        # Energy check (RMS) to quickly reject silence or mic noise floor
+        samples = np.frombuffer(pcm, dtype=np.int16)
+        rms = float(np.sqrt(np.mean(samples.astype(np.float32) ** 2)))
+        log.debug("Audio RMS energy: %.1f", rms)
+        if rms < _MIN_RMS_ENERGY:
+            log.debug("Audio RMS energy %.1f below threshold %.1f, treating as silence", rms, _MIN_RMS_ENERGY)
+            return False
+
+        vad = webrtcvad.Vad(2)  # aggressiveness 0-3 (2 = moderate, filters room hiss and breath)
 
         # WebRTC VAD needs 10/20/30ms frames at 8/16/32/48kHz
         frame_ms = 30
         frame_bytes = 2 * sample_rate * frame_ms // 1000  # 16-bit = 2 bytes/sample
 
         speech_frames = 0
+        total_frames = 0
         for i in range(0, len(pcm) - frame_bytes + 1, frame_bytes):
             frame = pcm[i : i + frame_bytes]
+            total_frames += 1
             if vad.is_speech(frame, sample_rate):
                 speech_frames += 1
 
         speech_ms = speech_frames * frame_ms
-        log.debug("VAD: %dms speech detected", speech_ms)
+        log.debug("VAD: %dms speech detected across %d frames", speech_ms, total_frames)
         return speech_ms >= _MIN_SPEECH_MS
     except Exception as e:
         log.debug("VAD check failed: %s", e)
