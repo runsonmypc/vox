@@ -91,8 +91,8 @@ def main() -> None:
 
     log.info("Starting vox daemon...")
 
-    from .daemon import run
     try:
+        from .daemon import run
         run(config)
     except KeyboardInterrupt:
         log.info("Shutting down.")

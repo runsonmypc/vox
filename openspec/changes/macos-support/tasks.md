@@ -23,4 +23,4 @@
 
 ## 5. End-to-End Verification
 
-- [ ] 5.1 Perform an end-to-end test on macOS (config loading, device query, hotkey listener start, and clean shutdown on SIGINT) to verify full system readiness
+- [x] 5.1 Perform an end-to-end test on macOS (config loading, device query, hotkey listener start, and clean shutdown on SIGINT) to verify full system readiness
