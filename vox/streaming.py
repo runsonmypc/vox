@@ -139,7 +139,9 @@ class StreamingTranscriber:
 
     async def send_audio_chunk(self, pcm_chunk: bytes) -> None:
         """Stream a 24kHz PCM16 chunk via input_audio_buffer.append."""
-        if self._ws is None or self._closed:
+        if self._closed:
+            return
+        if self._ws is None:
             raise StreamingError("Cannot send audio chunk: WebSocket is not connected")
         if not pcm_chunk:
             return

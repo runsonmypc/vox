@@ -159,11 +159,14 @@ async def _stream_worker(
     try:
         await streaming_transcriber.connect(context)
         async for chunk in recorder.stream_chunks():
+            if getattr(streaming_transcriber, "_closed", False) is True:
+                break
             await streaming_transcriber.send_audio_chunk(chunk)
     except asyncio.CancelledError:
         pass
     except Exception as e:
-        log.warning("Live audio streaming encountered error: %s (will fall back to batch Whisper)", e)
+        if getattr(streaming_transcriber, "_closed", False) is not True:
+            log.warning("Live audio streaming encountered error: %s (will fall back to batch Whisper)", e)
 
 
 async def _process(
@@ -181,21 +184,33 @@ async def _process(
     try:
         t0 = time.monotonic()
 
-        # Get screen text from the background capture (started at recording time)
-        if screen_capture_future is not None:
-            try:
-                screen_text = await screen_capture_future
-                context.screen_text = screen_text
-                log.debug("Screen context: %d chars", len(screen_text))
-            except Exception as e:
-                log.warning("Screen capture failed: %s", e)
-
-        # Skip non-speech audio (avoids hallucination and unnecessary API calls)
+        # Check speech FIRST before waiting on background OCR
         if not has_speech(wav_data):
             log.info("No speech detected, skipping transcription")
+            if screen_capture_future is not None and not screen_capture_future.done():
+                screen_capture_future.cancel()
+            if stream_task is not None:
+                stream_task.cancel()
+                try:
+                    await stream_task
+                except asyncio.CancelledError:
+                    pass
             if streaming_transcriber is not None:
                 await streaming_transcriber.close()
             return
+
+        # Attach screen text if background capture is ready
+        if screen_capture_future is not None:
+            try:
+                if config.mode == "streaming" and streaming_transcriber is not None:
+                    if screen_capture_future.done():
+                        context.screen_text = screen_capture_future.result()
+                else:
+                    context.screen_text = await asyncio.wait_for(screen_capture_future, timeout=1.5)
+                if context.screen_text:
+                    log.debug("Screen context: %d chars", len(context.screen_text))
+            except Exception as e:
+                log.debug("Screen capture not ready or failed: %s", e)
 
         text = ""
         used_streaming = False

@@ -222,6 +222,11 @@ async def test_daemon_silence_aborts_without_pasting():
     mock_streaming.finish = AsyncMock()
     mock_streaming.close = AsyncMock()
 
+    # Active stream task and screen capture future
+    stream_task = asyncio.create_task(asyncio.sleep(10.0))
+    loop = asyncio.get_running_loop()
+    screen_capture_future = loop.create_future()
+
     with patch("vox.daemon.has_speech", return_value=False), \
          patch("vox.daemon.paste") as mock_paste:
 
@@ -230,17 +235,19 @@ async def test_daemon_silence_aborts_without_pasting():
             config=config,
             batch_transcriber=mock_batch,
             streaming_transcriber=mock_streaming,
-            stream_task=None,
+            stream_task=stream_task,
             sounds=MagicMock(),
             queue=queue,
             context=context,
-            screen_capture_future=None,
+            screen_capture_future=screen_capture_future,
         )
 
         mock_streaming.finish.assert_not_called()
         mock_streaming.close.assert_awaited_once()
         mock_batch.transcribe.assert_not_called()
         mock_paste.assert_not_called()
+        assert stream_task.cancelled()
+        assert screen_capture_future.cancelled()
 
 
 @pytest.mark.anyio
