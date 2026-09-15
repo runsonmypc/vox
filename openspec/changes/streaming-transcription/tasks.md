@@ -1,6 +1,6 @@
 ## 1. Dependencies and Configuration
 
-- [ ] 1.1 Add `websockets` dependency to `pyproject.toml` and verify successful import and installation in the virtual environment via `uv pip` / `pip list`
+- [x] 1.1 Add `websockets` dependency to `pyproject.toml` and verify successful import and installation in the virtual environment via `uv pip` / `pip list`
 - [ ] 1.2 Update `vox/config.py` to support transcription `mode` (`"streaming"` or `"batch"`, defaulting to `"streaming"`) and streaming model configuration, verifying parsing via unit test
 
 ## 2. Audio Capture and Streaming Pipeline
