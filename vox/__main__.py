@@ -71,12 +71,13 @@ def main() -> None:
         log.error("%s", e)
         sys.exit(1)
 
-    # Prevent multiple instances via abstract Unix socket
-    import socket
-    _lock_socket = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+    # Prevent multiple instances via advisory file lock
+    import fcntl
+    _lock_path = Path("/tmp/vox-daemon.lock")
     try:
-        _lock_socket.bind("\0vox-daemon")
-    except OSError:
+        _lock_file = open(_lock_path, "a")
+        fcntl.flock(_lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except (BlockingIOError, OSError):
         log.error("Another vox instance is already running.")
         sys.exit(1)
 
