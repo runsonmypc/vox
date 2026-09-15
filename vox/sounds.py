@@ -10,6 +10,9 @@ import sounddevice as sd
 
 from .config import Config
 
+import sys
+import time
+
 log = logging.getLogger(__name__)
 
 _SOUNDS_DIR = Path(__file__).parent.parent / "sounds"
@@ -66,14 +69,36 @@ class SoundPlayer:
 
     def __init__(self, config: Config) -> None:
         self._enabled = config.sounds_enabled
-        self._sounds: dict[str, np.ndarray] = {}
+        self._is_darwin = sys.platform == "darwin"
+        self._sounds = {}
         if self._enabled:
-            self._sounds = {
-                "start": _start_sound(),
-                "stop": _stop_sound(),
-                "error": _error_sound(),
-                "busy": _busy_sound(),
-            }
+            if self._is_darwin:
+                try:
+                    from AppKit import NSSound
+                    # Map to crisp, responsive macOS system alert sounds
+                    system_defaults = {
+                        "start": "Pop",
+                        "stop": "Tink",
+                        "error": "Basso",
+                        "busy": "Funk",
+                    }
+                    for name, system_name in system_defaults.items():
+                        wav_path = _SOUNDS_DIR / f"{name}.wav"
+                        if wav_path.exists():
+                            self._sounds[name] = NSSound.alloc().initWithContentsOfFile_byReference_(str(wav_path), True)
+                        else:
+                            self._sounds[name] = NSSound.soundNamed_(system_name)
+                except Exception as e:
+                    log.warning("Failed to initialize macOS NSSound: %s", e)
+                    self._is_darwin = False
+
+            if not self._is_darwin:
+                self._sounds = {
+                    "start": _start_sound(),
+                    "stop": _stop_sound(),
+                    "error": _error_sound(),
+                    "busy": _busy_sound(),
+                }
 
     def play(self, name: str, blocking: bool = False) -> None:
         """Play a named sound. If blocking=True, wait for it to finish."""
@@ -83,6 +108,17 @@ class SoundPlayer:
         if sound is None:
             log.warning("Unknown sound: %s", name)
             return
+
+        if self._is_darwin:
+            try:
+                sound.stop()
+                sound.play()
+                if blocking:
+                    time.sleep(0.08)  # brief pause so alert finishes before microphone starts
+                return
+            except Exception as e:
+                log.debug("NSSound play failed: %s, falling back to sounddevice", e)
+
         try:
             sd.play(sound, samplerate=44100)
             if blocking:
