@@ -16,6 +16,6 @@
 
 ## 4. Daemon Integration and Fallback
 
-- [ ] 4.1 Integrate `StreamingTranscriber` into `vox/daemon.py` to stream chunks in real time while recording, commit on key release/stop, expand snippets, and trigger single-shot paste via `injector.paste(text)`
-- [ ] 4.2 Implement graceful fallback in `vox/daemon.py` to batch `WhisperTranscriber` if WebSocket connection or streaming encounters an error, verified with a connection failure simulation test
-- [ ] 4.3 Perform end-to-end verification of streaming dictation: verify sub-200ms paste latency after stop, single-shot clipboard injection, and accurate custom vocabulary recognition
+- [x] 4.1 Integrate `StreamingTranscriber` into `vox/daemon.py` to stream chunks in real time while recording, commit on key release/stop, expand snippets, and trigger single-shot paste via `injector.paste(text)`
+- [x] 4.2 Implement graceful fallback in `vox/daemon.py` to batch `WhisperTranscriber` if WebSocket connection or streaming encounters an error, verified with a connection failure simulation test
+- [x] 4.3 Perform end-to-end verification of streaming dictation: verify sub-200ms paste latency after stop, single-shot clipboard injection, and accurate custom vocabulary recognition

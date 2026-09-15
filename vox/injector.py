@@ -245,3 +245,8 @@ def inject_text(text: str, app_type: AppType) -> None:
         _inject_text_macos(text, app_type)
     else:
         _inject_text_linux(text, app_type)
+
+
+def paste(text: str, app_type: AppType = AppType.OTHER) -> None:
+    """Single-shot clipboard paste injection."""
+    inject_text(text, app_type)

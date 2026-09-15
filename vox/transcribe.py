@@ -168,3 +168,6 @@ class Transcriber:
                 last_error = e
                 log.warning("Whisper API error (attempt %d/%d): %s", attempt, MAX_ATTEMPTS, e)
         raise TranscriptionError(f"Whisper API failed after {MAX_ATTEMPTS} attempts: {last_error}")
+
+
+WhisperTranscriber = Transcriber

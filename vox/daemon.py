@@ -11,9 +11,10 @@ from .attenuation import get_volume, set_volume
 from .audio import Recorder, has_speech
 from .config import Config, load_config
 from .hotkey import HotkeyListener
-from .injector import inject_text
+from .injector import inject_text, paste
 from .sounds import SoundPlayer
-from .transcribe import Transcriber
+from .streaming import StreamingTranscriber
+from .transcribe import WhisperTranscriber
 from .window import AppContext, detect_active_window, start_screen_capture
 
 log = logging.getLogger(__name__)
@@ -35,7 +36,7 @@ async def _main(config: Config) -> None:
     queue: asyncio.Queue[str] = asyncio.Queue()
 
     recorder = Recorder(config)
-    transcriber = Transcriber(config)
+    batch_transcriber = WhisperTranscriber(config)
     sounds = SoundPlayer(config)
     hotkey = HotkeyListener(config, loop, queue)
 
@@ -43,10 +44,12 @@ async def _main(config: Config) -> None:
 
     state = State.IDLE
     process_task: asyncio.Task | None = None
+    stream_task: asyncio.Task | None = None
+    streaming_transcriber: StreamingTranscriber | None = None
     screen_capture_future: asyncio.Future | None = None
-    recording_context = None
+    recording_context: AppContext | None = None
     saved_volume: float | None = None
-    log.info("Vox ready. Press %s to toggle recording.", config.hotkey)
+    log.info("Vox ready (%s mode). Press %s to toggle recording.", config.mode, config.hotkey)
 
     reload_task = asyncio.create_task(_config_reloader(config, sounds))
 
@@ -64,7 +67,7 @@ async def _main(config: Config) -> None:
                     screen_capture_future = start_screen_capture(recording_context)
 
                     try:
-                        recorder.start()
+                        recorder.start(loop=loop)
                         if config.attenuation_enabled:
                             saved_volume = get_volume()
                             if saved_volume is not None:
@@ -77,6 +80,17 @@ async def _main(config: Config) -> None:
                         sounds.play("error")
                         state = State.IDLE
                         screen_capture_future = None
+                        continue
+
+                    # If streaming mode, initiate streaming connection and chunk worker
+                    if config.mode == "streaming":
+                        streaming_transcriber = StreamingTranscriber(config)
+                        stream_task = asyncio.create_task(
+                            _stream_worker(recorder, streaming_transcriber, recording_context)
+                        )
+                    else:
+                        streaming_transcriber = None
+                        stream_task = None
 
                 elif state == State.RECORDING:
                     if saved_volume is not None:
@@ -94,15 +108,30 @@ async def _main(config: Config) -> None:
                         sounds.play("error")
                         state = State.IDLE
                         screen_capture_future = None
+                        if stream_task is not None:
+                            stream_task.cancel()
+                            stream_task = None
+                        if streaming_transcriber is not None:
+                            asyncio.create_task(streaming_transcriber.close())
+                            streaming_transcriber = None
                         continue
 
                     # Re-detect window at stop time (user may have switched focus)
                     stop_context = detect_active_window(config)
 
                     process_task = asyncio.create_task(_process(
-                        wav_data, transcriber, sounds, queue,
-                        stop_context, screen_capture_future,
+                        wav_data=wav_data,
+                        config=config,
+                        batch_transcriber=batch_transcriber,
+                        streaming_transcriber=streaming_transcriber,
+                        stream_task=stream_task,
+                        sounds=sounds,
+                        queue=queue,
+                        context=stop_context,
+                        screen_capture_future=screen_capture_future,
                     ))
+                    streaming_transcriber = None
+                    stream_task = None
                     screen_capture_future = None
 
                 elif state == State.PROCESSING:
@@ -121,15 +150,34 @@ async def _main(config: Config) -> None:
         hotkey.stop()
 
 
+async def _stream_worker(
+    recorder: Recorder,
+    streaming_transcriber: StreamingTranscriber,
+    context: AppContext | None,
+) -> None:
+    """Stream audio chunks live to StreamingTranscriber during recording."""
+    try:
+        await streaming_transcriber.connect(context)
+        async for chunk in recorder.stream_chunks():
+            await streaming_transcriber.send_audio_chunk(chunk)
+    except asyncio.CancelledError:
+        pass
+    except Exception as e:
+        log.warning("Live audio streaming encountered error: %s (will fall back to batch Whisper)", e)
+
+
 async def _process(
     wav_data: bytes,
-    transcriber: Transcriber,
+    config: Config,
+    batch_transcriber: WhisperTranscriber,
+    streaming_transcriber: StreamingTranscriber | None,
+    stream_task: asyncio.Task | None,
     sounds: SoundPlayer,
     queue: asyncio.Queue[str],
     context: AppContext,
     screen_capture_future: asyncio.Future | None,
 ) -> None:
-    """Process recorded audio: transcribe and inject."""
+    """Process recorded audio: finalize streaming or transcribe via batch, then inject."""
     try:
         t0 = time.monotonic()
 
@@ -142,31 +190,58 @@ async def _process(
             except Exception as e:
                 log.warning("Screen capture failed: %s", e)
 
-        # Skip non-speech audio (avoids prompt leakage bug in gpt-4o-mini-transcribe)
+        # Skip non-speech audio (avoids hallucination and unnecessary API calls)
         if not has_speech(wav_data):
             log.info("No speech detected, skipping transcription")
+            if streaming_transcriber is not None:
+                await streaming_transcriber.close()
             return
 
-        # Transcribe with context
-        text = await transcriber.transcribe(wav_data, context)
-        if not text:
-            log.warning("Empty transcription result")
-            sounds.play("error")
+        text = ""
+        used_streaming = False
+
+        # Attempt streaming transcription if configured
+        if config.mode == "streaming" and streaming_transcriber is not None:
+            try:
+                if stream_task is not None:
+                    # Allow stream worker up to 1.5s to finish pushing final buffered chunks
+                    try:
+                        await asyncio.wait_for(stream_task, timeout=1.5)
+                    except asyncio.TimeoutError:
+                        log.warning("Stream worker timed out pushing chunks")
+
+                text = await streaming_transcriber.finish(timeout=3.0)
+                used_streaming = True
+                log.info("Streaming transcription succeeded in %.3fs", time.monotonic() - t0)
+            except Exception as e:
+                log.warning("Streaming transcription failed (%s: %s), falling back to batch Whisper", type(e).__name__, e)
+                try:
+                    await streaming_transcriber.close()
+                except Exception:
+                    pass
+
+        # Fallback to batch Whisper if streaming was not used or failed
+        if not used_streaming:
+            log.info("Using batch Whisper transcription")
+            text = await batch_transcriber.transcribe(wav_data, context)
+
+        if not text or not text.strip():
+            log.info("Empty transcription result, skipping injection")
             return
 
         # Check for snippet expansion (exact phrase match)
         text_clean = text.strip().rstrip(".?!,").lower()
-        for trigger, expansion in transcriber._config.snippets.items():
+        for trigger, expansion in config.snippets.items():
             if text_clean == trigger.strip().rstrip(".?!,").lower():
                 log.info("Snippet match: %r -> %r", trigger, expansion)
                 text = expansion
                 break
 
-        # Inject
-        inject_text(text, context.app_type)
+        # Single-shot paste injection via paste / inject_text
+        paste(text, context.app_type)
 
         elapsed = time.monotonic() - t0
-        log.info("Done in %.1fs", elapsed)
+        log.info("Done in %.3fs (%s)", elapsed, "streaming" if used_streaming else "batch")
 
     except Exception as e:
         log.error("Processing error: %s", e)
@@ -206,6 +281,8 @@ async def _config_reloader(config: Config, sounds: SoundPlayer) -> None:
             config.sounds_enabled = new_config.sounds_enabled
             config.attenuation_enabled = new_config.attenuation_enabled
             config.attenuation_level = new_config.attenuation_level
+            config.mode = new_config.mode
+            config.streaming_model = new_config.streaming_model
 
             sounds._enabled = new_config.sounds_enabled
 
