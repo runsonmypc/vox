@@ -85,8 +85,93 @@ def check_dependencies() -> None:
         )
 
 
-def inject_text(text: str, app_type: AppType) -> None:
-    """Inject text at cursor via clipboard paste, or xdotool type for games/unknown apps."""
+_keyboard_controller = None
+
+
+def _get_keyboard_controller():
+    global _keyboard_controller
+    if _keyboard_controller is None:
+        from pynput.keyboard import Controller
+        _keyboard_controller = Controller()
+    return _keyboard_controller
+
+
+def _get_clipboard() -> str | None:
+    """Get current clipboard contents as a string."""
+    if sys.platform == "darwin":
+        try:
+            from AppKit import NSPasteboard, NSPasteboardTypeString
+            pb = NSPasteboard.generalPasteboard()
+            return pb.stringForType_(NSPasteboardTypeString)
+        except Exception as e:
+            log.warning("Failed to read NSPasteboard: %s", e)
+            return None
+    try:
+        return subprocess.check_output(
+            ["xclip", "-selection", "clipboard", "-o"],
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return None
+
+
+def _set_clipboard(text: str) -> None:
+    """Set clipboard contents to string."""
+    if sys.platform == "darwin":
+        try:
+            from AppKit import NSPasteboard, NSPasteboardTypeString
+            pb = NSPasteboard.generalPasteboard()
+            pb.clearContents()
+            pb.setString_forType_(text, NSPasteboardTypeString)
+            return
+        except Exception as e:
+            raise InjectionError(f"Failed to set NSPasteboard: {e}") from e
+
+    proc = subprocess.Popen(
+        ["xclip", "-selection", "clipboard"],
+        stdin=subprocess.PIPE,
+    )
+    proc.communicate(input=text.encode())
+    if proc.returncode != 0:
+        raise InjectionError("Failed to set clipboard via xclip")
+
+
+def _simulate_paste_macos() -> None:
+    """Simulate Cmd+V paste using pynput.keyboard.Controller."""
+    try:
+        from pynput.keyboard import Key
+        ctrl = _get_keyboard_controller()
+        with ctrl.pressed(Key.cmd):
+            ctrl.press("v")
+            ctrl.release("v")
+    except Exception as e:
+        raise InjectionError(f"macOS paste simulation failed: {e}") from e
+
+
+def _inject_text_macos(text: str, app_type: AppType) -> None:
+    """Inject text on macOS using NSPasteboard and Cmd+V."""
+    original_clipboard = _get_clipboard()
+    try:
+        _set_clipboard(text)
+        time.sleep(0.05)
+        _simulate_paste_macos()
+        log.debug("Injected %d chars via Cmd+V on macOS (app_type=%s)", len(text), app_type.value)
+        time.sleep(0.05)
+    except Exception as e:
+        if isinstance(e, InjectionError):
+            raise
+        raise InjectionError(f"macOS text injection failed: {e}") from e
+    finally:
+        if original_clipboard is not None:
+            try:
+                _set_clipboard(original_clipboard)
+            except Exception:
+                log.warning("Failed to restore clipboard")
+
+
+def _inject_text_linux(text: str, app_type: AppType) -> None:
+    """Inject text on Linux via xclip and xdotool / XTest."""
     # Games and unknown apps: clipboard paste via XTest (xdotool's --clearmodifiers breaks it)
     if app_type == AppType.OTHER:
         try:
@@ -152,3 +237,11 @@ def inject_text(text: str, app_type: AppType) -> None:
                 proc.communicate(input=original_clipboard.encode())
             except Exception:
                 log.warning("Failed to restore clipboard")
+
+
+def inject_text(text: str, app_type: AppType) -> None:
+    """Inject text at cursor via clipboard paste."""
+    if sys.platform == "darwin":
+        _inject_text_macos(text, app_type)
+    else:
+        _inject_text_linux(text, app_type)

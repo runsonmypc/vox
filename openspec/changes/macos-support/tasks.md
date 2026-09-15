@@ -6,8 +6,8 @@
 
 ## 2. macOS Text Injection and Clipboard
 
-- [ ] 2.1 Implement in-process clipboard backup, update, and restore using `NSPasteboard` on macOS in `vox/injector.py` while retaining `xclip` on Linux, and verify with a test clipboard round-trip
-- [ ] 2.2 Implement `Cmd+V` (`⌘V`) paste simulation using `pynput.keyboard.Controller` for all macOS applications in `vox/injector.py` and verify text injection
+- [x] 2.1 Implement in-process clipboard backup, update, and restore using `NSPasteboard` on macOS in `vox/injector.py` while retaining `xclip` on Linux, and verify with a test clipboard round-trip
+- [x] 2.2 Implement `Cmd+V` (`⌘V`) paste simulation using `pynput.keyboard.Controller` for all macOS applications in `vox/injector.py` and verify text injection
 
 ## 3. Active Window Detection and Screen Context
 
