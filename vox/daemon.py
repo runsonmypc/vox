@@ -154,6 +154,14 @@ async def _process(
             sounds.play("error")
             return
 
+        # Check for snippet expansion (exact phrase match)
+        text_clean = text.strip().rstrip(".?!,").lower()
+        for trigger, expansion in transcriber._config.snippets.items():
+            if text_clean == trigger.strip().rstrip(".?!,").lower():
+                log.info("Snippet match: %r -> %r", trigger, expansion)
+                text = expansion
+                break
+
         # Inject
         inject_text(text, context.app_type)
 
