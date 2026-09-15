@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import shutil
 import subprocess
 import sys
+import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from enum import Enum
@@ -31,7 +33,7 @@ class AppType(Enum):
     OTHER = "OTHER"
 
 
-# Default WM_CLASS -> AppType mappings
+# Default WM_CLASS / bundle identifier / app name -> AppType mappings
 _DEFAULT_CLASSES: dict[str, AppType] = {
     # Terminals
     "ghostty": AppType.TERMINAL,
@@ -42,6 +44,13 @@ _DEFAULT_CLASSES: dict[str, AppType] = {
     "konsole": AppType.TERMINAL,
     "tilix": AppType.TERMINAL,
     "wezterm": AppType.TERMINAL,
+    "terminal": AppType.TERMINAL,
+    "iterm": AppType.TERMINAL,
+    "com.mitchellh.ghostty": AppType.TERMINAL,
+    "com.googlecode.iterm2": AppType.TERMINAL,
+    "com.apple.terminal": AppType.TERMINAL,
+    "net.kovidgoyal.kitty": AppType.TERMINAL,
+    "io.alacritty": AppType.TERMINAL,
     # Editors
     "code": AppType.EDITOR,
     "vscodium": AppType.EDITOR,
@@ -52,21 +61,38 @@ _DEFAULT_CLASSES: dict[str, AppType] = {
     "gedit": AppType.EDITOR,
     "zed": AppType.EDITOR,
     "cursor": AppType.EDITOR,
+    "com.microsoft.vscode": AppType.EDITOR,
+    "com.microsoft.vscodeinsiders": AppType.EDITOR,
+    "com.todesktop.230313mzl4w4u92": AppType.EDITOR,
+    "dev.zed.zed": AppType.EDITOR,
+    "com.sublimetext": AppType.EDITOR,
     # Chat
     "slack": AppType.CHAT,
     "discord": AppType.CHAT,
     "telegram-desktop": AppType.CHAT,
     "signal": AppType.CHAT,
     "element": AppType.CHAT,
+    "com.tinyspeck.slackmacgap": AppType.CHAT,
+    "com.hnc.discord": AppType.CHAT,
+    "ru.keepcoder.telegram": AppType.CHAT,
+    "org.whispersystems.signal-desktop": AppType.CHAT,
     # Email
     "thunderbird": AppType.EMAIL,
     "geary": AppType.EMAIL,
     "evolution": AppType.EMAIL,
+    "com.apple.mail": AppType.EMAIL,
+    "org.mozilla.thunderbird": AppType.EMAIL,
     # Browsers
     "firefox": AppType.BROWSER,
     "google-chrome": AppType.BROWSER,
     "chromium-browser": AppType.BROWSER,
     "brave-browser": AppType.BROWSER,
+    "safari": AppType.BROWSER,
+    "com.apple.safari": AppType.BROWSER,
+    "org.mozilla.firefox": AppType.BROWSER,
+    "com.google.chrome": AppType.BROWSER,
+    "com.brave.browser": AppType.BROWSER,
+    "company.thebrowser.browser": AppType.BROWSER,
 }
 
 
@@ -81,8 +107,70 @@ class AppContext:
     pid: str = ""
 
 
-def detect_active_window(config: Config) -> AppContext:
-    """Detect the currently active window and classify it (no screen text yet)."""
+def _get_macos_window_title(app_name: str) -> str:
+    """Retrieve window title via AppleScript with fallback to localized application name."""
+    script = (
+        'tell application "System Events"\n'
+        '    try\n'
+        '        set frontApp to first application process whose frontmost is true\n'
+        '        tell frontApp\n'
+        '            if (count of windows) > 0 then\n'
+        '                return name of front window\n'
+        '            end if\n'
+        '        end tell\n'
+        '    on error\n'
+        '        return ""\n'
+        '    end try\n'
+        'end tell\n'
+        'return ""'
+    )
+    try:
+        res = subprocess.run(
+            ["osascript", "-e", script],
+            capture_output=True,
+            text=True,
+            timeout=1,
+        )
+        title = res.stdout.strip()
+        if title:
+            return title
+    except Exception as e:
+        log.debug("Failed to get window title via AppleScript: %s", e)
+    return app_name
+
+
+def _detect_active_window_macos(config: Config) -> AppContext:
+    """Detect frontmost application on macOS via Cocoa NSWorkspace."""
+    app_name = ""
+    bundle_id = ""
+    pid = ""
+
+    try:
+        from AppKit import NSWorkspace
+        app = NSWorkspace.sharedWorkspace().frontmostApplication()
+        if app is not None:
+            app_name = app.localizedName() or ""
+            bundle_id = app.bundleIdentifier() or ""
+            pid = str(app.processIdentifier() or "")
+    except Exception as e:
+        log.warning("Failed to detect active window via NSWorkspace: %s", e)
+
+    title = _get_macos_window_title(app_name)
+    identifier = f"{bundle_id} {app_name}".strip() if bundle_id else app_name
+    app_type = _classify(identifier, title, config)
+    log.debug("macOS Window: bundle_id=%r app_name=%r title=%r type=%s", bundle_id, app_name, title, app_type.value)
+
+    return AppContext(
+        wm_class=identifier,
+        window_title=title,
+        app_type=app_type,
+        win_id="",
+        pid=pid,
+    )
+
+
+def _detect_active_window_linux(config: Config) -> AppContext:
+    """Detect active window on Linux via xdotool and xprop."""
     wm_class = ""
     title = ""
     win_id = ""
@@ -121,6 +209,13 @@ def detect_active_window(config: Config) -> AppContext:
     )
 
 
+def detect_active_window(config: Config) -> AppContext:
+    """Detect the currently active window and classify it (no screen text yet)."""
+    if sys.platform == "darwin":
+        return _detect_active_window_macos(config)
+    return _detect_active_window_linux(config)
+
+
 def start_screen_capture(ctx: AppContext) -> asyncio.Future:
     """Start screen text capture in background. Returns a future with the result.
 
@@ -131,8 +226,69 @@ def start_screen_capture(ctx: AppContext) -> asyncio.Future:
     return loop.run_in_executor(_ocr_pool, _capture_screen_text, ctx.win_id, ctx.pid, ctx.app_type)
 
 
+def _read_vision_ocr() -> str:
+    """Capture screen using screencapture and recognize text with Apple Vision framework."""
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+        tmp_path = tmp.name
+
+    try:
+        res = subprocess.run(
+            ["screencapture", "-x", tmp_path],
+            capture_output=True,
+            timeout=5,
+        )
+        if res.returncode != 0 or not os.path.exists(tmp_path):
+            return ""
+
+        from Foundation import NSURL, NSDictionary
+        import Vision
+
+        ns_url = NSURL.fileURLWithPath_(tmp_path)
+        handler = Vision.VNImageRequestHandler.alloc().initWithURL_options_(ns_url, NSDictionary.dictionary())
+        request = Vision.VNRecognizeTextRequest.alloc().init()
+        request.setRecognitionLevel_(Vision.VNRequestTextRecognitionLevelFast)
+        request.setUsesLanguageCorrection_(True)
+        success, _ = handler.performRequests_error_([request], None)
+        if not success:
+            return ""
+
+        results = request.results()
+        if not results:
+            return ""
+
+        lines = [obs.topCandidates_(1)[0].string() for obs in results if obs.topCandidates_(1)]
+        full_text = " ".join(lines)
+        return full_text[:_MAX_CONTEXT_CHARS]
+    except Exception as e:
+        log.debug("Vision OCR capture failed: %s", e)
+        return ""
+    finally:
+        if os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+
+
 def _capture_screen_text(win_id: str, pid: str, app_type: AppType) -> str:
-    """Capture screen text — tries AT-SPI, then OCR, then tmux. Runs in thread."""
+    """Capture screen text — platform-aware."""
+    if sys.platform == "darwin":
+        # Check tmux first if in terminal
+        if app_type == AppType.TERMINAL:
+            tmux_text = _read_tmux_pane()
+            if tmux_text:
+                log.debug("Screen text from tmux: %d chars", len(tmux_text))
+                return tmux_text
+
+        # Try Vision OCR
+        vision_text = _read_vision_ocr()
+        if vision_text:
+            log.debug("Screen text from Vision OCR: %d chars", len(vision_text))
+            return vision_text
+
+        return ""
+
+    # Linux flow:
     # Try AT-SPI first (fast, ~10ms)
     text = _read_atspi_text(pid)
     if text and len(text) > 100:

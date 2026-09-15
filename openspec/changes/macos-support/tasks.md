@@ -11,9 +11,9 @@
 
 ## 3. Active Window Detection and Screen Context
 
-- [ ] 3.1 Implement macOS frontmost application detection via Cocoa `NSWorkspace` and bundle identifier mapping to `AppType` in `vox/window.py`, verifying classification on active windows
-- [ ] 3.2 Add window title retrieval via AppleScript in `vox/window.py` with fallback to localized application name
-- [ ] 3.3 Implement macOS screen context capture using `screencapture -x` and Apple `Vision` framework neural OCR in `vox/window.py`, verifying vocabulary extraction into transcription prompts
+- [x] 3.1 Implement macOS frontmost application detection via Cocoa `NSWorkspace` and bundle identifier mapping to `AppType` in `vox/window.py`, verifying classification on active windows
+- [x] 3.2 Add window title retrieval via AppleScript in `vox/window.py` with fallback to localized application name
+- [x] 3.3 Implement macOS screen context capture using `screencapture -x` and Apple `Vision` framework neural OCR in `vox/window.py`, verifying vocabulary extraction into transcription prompts
 
 ## 4. Audio Attenuation and Service Files
 
