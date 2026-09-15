@@ -110,6 +110,8 @@ class StreamingTranscriber:
         sig = inspect.signature(websockets.connect)
         kw = "additional_headers" if "additional_headers" in sig.parameters else "extra_headers"
         connect_kwargs = {kw: headers}
+        if "close_timeout" in sig.parameters:
+            connect_kwargs["close_timeout"] = 0.2
 
         try:
             self._ws = await websockets.connect(self._ws_url, **connect_kwargs)
@@ -179,7 +181,22 @@ class StreamingTranscriber:
             log.warning("Detected prompt hallucination on silence, suppressing transcript")
             transcript = ""
 
-        await self.close()
+        # Mark closed immediately so is_connected is False and text paste is not blocked on TCP close
+        self._closed = True
+        ws_to_close = self._ws
+        self._ws = None
+        if self._receive_task is not None:
+            self._receive_task.cancel()
+            self._receive_task = None
+
+        if ws_to_close is not None:
+            async def _bg_close():
+                try:
+                    await ws_to_close.close()
+                except Exception:
+                    pass
+            asyncio.create_task(_bg_close())
+
         log.info("Streaming transcript finalized: %s", transcript)
         return transcript
 
@@ -195,11 +212,12 @@ class StreamingTranscriber:
             self._receive_task = None
 
         if self._ws is not None:
+            ws = self._ws
+            self._ws = None
             try:
-                await self._ws.close()
+                await ws.close()
             except Exception:
                 pass
-            self._ws = None
 
     async def _receive_loop(self) -> None:
         """Asynchronously receive WebSocket events and buffer transcript deltas in memory."""
