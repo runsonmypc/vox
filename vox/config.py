@@ -26,6 +26,10 @@ class Config:
     channels: int = 1
     max_recording_seconds: int = 300
 
+    # Transcription
+    mode: str = "streaming"
+    streaming_model: str = "gpt-live-transcribe"
+
     # Whisper
     whisper_model: str = "gpt-4o-mini-transcribe-2025-12-15"
     whisper_language: str | None = None
@@ -49,6 +53,14 @@ class Config:
     # Attenuation
     attenuation_enabled: bool = True
     attenuation_level: float = 0.5
+
+    @property
+    def transcription_mode(self) -> str:
+        return self.mode
+
+    @transcription_mode.setter
+    def transcription_mode(self, value: str) -> None:
+        self.mode = value
 
     @property
     def config_path(self) -> Path | None:
@@ -90,13 +102,36 @@ def load_config(path: Path | None = None) -> Config:
             "max_recording_seconds": "max_recording_seconds",
         })
         _apply_section(config, data, "whisper", {
+            "mode": "mode",
             "model": "whisper_model",
+            "streaming_model": "streaming_model",
             "language": "whisper_language",
             "prompt": "whisper_prompt",
         })
+        if "transcription" in data:
+            t = data["transcription"]
+            if "mode" in t:
+                config.mode = t["mode"]
+            if "streaming_model" in t:
+                config.streaming_model = t["streaming_model"]
+            if "model" in t:
+                if t.get("mode") == "batch":
+                    config.whisper_model = t["model"]
+                else:
+                    config.streaming_model = t["model"]
+            if "language" in t:
+                config.whisper_language = t["language"]
+            if "prompt" in t:
+                config.whisper_prompt = t["prompt"]
+
+        if config.mode not in ("streaming", "batch"):
+            raise ConfigError(f"Invalid transcription mode '{config.mode}': must be 'streaming' or 'batch'")
+
         if "snippets" in data:
             config.snippets = dict(data["snippets"])
         dict_val = data.get("dictionary")
+        if dict_val is None and "transcription" in data and "dictionary" in data["transcription"]:
+            dict_val = data["transcription"]["dictionary"]
         if dict_val is None and "attenuation" in data and "dictionary" in data["attenuation"]:
             dict_val = data["attenuation"]["dictionary"]
         if dict_val is None and "whisper" in data and "dictionary" in data["whisper"]:
