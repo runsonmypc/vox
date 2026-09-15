@@ -10,9 +10,9 @@
 
 ## 3. Streaming Transcription Engine
 
-- [ ] 3.1 Implement `StreamingTranscriber` in `vox/streaming.py` that opens a WebSocket connection to `wss://api.openai.com/v1/realtime?intent=transcription` with API key headers and issues `session.update` with prompt, keywords, and `gpt-live-transcribe`, verifying session setup with unit tests
-- [ ] 3.2 Implement chunk streaming via `input_audio_buffer.append` and in-memory delta accumulation (`conversation.item.input_audio_transcription.delta`), verifying that deltas aggregate in memory without emitting external keystrokes
-- [ ] 3.3 Implement turn finalization: send `input_audio_buffer.commit`, await `conversation.item.input_audio_transcription.completed`, and return the complete accumulated transcript, verified by mock test
+- [x] 3.1 Implement `StreamingTranscriber` in `vox/streaming.py` that opens a WebSocket connection to `wss://api.openai.com/v1/realtime?intent=transcription` with API key headers and issues `session.update` with prompt, keywords, and `gpt-live-transcribe`, verifying session setup with unit tests
+- [x] 3.2 Implement chunk streaming via `input_audio_buffer.append` and in-memory delta accumulation (`conversation.item.input_audio_transcription.delta`), verifying that deltas aggregate in memory without emitting external keystrokes
+- [x] 3.3 Implement turn finalization: send `input_audio_buffer.commit`, await `conversation.item.input_audio_transcription.completed`, and return the complete accumulated transcript, verified by mock test
 
 ## 4. Daemon Integration and Fallback
 

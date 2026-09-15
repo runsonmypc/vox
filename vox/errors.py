@@ -17,6 +17,10 @@ class TranscriptionError(VoxError):
     """Whisper API error."""
 
 
+class StreamingError(TranscriptionError):
+    """OpenAI Realtime streaming transcription error."""
+
+
 class InjectionError(VoxError):
     """Text injection (clipboard/paste) error."""
 
