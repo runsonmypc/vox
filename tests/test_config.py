@@ -14,6 +14,7 @@ def test_config_defaults():
     assert config.transcription_mode == "streaming"
     assert config.streaming_model == "gpt-live-transcribe"
     assert config.whisper_model == "gpt-4o-mini-transcribe-2025-12-15"
+    assert config.double_tap_timeout_ms == 400
 
 
 def test_transcription_mode_setter():
@@ -103,3 +104,25 @@ mode = "invalid-mode"
             load_config(temp_path)
     finally:
         temp_path.unlink(missing_ok=True)
+
+
+def test_load_config_hotkey_section():
+    toml_content = """
+[hotkey]
+key = "caps_lock"
+fallback = "ctrl+space"
+double_tap_timeout_ms = 250
+"""
+    with tempfile.NamedTemporaryFile("w", suffix=".toml", delete=False) as f:
+        f.write(toml_content)
+        f.flush()
+        temp_path = Path(f.name)
+
+    try:
+        config = load_config(temp_path)
+        assert config.hotkey == "caps_lock"
+        assert config.hotkey_fallback == "ctrl+space"
+        assert config.double_tap_timeout_ms == 250
+    finally:
+        temp_path.unlink(missing_ok=True)
+

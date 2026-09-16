@@ -19,6 +19,7 @@ class Config:
     # Hotkey
     hotkey: str = "right_shift"
     hotkey_fallback: str = ""
+    double_tap_timeout_ms: int = 400
 
     # Audio
     audio_device: int | str | None = None
@@ -94,6 +95,7 @@ def load_config(path: Path | None = None) -> Config:
         _apply_section(config, data, "hotkey", {
             "key": "hotkey",
             "fallback": "hotkey_fallback",
+            "double_tap_timeout_ms": "double_tap_timeout_ms",
         })
         _apply_section(config, data, "audio", {
             "device": "audio_device",
