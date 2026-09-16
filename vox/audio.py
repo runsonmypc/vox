@@ -273,6 +273,25 @@ class Recorder:
         log.debug("Recorded %d frames (%.1fs)", len(audio), len(audio) / self._sample_rate)
         return self._to_wav(audio)
 
+    def discard(self) -> None:
+        """Stop recording, finalize streaming queue, and discard buffered frames."""
+        if self._stream is not None:
+            try:
+                self._stream.stop()
+                self._stream.close()
+            except Exception:
+                pass
+            self._stream = None
+
+        if self._stream_queue is not None and self._loop is not None and not self._loop.is_closed():
+            try:
+                self._loop.call_soon_threadsafe(self._stream_queue.put_nowait, None)
+            except RuntimeError:
+                pass
+
+        self._chunks.clear()
+
+
     @property
     def is_recording(self) -> bool:
         return self._stream is not None and self._stream.active

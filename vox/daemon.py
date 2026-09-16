@@ -138,6 +138,64 @@ async def _main(config: Config) -> None:
                     log.info("Ignoring toggle during processing")
                     sounds.play("busy")
 
+            elif event == "cancel":
+                if state == State.RECORDING:
+                    log.info("Cancelling active recording...")
+                    if saved_volume is not None:
+                        set_volume(saved_volume)
+                        saved_volume = None
+
+                    try:
+                        recorder.discard()
+                    except AttributeError:
+                        try:
+                            recorder.stop()
+                        except Exception:
+                            pass
+                    except Exception as e:
+                        log.debug("Error discarding recording: %s", e)
+
+                    if screen_capture_future is not None and not screen_capture_future.done():
+                        screen_capture_future.cancel()
+                    screen_capture_future = None
+
+                    if stream_task is not None:
+                        stream_task.cancel()
+                        stream_task = None
+                    if streaming_transcriber is not None:
+                        asyncio.create_task(streaming_transcriber.close())
+                        streaming_transcriber = None
+
+                    recording_context = None
+                    sounds.play("cancel")
+                    state = State.IDLE
+                    log.info("Recording cancelled, state reset to IDLE")
+
+                elif state == State.PROCESSING:
+                    log.info("Cancelling in-flight processing...")
+                    if saved_volume is not None:
+                        set_volume(saved_volume)
+                        saved_volume = None
+
+                    if process_task is not None and not process_task.done():
+                        process_task.cancel()
+                    process_task = None
+
+                    if stream_task is not None:
+                        stream_task.cancel()
+                        stream_task = None
+                    if streaming_transcriber is not None:
+                        asyncio.create_task(streaming_transcriber.close())
+                        streaming_transcriber = None
+
+                    recording_context = None
+                    sounds.play("cancel")
+                    state = State.IDLE
+                    log.info("Processing cancelled, state reset to IDLE")
+
+                elif state == State.IDLE:
+                    log.debug("Ignoring cancel event in IDLE state")
+
             elif event == "process_done":
                 if state == State.PROCESSING:
                     state = State.IDLE
@@ -258,6 +316,18 @@ async def _process(
         elapsed = time.monotonic() - t0
         log.info("Done in %.3fs (%s)", elapsed, "streaming" if used_streaming else "batch")
 
+    except asyncio.CancelledError:
+        log.info("Processing task cancelled")
+        if screen_capture_future is not None and not screen_capture_future.done():
+            screen_capture_future.cancel()
+        if stream_task is not None:
+            stream_task.cancel()
+        if streaming_transcriber is not None:
+            try:
+                await streaming_transcriber.close()
+            except Exception:
+                pass
+        raise
     except Exception as e:
         log.error("Processing error: %s", e)
         sounds.play("error")

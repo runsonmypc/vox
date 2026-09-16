@@ -274,3 +274,263 @@ async def test_stream_worker_pushes_chunks():
     assert mock_transcriber.send_audio_chunk.await_count == 2
     mock_transcriber.send_audio_chunk.assert_any_await(chunk1)
     mock_transcriber.send_audio_chunk.assert_any_await(chunk2)
+
+
+async def fake_reloader(*args, **kwargs):
+    try:
+        await asyncio.sleep(100)
+    except asyncio.CancelledError:
+        pass
+
+
+@pytest.mark.anyio
+async def test_daemon_cancel_during_recording():
+    """Verify cancel during RECORDING stops audio, discards frames, cancels streaming/screen, restores volume, plays cancel sound, and resets to IDLE."""
+    config = Config(mode="streaming", sounds_enabled=True, attenuation_enabled=True, attenuation_level=0.5)
+    config._config_path = None
+
+    queue_holder = {}
+    mock_hotkey = MagicMock()
+
+    def fake_hotkey_init(cfg, loop, queue):
+        queue_holder["queue"] = queue
+        return mock_hotkey
+
+    mock_recorder = MagicMock()
+    mock_recorder.discard = MagicMock()
+
+    async def fake_stream_chunks():
+        while True:
+            await asyncio.sleep(1.0)
+            yield b"\x00" * 100
+
+    mock_recorder.stream_chunks = fake_stream_chunks
+
+    mock_sounds = MagicMock()
+    mock_streaming = MagicMock()
+    mock_streaming.connect = AsyncMock()
+    mock_streaming.close = AsyncMock()
+
+    loop = asyncio.get_running_loop()
+    fake_screen_future = loop.create_future()
+
+    with patch("vox.daemon.HotkeyListener", side_effect=fake_hotkey_init), \
+         patch("vox.daemon.Recorder", return_value=mock_recorder), \
+         patch("vox.daemon.SoundPlayer", return_value=mock_sounds), \
+         patch("vox.daemon.WhisperTranscriber"), \
+         patch("vox.daemon.StreamingTranscriber", return_value=mock_streaming), \
+         patch("vox.daemon._config_reloader", side_effect=fake_reloader), \
+         patch("vox.daemon.start_screen_capture", return_value=fake_screen_future), \
+         patch("vox.daemon.detect_active_window", return_value=AppContext(wm_class="term", window_title="Term", app_type=AppType.TERMINAL)), \
+         patch("vox.daemon.get_volume", return_value=0.8), \
+         patch("vox.daemon.set_volume") as mock_set_volume:
+
+        from vox.daemon import _main
+        main_task = asyncio.create_task(_main(config))
+        await asyncio.sleep(0.01)
+
+        queue = queue_holder["queue"]
+
+        # 1. Start recording with toggle
+        await queue.put("toggle")
+        await asyncio.sleep(0.02)
+
+        mock_sounds.play.assert_any_call("start", blocking=True)
+        mock_set_volume.assert_called_with(0.4)  # 0.8 * 0.5
+
+        # 2. Cancel recording
+        await queue.put("cancel")
+        await asyncio.sleep(0.02)
+
+        # Discarded audio frames
+        mock_recorder.discard.assert_called_once()
+        # Volume restored to 0.8
+        mock_set_volume.assert_called_with(0.8)
+        # Cancel sound played
+        mock_sounds.play.assert_any_call("cancel")
+        # Screen capture cancelled
+        assert fake_screen_future.cancelled()
+        # Streaming transcriber closed
+        mock_streaming.close.assert_awaited()
+
+        # 3. Verify state reset to IDLE: a subsequent toggle starts recording again
+        mock_sounds.reset_mock()
+        await queue.put("toggle")
+        await asyncio.sleep(0.02)
+        mock_sounds.play.assert_any_call("start", blocking=True)
+
+        main_task.cancel()
+        try:
+            await main_task
+        except asyncio.CancelledError:
+            pass
+
+
+@pytest.mark.anyio
+async def test_daemon_cancel_during_processing():
+    """Verify cancel during PROCESSING cancels process task, suppresses paste, plays cancel sound, and resets to IDLE."""
+    config = Config(mode="batch", sounds_enabled=True, attenuation_enabled=True, attenuation_level=0.5)
+    config._config_path = None
+
+    queue_holder = {}
+    mock_hotkey = MagicMock()
+
+    def fake_hotkey_init(cfg, loop, queue):
+        queue_holder["queue"] = queue
+        return mock_hotkey
+
+    mock_recorder = MagicMock()
+    mock_recorder.stop = MagicMock(return_value=b"fake_wav")
+
+    mock_sounds = MagicMock()
+    process_started = asyncio.Event()
+    process_cancelled = asyncio.Event()
+
+    async def fake_process(**kwargs):
+        process_started.set()
+        try:
+            await asyncio.sleep(10.0)
+        except asyncio.CancelledError:
+            process_cancelled.set()
+            raise
+
+    with patch("vox.daemon.HotkeyListener", side_effect=fake_hotkey_init), \
+         patch("vox.daemon.Recorder", return_value=mock_recorder), \
+         patch("vox.daemon.SoundPlayer", return_value=mock_sounds), \
+         patch("vox.daemon.WhisperTranscriber"), \
+         patch("vox.daemon._config_reloader", side_effect=fake_reloader), \
+         patch("vox.daemon.detect_active_window", return_value=AppContext(wm_class="term", window_title="Term", app_type=AppType.TERMINAL)), \
+         patch("vox.daemon.start_screen_capture", return_value=None), \
+         patch("vox.daemon.get_volume", return_value=0.8), \
+         patch("vox.daemon.set_volume") as mock_set_volume, \
+         patch("vox.daemon._process", side_effect=fake_process), \
+         patch("vox.daemon.paste") as mock_paste:
+
+        from vox.daemon import _main
+        main_task = asyncio.create_task(_main(config))
+        await asyncio.sleep(0.01)
+
+        queue = queue_holder["queue"]
+
+        # Start recording
+        await queue.put("toggle")
+        await asyncio.sleep(0.02)
+
+        # Stop recording -> transitions to PROCESSING
+        await queue.put("toggle")
+        await process_started.wait()
+
+        # Cancel while PROCESSING
+        await queue.put("cancel")
+        await asyncio.sleep(0.02)
+
+        assert process_cancelled.is_set()
+        mock_sounds.play.assert_any_call("cancel")
+        mock_paste.assert_not_called()
+
+        # Subsequent toggle starts recording (state was reset to IDLE)
+        mock_sounds.reset_mock()
+        await queue.put("toggle")
+        await asyncio.sleep(0.02)
+        mock_sounds.play.assert_any_call("start", blocking=True)
+
+        main_task.cancel()
+        try:
+            await main_task
+        except asyncio.CancelledError:
+            pass
+
+
+@pytest.mark.anyio
+async def test_process_cancellation_suppresses_paste_and_cleans_resources():
+    """Verify _process cancelled midway cancels stream_task/screen_capture, closes transcriber, and does not paste or error sound."""
+    config = Config(mode="streaming")
+    context = AppContext(wm_class="code", window_title="Code", app_type=AppType.EDITOR)
+    queue: asyncio.Queue[str] = asyncio.Queue()
+    wav_data = _make_dummy_wav(0.5)
+
+    mock_sounds = MagicMock()
+    mock_streaming = MagicMock()
+    # Hang on finish to allow cancellation while waiting
+    finish_started = asyncio.Event()
+
+    async def slow_finish(timeout=3.0):
+        finish_started.set()
+        await asyncio.sleep(10.0)
+        return "transcribed text"
+
+    mock_streaming.finish = AsyncMock(side_effect=slow_finish)
+    mock_streaming.close = AsyncMock()
+
+    loop = asyncio.get_running_loop()
+    screen_capture_future = loop.create_future()
+    stream_task = asyncio.create_task(asyncio.sleep(10.0))
+
+    with patch("vox.daemon.has_speech", return_value=True), \
+         patch("vox.daemon.paste") as mock_paste:
+
+        process_task = asyncio.create_task(_process(
+            wav_data=wav_data,
+            config=config,
+            batch_transcriber=MagicMock(),
+            streaming_transcriber=mock_streaming,
+            stream_task=stream_task,
+            sounds=mock_sounds,
+            queue=queue,
+            context=context,
+            screen_capture_future=screen_capture_future,
+        ))
+
+        await finish_started.wait()
+        process_task.cancel()
+
+        with pytest.raises(asyncio.CancelledError):
+            await process_task
+
+        mock_paste.assert_not_called()
+        mock_sounds.play.assert_not_called()
+        mock_streaming.close.assert_awaited()
+        assert screen_capture_future.cancelled()
+        assert stream_task.cancelled()
+
+
+@pytest.mark.anyio
+async def test_daemon_cancel_ignored_in_idle():
+    """Verify cancel event received while in IDLE state is safely ignored without playing cancel sound."""
+    config = Config()
+    config._config_path = None
+
+    queue_holder = {}
+    mock_hotkey = MagicMock()
+
+    def fake_hotkey_init(cfg, loop, queue):
+        queue_holder["queue"] = queue
+        return mock_hotkey
+
+    mock_sounds = MagicMock()
+
+    with patch("vox.daemon.HotkeyListener", side_effect=fake_hotkey_init), \
+         patch("vox.daemon.Recorder"), \
+         patch("vox.daemon.WhisperTranscriber"), \
+         patch("vox.daemon._config_reloader", side_effect=fake_reloader), \
+         patch("vox.daemon.SoundPlayer", return_value=mock_sounds):
+
+        from vox.daemon import _main
+        main_task = asyncio.create_task(_main(config))
+        await asyncio.sleep(0.01)
+
+        queue = queue_holder["queue"]
+
+        # Cancel in IDLE
+        await queue.put("cancel")
+        await asyncio.sleep(0.02)
+
+        # Cancel sound should not be played
+        mock_sounds.play.assert_not_called()
+
+        main_task.cancel()
+        try:
+            await main_task
+        except asyncio.CancelledError:
+            pass
+

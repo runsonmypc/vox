@@ -9,8 +9,8 @@
 
 ## 3. Daemon State Machine Cancellation
 
-- [ ] 3.1 Implement `"cancel"` handling in `vox/daemon.py` for `State.RECORDING` to stop audio capture, discard frames, cancel streaming workers/screen capture, restore volume attenuation, play `"cancel"` sound, and reset to `State.IDLE`; verify with tests in `tests/test_daemon.py`.
-- [ ] 3.2 Implement `"cancel"` handling in `vox/daemon.py` for `State.PROCESSING` to cancel in-flight `process_task` and streaming connections, suppress paste injection, restore volume attenuation, play `"cancel"` sound, and reset to `State.IDLE`; verify with tests in `tests/test_daemon.py`.
+- [x] 3.1 Implement `"cancel"` handling in `vox/daemon.py` for `State.RECORDING` to stop audio capture, discard frames, cancel streaming workers/screen capture, restore volume attenuation, play `"cancel"` sound, and reset to `State.IDLE`; verify with tests in `tests/test_daemon.py`.
+- [x] 3.2 Implement `"cancel"` handling in `vox/daemon.py` for `State.PROCESSING` to cancel in-flight `process_task` and streaming connections, suppress paste injection, restore volume attenuation, play `"cancel"` sound, and reset to `State.IDLE`; verify with tests in `tests/test_daemon.py`.
 
 ## 4. Verification and Regression Testing
 
