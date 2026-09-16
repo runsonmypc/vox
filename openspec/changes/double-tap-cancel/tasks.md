@@ -14,4 +14,4 @@
 
 ## 4. Verification and Regression Testing
 
-- [ ] 4.1 Run the full test suite via `uv run pytest` to verify all new and existing tests pass cleanly without regression.
+- [x] 4.1 Run the full test suite via `uv run pytest` to verify all new and existing tests pass cleanly without regression.
