@@ -28,6 +28,7 @@ class HotkeyListener:
         self._queue = queue
         self._hotkey_name = config.hotkey
         self._fallback = config.hotkey_fallback
+        self._double_tap_timeout_ms = config.double_tap_timeout_ms
         self._listener: keyboard.Listener | None = None
 
         # State for solo-modifier detection
@@ -36,6 +37,8 @@ class HotkeyListener:
         self._other_key_pressed = False
         self._press_time: float = 0
         self._last_toggle_time: float = 0
+        self._last_release_time: float = 0.0
+        self._last_fallback_time: float = 0.0
         self._debounce_ms = 50
         self._min_hold_ms = 80  # filter out synthetic/phantom key events
 
@@ -67,6 +70,12 @@ class HotkeyListener:
         self._loop.call_soon_threadsafe(self._queue.put_nowait, "toggle")
         log.info("Toggle fired via %s", source)
 
+    def _fire_cancel(self, source: str) -> None:
+        now = time.monotonic()
+        self._last_toggle_time = now
+        self._loop.call_soon_threadsafe(self._queue.put_nowait, "cancel")
+        log.info("Cancel fired via %s", source)
+
     def _on_press(self, key: keyboard.Key | keyboard.KeyCode | None) -> None:
         key_name = self._key_name(key)
 
@@ -84,25 +93,54 @@ class HotkeyListener:
         if self._fallback_keys:
             self._combo_state.add(key_name)
             if self._fallback_keys <= self._combo_state:
-                self._fire_toggle(f"fallback combo (keys: {self._combo_state})")
+                now = time.monotonic()
+                with self._lock:
+                    if self._last_fallback_time > 0 and (now - self._last_fallback_time) * 1000 <= self._double_tap_timeout_ms:
+                        self._last_fallback_time = 0.0
+                        is_cancel = True
+                    else:
+                        self._last_fallback_time = now
+                        is_cancel = False
+                    self._last_release_time = 0.0
+                if is_cancel:
+                    self._fire_cancel(f"fallback combo double-tap (keys: {self._combo_state})")
+                else:
+                    self._fire_toggle(f"fallback combo (keys: {self._combo_state})")
                 self._combo_state.clear()
                 return
 
-        # Any other key while modifier held -> not a solo press
+        # Any other key resets double-tap sequence tracking
         with self._lock:
             if self._modifier_pressed:
                 self._other_key_pressed = True
+            self._last_release_time = 0.0
+            if not (self._fallback_keys and key_name in self._fallback_keys):
+                self._last_fallback_time = 0.0
 
     def _on_release(self, key: keyboard.Key | keyboard.KeyCode | None) -> None:
         key_name = self._key_name(key)
 
         if key_name == self._hotkey_name:
+            now = time.monotonic()
             with self._lock:
                 was_solo = self._modifier_pressed and not self._other_key_pressed
-                held_ms = (time.monotonic() - self._press_time) * 1000
+                held_ms = (now - self._press_time) * 1000
                 self._modifier_pressed = False
+                if was_solo and held_ms >= self._min_hold_ms:
+                    if self._last_release_time > 0 and (now - self._last_release_time) * 1000 <= self._double_tap_timeout_ms:
+                        self._last_release_time = 0.0
+                        is_cancel = True
+                    else:
+                        self._last_release_time = now
+                        is_cancel = False
+                else:
+                    is_cancel = False
+
             if was_solo and held_ms >= self._min_hold_ms:
-                self._fire_toggle(f"solo {self._hotkey_name} ({held_ms:.0f}ms)")
+                if is_cancel:
+                    self._fire_cancel(f"solo {self._hotkey_name} double-tap ({held_ms:.0f}ms)")
+                else:
+                    self._fire_toggle(f"solo {self._hotkey_name} ({held_ms:.0f}ms)")
             elif was_solo:
                 log.debug("Ignoring short press: %.0fms (min %dms)", held_ms, self._min_hold_ms)
             return

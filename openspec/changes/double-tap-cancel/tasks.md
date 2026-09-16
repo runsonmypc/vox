@@ -5,7 +5,7 @@
 
 ## 2. Hotkey Double-Tap Detection
 
-- [ ] 2.1 Update `HotkeyListener` in `vox/hotkey.py` to track release timestamps, dispatch `"cancel"` when consecutive releases occur within `double_tap_timeout_ms`, and reset sequence tracking on intervening key presses or timeout expiry; verify with new tests in `tests/test_hotkey.py`.
+- [x] 2.1 Update `HotkeyListener` in `vox/hotkey.py` to track release timestamps, dispatch `"cancel"` when consecutive releases occur within `double_tap_timeout_ms`, and reset sequence tracking on intervening key presses or timeout expiry; verify with new tests in `tests/test_hotkey.py`.
 
 ## 3. Daemon State Machine Cancellation
 
