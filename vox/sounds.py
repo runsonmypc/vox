@@ -64,6 +64,15 @@ def _busy_sound() -> np.ndarray:
     return np.concatenate([tap, gap, tap])
 
 
+def _cancel_sound() -> np.ndarray:
+    """Descending two-tone sweep."""
+    sr = 44100
+    t1 = _generate_tone(900, 0.06, sr, 0.25)
+    gap = np.zeros(int(sr * 0.02), dtype=np.float32)
+    t2 = _generate_tone(450, 0.08, sr, 0.25)
+    return np.concatenate([t1, gap, t2])
+
+
 class SoundPlayer:
     """Plays audio feedback sounds."""
 
@@ -81,13 +90,17 @@ class SoundPlayer:
                         "stop": "Pop",
                         "error": "Basso",
                         "busy": "Funk",
+                        "cancel": "Blow",
                     }
                     for name, system_name in system_defaults.items():
                         wav_path = _SOUNDS_DIR / f"{name}.wav"
                         if wav_path.exists():
                             self._sounds[name] = NSSound.alloc().initWithContentsOfFile_byReference_(str(wav_path), True)
                         else:
-                            self._sounds[name] = NSSound.soundNamed_(system_name)
+                            sound = NSSound.soundNamed_(system_name)
+                            if sound is None and name == "cancel":
+                                sound = NSSound.soundNamed_("Purr")
+                            self._sounds[name] = sound
                 except Exception as e:
                     log.warning("Failed to initialize macOS NSSound: %s", e)
                     self._is_darwin = False
@@ -98,6 +111,7 @@ class SoundPlayer:
                     "stop": _stop_sound(),
                     "error": _error_sound(),
                     "busy": _busy_sound(),
+                    "cancel": _cancel_sound(),
                 }
 
     def play(self, name: str, blocking: bool = False) -> None:

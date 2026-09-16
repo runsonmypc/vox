@@ -1,7 +1,7 @@
 ## 1. Configuration and Audio Feedback Support
 
 - [x] 1.1 Add `double_tap_timeout_ms` (default 400ms) to `Config` in `vox/config.py` and parse it from the `[hotkey]` table; verify with unit tests in `tests/test_config.py`.
-- [ ] 1.2 Add `"cancel"` sound support to `SoundPlayer` in `vox/sounds.py` using macOS system alert sound (`"Blow"`) on Darwin and synthetic descending tone fallback on Linux; verify with unit tests in `tests/test_sounds.py`.
+- [x] 1.2 Add `"cancel"` sound support to `SoundPlayer` in `vox/sounds.py` using macOS system alert sound (`"Blow"`) on Darwin and synthetic descending tone fallback on Linux; verify with unit tests in `tests/test_sounds.py`.
 
 ## 2. Hotkey Double-Tap Detection
 
