@@ -77,8 +77,8 @@ class SoundPlayer:
                     from AppKit import NSSound
                     # Map to crisp, responsive macOS system alert sounds
                     system_defaults = {
-                        "start": "Pop",
-                        "stop": "Tink",
+                        "start": "Tink",
+                        "stop": "Pop",
                         "error": "Basso",
                         "busy": "Funk",
                     }
