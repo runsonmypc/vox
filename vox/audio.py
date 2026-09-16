@@ -114,10 +114,68 @@ def has_speech(wav_bytes: bytes) -> bool:
         return True  # assume speech on error to avoid dropping valid audio
 
 
+def resolve_input_device(device_spec: int | str | None, channels: int = 1) -> int | None:
+    """Resolve an audio device specification to a valid input device index.
+
+    Supports integer indices and case-insensitive device name substrings.
+    Validates that the selected device has >= channels input channels.
+    If the specified device is invalid or has 0 input channels, logs a warning
+    and gracefully falls back to the default input device.
+    """
+    try:
+        devices = sd.query_devices()
+    except Exception as e:
+        log.warning("Failed to query audio devices: %s", e)
+        return None
+
+    if isinstance(device_spec, str):
+        spec_lower = device_spec.lower().strip()
+        for idx, d in enumerate(devices):
+            if d.get("max_input_channels", 0) >= channels:
+                if spec_lower in d.get("name", "").lower():
+                    return idx
+        log.warning(
+            "Configured audio input device %r not found among devices with >= %d input channels",
+            device_spec, channels,
+        )
+
+    elif isinstance(device_spec, int):
+        if 0 <= device_spec < len(devices):
+            in_ch = devices[device_spec].get("max_input_channels", 0)
+            if in_ch >= channels:
+                return device_spec
+            log.warning(
+                "Configured audio device %d (%s) has %d input channels (needs >= %d)",
+                device_spec, devices[device_spec].get("name", "Unknown"), in_ch, channels,
+            )
+        else:
+            log.warning("Configured audio device index %d is out of range (0..%d)", device_spec, len(devices) - 1)
+
+    # Fallback to sounddevice default input device
+    try:
+        default_in = sd.default.device[0]
+        if default_in is not None and 0 <= default_in < len(devices):
+            if devices[default_in].get("max_input_channels", 0) >= channels:
+                if device_spec is not None:
+                    log.info("Falling back to default input device %d: %s", default_in, devices[default_in].get("name"))
+                return default_in
+    except Exception:
+        pass
+
+    # Secondary fallback: find first available device with >= channels
+    for idx, d in enumerate(devices):
+        if d.get("max_input_channels", 0) >= channels:
+            log.info("Falling back to first available input device %d: %s", idx, d.get("name"))
+            return idx
+
+    return None
+
+
 class Recorder:
     """Records audio from the default input device into WAV bytes and streams 24kHz PCM chunks."""
 
     def __init__(self, config: Config) -> None:
+        self._config = config
         self._sample_rate = config.sample_rate
         self._channels = config.channels
         self._device = config.audio_device
@@ -169,18 +227,20 @@ class Recorder:
                 except asyncio.QueueEmpty:
                     break
 
+        target_device = self._config.audio_device if getattr(self, "_config", None) is not None else self._device
+        resolved_device = resolve_input_device(target_device, channels=self._channels)
         blocksize = int(self._sample_rate * 0.1)
         try:
             self._stream = sd.InputStream(
                 samplerate=self._sample_rate,
                 channels=self._channels,
                 dtype="int16",
-                device=self._device,
+                device=resolved_device,
                 blocksize=blocksize,
                 callback=self._callback,
             )
             self._stream.start()
-            log.info("Recording started (device=%s, rate=%d)", self._device, self._sample_rate)
+            log.info("Recording started (device=%s, rate=%d)", resolved_device, self._sample_rate)
         except Exception as e:
             raise AudioError(f"Failed to start recording: {e}") from e
 

@@ -298,6 +298,7 @@ async def _config_reloader(config: Config, sounds: SoundPlayer) -> None:
             config.attenuation_level = new_config.attenuation_level
             config.mode = new_config.mode
             config.streaming_model = new_config.streaming_model
+            config.audio_device = new_config.audio_device
 
             sounds._enabled = new_config.sounds_enabled
 

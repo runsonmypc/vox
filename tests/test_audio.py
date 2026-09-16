@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
-from vox.audio import Recorder, has_speech, to_pcm24k
+from vox.audio import Recorder, has_speech, resolve_input_device, to_pcm24k
 from vox.config import Config
 
 
@@ -148,3 +148,61 @@ async def test_recorder_streaming_and_buffer_retention():
             np.testing.assert_array_equal(full_audio[:4800], chunk1)
             np.testing.assert_array_equal(full_audio[4800:9600], chunk2)
             np.testing.assert_array_equal(full_audio[9600:], chunk3)
+
+
+def test_resolve_input_device_by_name_and_index():
+    mock_devices = [
+        {"name": "Alex’s iPhone 16 Microphone", "max_input_channels": 1, "max_output_channels": 0},
+        {"name": "MacBook Pro Microphone", "max_input_channels": 1, "max_output_channels": 0},
+        {"name": "MacBook Pro Speakers", "max_input_channels": 0, "max_output_channels": 2},
+        {"name": "Multi-Output Device", "max_input_channels": 0, "max_output_channels": 0},
+    ]
+
+    with patch("vox.audio.sd.query_devices", return_value=mock_devices), \
+         patch("vox.audio.sd.default.device", [1, 2]):
+
+        # 1. Resolve by name substring (case-insensitive)
+        assert resolve_input_device("MacBook Pro Microphone") == 1
+        assert resolve_input_device("macbook") == 1
+        assert resolve_input_device("iphone") == 0
+
+        # 2. Resolve by valid index
+        assert resolve_input_device(0) == 0
+        assert resolve_input_device(1) == 1
+
+        # 3. Handle device with 0 input channels gracefully (fallback to default input)
+        # Device 3 is "Multi-Output Device" (0 in channels) - must NOT return 3!
+        assert resolve_input_device(3) == 1
+        # Device 2 is Speakers (0 in channels) - must NOT return 2!
+        assert resolve_input_device(2) == 1
+
+        # 4. Handle non-existent device name (fallback to default input)
+        assert resolve_input_device("Unknown Mic") == 1
+
+        # 5. Handle out of bounds index (fallback to default input)
+        assert resolve_input_device(99) == 1
+
+        # 6. None spec returns default input device
+        assert resolve_input_device(None) == 1
+
+
+def test_recorder_uses_resolved_device():
+    mock_devices = [
+        {"name": "Speakers", "max_input_channels": 0, "max_output_channels": 2},
+        {"name": "Built-in Mic", "max_input_channels": 1, "max_output_channels": 0},
+    ]
+
+    config = Config(audio_device="Built-in Mic")
+    recorder = Recorder(config)
+
+    mock_stream = MagicMock()
+    with patch("vox.audio.sd.query_devices", return_value=mock_devices), \
+         patch("vox.audio.sd.default.device", [1, 0]), \
+         patch("vox.audio.sd.InputStream", return_value=mock_stream) as mock_input_stream:
+
+        recorder.start()
+        # Verify InputStream was opened with resolved device index 1
+        mock_input_stream.assert_called_once()
+        _, kwargs = mock_input_stream.call_args
+        assert kwargs["device"] == 1
+

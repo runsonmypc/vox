@@ -21,7 +21,7 @@ class Config:
     hotkey_fallback: str = ""
 
     # Audio
-    audio_device: int | None = None
+    audio_device: int | str | None = None
     sample_rate: int = 48000
     channels: int = 1
     max_recording_seconds: int = 300

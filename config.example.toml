@@ -10,7 +10,8 @@ key = "right_shift"
 fallback = "ctrl+space"
 
 [audio]
-# device = 0              # Audio input device index (use --list-devices)
+# device = 0              # Audio input device index or name substring (use --list-devices)
+# device = "MacBook Pro Microphone"
 sample_rate = 16000
 channels = 1
 max_recording_seconds = 30
