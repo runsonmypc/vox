@@ -8,9 +8,22 @@ import sys
 
 log = logging.getLogger(__name__)
 
+# Some macOS output devices (external DACs, AirPlay, HDMI, aggregate devices)
+# are hardware-controlled and report "missing value" for output volume. That is
+# not an error, it just means software attenuation is unavailable on that device.
+_UNSUPPORTED_SENTINEL = "missing value"
+
+# Whether we have already told the user attenuation is unavailable. Reset on a
+# successful read so switching back to a supported device logs again if needed.
+_unsupported_notified = False
+
 
 def _get_volume_macos() -> float | None:
-    """Get current system volume (0.0-1.0) on macOS via AppleScript."""
+    """Get current system volume (0.0-1.0) on macOS via AppleScript.
+
+    Returns None when the active output device does not support software volume.
+    """
+    global _unsupported_notified
     try:
         result = subprocess.run(
             ["osascript", "-e", "output volume of (get volume settings)"],
@@ -19,7 +32,25 @@ def _get_volume_macos() -> float | None:
         if result.returncode != 0:
             log.warning("AppleScript get volume failed: %s", result.stderr.strip())
             return None
-        vol = float(result.stdout.strip())
+
+        raw = result.stdout.strip()
+        if raw == _UNSUPPORTED_SENTINEL:
+            if not _unsupported_notified:
+                log.info(
+                    "Output device is hardware-controlled; volume attenuation unavailable"
+                )
+                _unsupported_notified = True
+            else:
+                log.debug("Output volume still unavailable on this device")
+            return None
+
+        try:
+            vol = float(raw)
+        except ValueError:
+            log.warning("Unexpected AppleScript volume output: %r", raw)
+            return None
+
+        _unsupported_notified = False
         return max(0.0, min(1.0, vol / 100.0))
     except Exception as e:
         log.warning("Failed to get macOS volume: %s", e)
