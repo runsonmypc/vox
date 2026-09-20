@@ -205,8 +205,8 @@ async def test_daemon_explicit_batch_mode():
 
 @pytest.mark.anyio
 async def test_daemon_silence_aborts_without_pasting():
-    """Verify that silent audio turns cleanly abort without calling paste or transcription."""
-    config = Config(mode="streaming")
+    """Verify that silent audio turns cleanly abort without calling paste or transcription (batch mode only)."""
+    config = Config(mode="batch")
     context = AppContext(
         wm_class="ghostty",
         window_title="Terminal",
@@ -534,3 +534,37 @@ async def test_daemon_cancel_ignored_in_idle():
         except asyncio.CancelledError:
             pass
 
+
+
+@pytest.mark.anyio
+async def test_streaming_bypasses_vad_gate():
+    """Streaming mode must not consult the local VAD; it never drops audio as 'no speech'."""
+    config = Config(mode="streaming")
+    context = AppContext(wm_class="ghostty", window_title="Terminal", app_type=AppType.TERMINAL)
+    queue: asyncio.Queue[str] = asyncio.Queue()
+    wav_data = _make_dummy_wav(0.5)
+
+    mock_batch = MagicMock()
+    mock_batch.transcribe = AsyncMock()
+    mock_streaming = MagicMock()
+    mock_streaming.finish = AsyncMock(return_value="streamed text")
+    mock_streaming.close = AsyncMock()
+
+    with patch("vox.daemon.has_speech", return_value=False) as mock_vad, \
+         patch("vox.daemon.paste") as mock_paste:
+        await _process(
+            wav_data=wav_data,
+            config=config,
+            batch_transcriber=mock_batch,
+            streaming_transcriber=mock_streaming,
+            stream_task=None,
+            sounds=MagicMock(),
+            queue=queue,
+            context=context,
+            screen_capture_future=None,
+        )
+
+        mock_vad.assert_not_called()
+        mock_streaming.finish.assert_awaited_once()
+        mock_batch.transcribe.assert_not_called()
+        mock_paste.assert_called_once_with("streamed text", AppType.TERMINAL)

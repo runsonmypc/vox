@@ -242,8 +242,10 @@ async def _process(
     try:
         t0 = time.monotonic()
 
-        # Check speech FIRST before waiting on background OCR
-        if not has_speech(wav_data):
+        # VAD gate only for batch mode. Streaming has its own silence/hallucination
+        # guard and the local VAD produces false negatives that drop real speech.
+        use_streaming = config.mode == "streaming" and streaming_transcriber is not None
+        if not use_streaming and not has_speech(wav_data):
             log.info("No speech detected, skipping transcription")
             if screen_capture_future is not None and not screen_capture_future.done():
                 screen_capture_future.cancel()
