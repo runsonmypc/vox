@@ -72,7 +72,7 @@ def main() -> None:
         sys.exit(1)
 
     # Check macOS permissions
-    if sys.platform == "darwin" and not check_accessibility_permission():
+    if sys.platform == "darwin" and not check_accessibility_permission(prompt=True):
         log.warning(
             "macOS Accessibility permission is not granted to this process.\n"
             "Global hotkeys and text injection require Accessibility permissions.\n"
