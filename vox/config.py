@@ -28,7 +28,7 @@ class Config:
     max_recording_seconds: int = 300
 
     # Transcription
-    mode: str = "streaming"
+    mode: str = "batch"
     streaming_model: str = "gpt-live-transcribe"
 
     # Whisper
@@ -117,7 +117,7 @@ def load_config(path: Path | None = None) -> Config:
             if "streaming_model" in t:
                 config.streaming_model = t["streaming_model"]
             if "model" in t:
-                if t.get("mode") == "batch":
+                if config.mode == "batch":
                     config.whisper_model = t["model"]
                 else:
                     config.streaming_model = t["model"]

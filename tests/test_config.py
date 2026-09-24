@@ -10,8 +10,8 @@ from vox.errors import ConfigError
 
 def test_config_defaults():
     config = Config()
-    assert config.mode == "streaming"
-    assert config.transcription_mode == "streaming"
+    assert config.mode == "batch"
+    assert config.transcription_mode == "batch"
     assert config.streaming_model == "gpt-live-transcribe"
     assert config.whisper_model == "gpt-4o-mini-transcribe-2025-12-15"
     assert config.double_tap_timeout_ms == 400
@@ -19,9 +19,9 @@ def test_config_defaults():
 
 def test_transcription_mode_setter():
     config = Config()
-    config.transcription_mode = "batch"
-    assert config.mode == "batch"
-    assert config.transcription_mode == "batch"
+    config.transcription_mode = "streaming"
+    assert config.mode == "streaming"
+    assert config.transcription_mode == "streaming"
 
 
 def test_load_config_transcription_section():
