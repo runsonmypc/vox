@@ -335,7 +335,7 @@ async def test_daemon_cancel_during_recording():
         await queue.put("toggle")
         await asyncio.sleep(0.02)
 
-        mock_sounds.play.assert_any_call("start", blocking=True)
+        mock_sounds.play.assert_any_call("start", blocking=False)
         mock_set_volume.assert_called_with(0.4)  # 0.8 * 0.5
 
         # 2. Cancel recording
@@ -357,7 +357,7 @@ async def test_daemon_cancel_during_recording():
         mock_sounds.reset_mock()
         await queue.put("toggle")
         await asyncio.sleep(0.02)
-        mock_sounds.play.assert_any_call("start", blocking=True)
+        mock_sounds.play.assert_any_call("start", blocking=False)
 
         main_task.cancel()
         try:
@@ -432,7 +432,7 @@ async def test_daemon_cancel_during_processing():
         mock_sounds.reset_mock()
         await queue.put("toggle")
         await asyncio.sleep(0.02)
-        mock_sounds.play.assert_any_call("start", blocking=True)
+        mock_sounds.play.assert_any_call("start", blocking=False)
 
         main_task.cancel()
         try:

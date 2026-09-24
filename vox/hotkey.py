@@ -40,7 +40,7 @@ class HotkeyListener:
         self._last_release_time: float = 0.0
         self._last_fallback_time: float = 0.0
         self._debounce_ms = 50
-        self._min_hold_ms = 80  # filter out synthetic/phantom key events
+        self._min_hold_ms = 30  # filter out synthetic/phantom key events (< 30ms) while keeping quick taps responsive
 
         # Resolve key
         self._hotkey_key = self._resolve_key(self._hotkey_name)

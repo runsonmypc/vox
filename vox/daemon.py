@@ -36,6 +36,7 @@ async def _main(config: Config) -> None:
     queue: asyncio.Queue[str] = asyncio.Queue()
 
     recorder = Recorder(config)
+    recorder.warmup()
     batch_transcriber = WhisperTranscriber(config)
     sounds = SoundPlayer(config)
     hotkey = HotkeyListener(config, loop, queue)
@@ -51,7 +52,7 @@ async def _main(config: Config) -> None:
     saved_volume: float | None = None
     log.info("Vox ready (%s mode). Press %s to toggle recording.", config.mode, config.hotkey)
 
-    reload_task = asyncio.create_task(_config_reloader(config, sounds))
+    reload_task = asyncio.create_task(_config_reloader(config, sounds, recorder))
 
     try:
         while True:
@@ -60,29 +61,30 @@ async def _main(config: Config) -> None:
             if event == "toggle":
                 if state == State.IDLE:
                     state = State.RECORDING
-                    sounds.play("start", blocking=True)
 
-                    # Capture window context NOW and start OCR in background
+                    # 1. Start audio recording IMMEDIATELY with zero startup latency
+                    try:
+                        recorder.start(loop=loop)
+                    except Exception as e:
+                        log.error("Failed to start recording: %s", e)
+                        sounds.play("error")
+                        state = State.IDLE
+                        continue
+
+                    # 2. Play start audio feedback non-blocking
+                    sounds.play("start", blocking=False)
+
+                    # 3. Attenuate volume
+                    if config.attenuation_enabled:
+                        saved_volume = get_volume()
+                        if saved_volume is not None:
+                            set_volume(saved_volume * config.attenuation_level)
+
+                    # 4. Capture window context and screen OCR in background
                     recording_context = detect_active_window(config)
                     screen_capture_future = start_screen_capture(recording_context)
 
-                    try:
-                        recorder.start(loop=loop)
-                        if config.attenuation_enabled:
-                            saved_volume = get_volume()
-                            if saved_volume is not None:
-                                set_volume(saved_volume * config.attenuation_level)
-                    except Exception as e:
-                        log.error("Failed to start recording: %s", e)
-                        if saved_volume is not None:
-                            set_volume(saved_volume)
-                            saved_volume = None
-                        sounds.play("error")
-                        state = State.IDLE
-                        screen_capture_future = None
-                        continue
-
-                    # If streaming mode, initiate streaming connection and chunk worker
+                    # 5. If streaming mode, initiate streaming connection and chunk worker
                     if config.mode == "streaming":
                         streaming_transcriber = StreamingTranscriber(config)
                         stream_task = asyncio.create_task(
@@ -98,8 +100,11 @@ async def _main(config: Config) -> None:
                         saved_volume = None
 
                     state = State.PROCESSING
-                    sounds.play("stop")
+                    sounds.play("stop", blocking=False)
                     log.info("Processing...")
+
+                    # Post-roll buffer (120ms) to ensure trailing words/syllables are not cut off
+                    await asyncio.sleep(0.12)
 
                     try:
                         wav_data = recorder.stop()
@@ -206,6 +211,7 @@ async def _main(config: Config) -> None:
     finally:
         reload_task.cancel()
         hotkey.stop()
+        recorder.close()
 
 
 async def _stream_worker(
@@ -337,7 +343,7 @@ async def _process(
         queue.put_nowait("process_done")
 
 
-async def _config_reloader(config: Config, sounds: SoundPlayer) -> None:
+async def _config_reloader(config: Config, sounds: SoundPlayer, recorder: Recorder | None = None) -> None:
     """Poll config file mtime and reload hot-reloadable settings every 2s."""
     if config.config_path is None:
         return
@@ -370,7 +376,12 @@ async def _config_reloader(config: Config, sounds: SoundPlayer) -> None:
             config.attenuation_level = new_config.attenuation_level
             config.mode = new_config.mode
             config.streaming_model = new_config.streaming_model
+
+            if recorder is not None and (new_config.audio_device != config.audio_device or new_config.sample_rate != config.sample_rate):
+                recorder.reconfigure(new_config)
+
             config.audio_device = new_config.audio_device
+            config.sample_rate = new_config.sample_rate
 
             sounds._enabled = new_config.sounds_enabled
 

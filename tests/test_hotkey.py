@@ -222,3 +222,23 @@ async def test_hotkey_fallback_combo_double_tap():
     assert queue.qsize() == 2
     assert await queue.get() == "toggle"
     assert await queue.get() == "cancel"
+
+
+@pytest.mark.anyio
+async def test_hotkey_quick_tap_responsive():
+    """Verify that quick 40ms key tap triggers toggle (no dropped quick taps)."""
+    clock = ControlledClock()
+    queue: asyncio.Queue[str] = asyncio.Queue()
+    config = Config(hotkey="right_shift", double_tap_timeout_ms=400)
+    loop = asyncio.get_running_loop()
+    listener = HotkeyListener(config, loop, queue)
+
+    with patch("time.monotonic", side_effect=clock.time):
+        listener._on_press(keyboard.Key.shift_r)
+        clock.advance(0.04)  # 40ms hold (>= 30ms min_hold_ms)
+        listener._on_release(keyboard.Key.shift_r)
+
+    await asyncio.sleep(0)
+    assert queue.qsize() == 1
+    assert await queue.get() == "toggle"
+

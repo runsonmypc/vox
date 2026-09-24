@@ -206,3 +206,59 @@ def test_recorder_uses_resolved_device():
         _, kwargs = mock_input_stream.call_args
         assert kwargs["device"] == 1
 
+
+def test_recorder_preroll_buffer_prepended_on_start():
+    """Verify that idle pre-roll audio is prepended to the recording buffer upon start()."""
+    config = Config()
+    config.sample_rate = 16000
+    recorder = Recorder(config, preroll_ms=500)
+
+    # Simulate 3 idle chunks arriving before start() (50ms at 16kHz = 800 samples each)
+    preroll_chunk1 = np.ones(800, dtype=np.int16) * 11
+    preroll_chunk2 = np.ones(800, dtype=np.int16) * 22
+    preroll_chunk3 = np.ones(800, dtype=np.int16) * 33
+
+    recorder._callback(preroll_chunk1, 800, None, 0)
+    recorder._callback(preroll_chunk2, 800, None, 0)
+    recorder._callback(preroll_chunk3, 800, None, 0)
+
+    mock_stream = MagicMock()
+    mock_stream.active = True
+
+    with patch("vox.audio.sd.InputStream", return_value=mock_stream):
+        recorder.start()
+
+        # Active chunk during recording
+        active_chunk = np.ones(800, dtype=np.int16) * 99
+        recorder._callback(active_chunk, 800, None, 0)
+
+        wav_bytes = recorder.stop()
+
+    with wave.open(io.BytesIO(wav_bytes), "rb") as wf:
+        assert wf.getnframes() == 3200  # 3 preroll chunks + 1 active chunk = 4 * 800
+        data = np.frombuffer(wf.readframes(3200), dtype=np.int16)
+        # Verify pre-roll chunks come first
+        np.testing.assert_array_equal(data[:800], preroll_chunk1)
+        np.testing.assert_array_equal(data[800:1600], preroll_chunk2)
+        np.testing.assert_array_equal(data[1600:2400], preroll_chunk3)
+        np.testing.assert_array_equal(data[2400:], active_chunk)
+
+
+def test_has_speech_soft_and_short_utterances():
+    """Verify that soft speech and short words (>=80ms) are detected and not falsely dropped."""
+    sr = 16000
+    duration = 0.2  # 200ms short word
+    t = np.linspace(0, duration, int(sr * duration), endpoint=False)
+    # Scaled sine with amplitude 60 (RMS ~42, well above 20 threshold)
+    samples = (np.sin(2 * np.pi * 300 * t) * 60).astype(np.int16)
+
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(sr)
+        wf.writeframes(samples.tobytes())
+
+    assert has_speech(buf.getvalue())
+
+

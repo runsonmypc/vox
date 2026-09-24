@@ -107,8 +107,20 @@ class AppContext:
     pid: str = ""
 
 
-def _get_macos_window_title(app_name: str) -> str:
-    """Retrieve window title via AppleScript with fallback to localized application name."""
+def _get_macos_window_title(app_name: str, pid: int | None = None) -> str:
+    """Retrieve window title via Quartz (fast, ~20ms) with fallback to AppleScript and app name."""
+    if pid is not None:
+        try:
+            from Quartz import CGWindowListCopyWindowInfo, kCGWindowListOptionOnScreenOnly, kCGNullWindowID
+            windows = CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly, kCGNullWindowID)
+            for w in windows:
+                if w.get("kCGWindowOwnerPID") == pid and w.get("kCGWindowName"):
+                    title = str(w.get("kCGWindowName")).strip()
+                    if title:
+                        return title
+        except Exception as e:
+            log.debug("Failed to get window title via Quartz: %s", e)
+
     script = (
         'tell application "System Events"\n'
         '    try\n'
@@ -144,6 +156,7 @@ def _detect_active_window_macos(config: Config) -> AppContext:
     app_name = ""
     bundle_id = ""
     pid = ""
+    pid_int: int | None = None
 
     try:
         from AppKit import NSWorkspace
@@ -151,11 +164,14 @@ def _detect_active_window_macos(config: Config) -> AppContext:
         if app is not None:
             app_name = app.localizedName() or ""
             bundle_id = app.bundleIdentifier() or ""
-            pid = str(app.processIdentifier() or "")
+            raw_pid = app.processIdentifier()
+            if raw_pid:
+                pid = str(raw_pid)
+                pid_int = int(raw_pid)
     except Exception as e:
         log.warning("Failed to detect active window via NSWorkspace: %s", e)
 
-    title = _get_macos_window_title(app_name)
+    title = _get_macos_window_title(app_name, pid=pid_int)
     identifier = f"{bundle_id} {app_name}".strip() if bundle_id else app_name
     app_type = _classify(identifier, title, config)
     log.debug("macOS Window: bundle_id=%r app_name=%r title=%r type=%s", bundle_id, app_name, title, app_type.value)

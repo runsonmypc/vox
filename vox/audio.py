@@ -21,10 +21,10 @@ from .errors import AudioError
 
 log = logging.getLogger(__name__)
 
-# Minimum total speech duration to consider audio as containing speech
-_MIN_SPEECH_MS = 400
-# Minimum RMS energy threshold for 16-bit PCM audio (rejects pure silence/background hiss)
-_MIN_RMS_ENERGY = 120.0
+# Minimum total speech duration to consider audio as containing speech (prevents dropping short words)
+_MIN_SPEECH_MS = 80
+# Minimum RMS energy threshold for 16-bit PCM audio (rejects pure silence/background hiss, preserves soft speech)
+_MIN_RMS_ENERGY = 20.0
 
 
 def to_pcm24k(audio: np.ndarray, orig_rate: int = 48000) -> bytes:
@@ -75,7 +75,7 @@ def has_speech(wav_bytes: bytes) -> bool:
             log.debug("Audio RMS energy %.1f below threshold %.1f, treating as silence", rms, _MIN_RMS_ENERGY)
             return False
 
-        vad = webrtcvad.Vad(2)  # aggressiveness 0-3 (2 = moderate, filters room hiss and breath)
+        vad = webrtcvad.Vad(0)  # aggressiveness 0-3 (0 = least aggressive, prevents false negatives on soft speech/consonants)
 
         # WebRTC VAD needs 10/20/30ms frames at 8/16/32/48kHz
         vad_rate = sample_rate
@@ -172,9 +172,14 @@ def resolve_input_device(device_spec: int | str | None, channels: int = 1) -> in
 
 
 class Recorder:
-    """Records audio from the default input device into WAV bytes and streams 24kHz PCM chunks."""
+    """Records audio from the default input device into WAV bytes and streams 24kHz PCM chunks.
 
-    def __init__(self, config: Config) -> None:
+    Maintains a rolling pre-roll buffer (500ms) to ensure zero startup latency
+    and guarantee that speech starting simultaneously with or prior to hotkey
+    release is never clipped.
+    """
+
+    def __init__(self, config: Config, preroll_ms: int = 500) -> None:
         self._config = config
         self._sample_rate = config.sample_rate
         self._channels = config.channels
@@ -184,6 +189,68 @@ class Recorder:
         self._stream: sd.InputStream | None = None
         self._stream_queue: asyncio.Queue[bytes | None] | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
+        self._is_recording = False
+        self._resolved_device: int | None = None
+        self._last_resolved_spec: int | str | None = None
+
+        # Pre-roll ring buffer (defaults to 500ms: 10 chunks of 50ms)
+        self._blocksize = int(self._sample_rate * 0.05)  # 50ms blocks
+        preroll_chunks_count = max(1, int((preroll_ms / 1000.0) / 0.05))
+        self._preroll_chunks: deque[np.ndarray] = deque(maxlen=preroll_chunks_count)
+
+    def _get_resolved_device(self) -> int | None:
+        target_device = self._config.audio_device if getattr(self, "_config", None) is not None else self._device
+        if target_device != self._last_resolved_spec or self._resolved_device is None:
+            self._resolved_device = resolve_input_device(target_device, channels=self._channels)
+            self._last_resolved_spec = target_device
+        return self._resolved_device
+
+    def _ensure_stream(self) -> None:
+        """Ensure audio input stream is active, creating it if necessary."""
+        resolved_device = self._get_resolved_device()
+        if self._stream is not None and getattr(self._stream, "active", False):
+            return
+
+        if self._stream is not None:
+            try:
+                self._stream.stop()
+                self._stream.close()
+            except Exception:
+                pass
+            self._stream = None
+
+        try:
+            self._stream = sd.InputStream(
+                samplerate=self._sample_rate,
+                channels=self._channels,
+                dtype="int16",
+                device=resolved_device,
+                blocksize=self._blocksize,
+                callback=self._callback,
+            )
+            self._stream.start()
+            log.info("Audio stream started (device=%s, rate=%d)", resolved_device, self._sample_rate)
+        except Exception as e:
+            raise AudioError(f"Failed to start audio stream: {e}") from e
+
+    def warmup(self) -> None:
+        """Pre-warm audio stream to eliminate start latency and accumulate pre-roll."""
+        try:
+            self._ensure_stream()
+        except Exception as e:
+            log.debug("Warmup stream could not be started: %s (will open on demand)", e)
+
+    def reconfigure(self, config: Config) -> None:
+        """Reconfigure audio parameters and refresh the stream."""
+        self._config = config
+        self._sample_rate = config.sample_rate
+        self._channels = config.channels
+        self._device = config.audio_device
+        self._resolved_device = None
+        self._last_resolved_spec = None
+        self._blocksize = int(self._sample_rate * 0.05)
+        self.close()
+        self.warmup()
 
     def get_chunk_queue(self, loop: asyncio.AbstractEventLoop | None = None) -> asyncio.Queue[bytes | None]:
         """Get or initialize the asyncio Queue that receives 24kHz PCM16 chunks."""
@@ -208,8 +275,7 @@ class Recorder:
             yield chunk
 
     def start(self, loop: asyncio.AbstractEventLoop | None = None) -> None:
-        """Start recording audio."""
-        self._chunks.clear()
+        """Start recording audio with zero latency, prepending pre-roll buffer."""
         if loop is not None:
             self._loop = loop
         elif self._loop is None:
@@ -227,29 +293,28 @@ class Recorder:
                 except asyncio.QueueEmpty:
                     break
 
-        target_device = self._config.audio_device if getattr(self, "_config", None) is not None else self._device
-        resolved_device = resolve_input_device(target_device, channels=self._channels)
-        blocksize = int(self._sample_rate * 0.1)
-        try:
-            self._stream = sd.InputStream(
-                samplerate=self._sample_rate,
-                channels=self._channels,
-                dtype="int16",
-                device=resolved_device,
-                blocksize=blocksize,
-                callback=self._callback,
-            )
-            self._stream.start()
-            log.info("Recording started (device=%s, rate=%d)", resolved_device, self._sample_rate)
-        except Exception as e:
-            raise AudioError(f"Failed to start recording: {e}") from e
+        self._ensure_stream()
+
+        self._chunks.clear()
+        if self._preroll_chunks:
+            # Prepend pre-roll buffer so words spoken during keypress are never lost
+            preroll_list = list(self._preroll_chunks)
+            self._chunks.extend(preroll_list)
+            if self._stream_queue is not None and self._loop is not None and not self._loop.is_closed():
+                for pr_chunk in preroll_list:
+                    pcm24k = to_pcm24k(pr_chunk, self._sample_rate)
+                    try:
+                        self._loop.call_soon_threadsafe(self._stream_queue.put_nowait, pcm24k)
+                    except RuntimeError:
+                        pass
+            self._preroll_chunks.clear()
+
+        self._is_recording = True
+        log.info("Recording started (pre-roll chunks: %d)", len(self._chunks))
 
     def stop(self) -> bytes:
-        """Stop recording, finalize streaming queue, and return complete turn WAV bytes."""
-        if self._stream is not None:
-            self._stream.stop()
-            self._stream.close()
-            self._stream = None
+        """Stop active recording turn, finalize streaming queue, and return WAV bytes."""
+        self._is_recording = False
 
         if self._stream_queue is not None and self._loop is not None and not self._loop.is_closed():
             try:
@@ -274,14 +339,8 @@ class Recorder:
         return self._to_wav(audio)
 
     def discard(self) -> None:
-        """Stop recording, finalize streaming queue, and discard buffered frames."""
-        if self._stream is not None:
-            try:
-                self._stream.stop()
-                self._stream.close()
-            except Exception:
-                pass
-            self._stream = None
+        """Stop recording turn and discard buffered frames without closing stream."""
+        self._is_recording = False
 
         if self._stream_queue is not None and self._loop is not None and not self._loop.is_closed():
             try:
@@ -290,11 +349,24 @@ class Recorder:
                 pass
 
         self._chunks.clear()
+        self._preroll_chunks.clear()
 
+    def close(self) -> None:
+        """Stop and close the underlying audio stream."""
+        self._is_recording = False
+        if self._stream is not None:
+            try:
+                self._stream.stop()
+                self._stream.close()
+            except Exception:
+                pass
+            self._stream = None
+        self._chunks.clear()
+        self._preroll_chunks.clear()
 
     @property
     def is_recording(self) -> bool:
-        return self._stream is not None and self._stream.active
+        return self._is_recording
 
     def _callback(
         self, indata: np.ndarray, frames: int, time_info: object, status: sd.CallbackFlags
@@ -302,14 +374,17 @@ class Recorder:
         if status:
             log.warning("Audio callback status: %s", status)
         chunk = indata.copy()
-        self._chunks.append(chunk)
+        if self._is_recording:
+            self._chunks.append(chunk)
 
-        if self._stream_queue is not None and self._loop is not None and not self._loop.is_closed():
-            pcm24k = to_pcm24k(chunk, self._sample_rate)
-            try:
-                self._loop.call_soon_threadsafe(self._stream_queue.put_nowait, pcm24k)
-            except RuntimeError:
-                pass
+            if self._stream_queue is not None and self._loop is not None and not self._loop.is_closed():
+                pcm24k = to_pcm24k(chunk, self._sample_rate)
+                try:
+                    self._loop.call_soon_threadsafe(self._stream_queue.put_nowait, pcm24k)
+                except RuntimeError:
+                    pass
+        else:
+            self._preroll_chunks.append(chunk)
 
     def _to_wav(self, audio: np.ndarray) -> bytes:
         """Convert int16 numpy array to WAV bytes."""
