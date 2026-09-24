@@ -234,11 +234,20 @@ class Recorder:
             raise AudioError(f"Failed to start audio stream: {e}") from e
 
     def warmup(self) -> None:
-        """Pre-warm audio stream to eliminate start latency and accumulate pre-roll."""
+        """Pre-warm device resolution and PortAudio bindings without keeping microphone open."""
         try:
-            self._ensure_stream()
+            dev = self._get_resolved_device()
+            dummy = sd.InputStream(
+                samplerate=self._sample_rate,
+                channels=self._channels,
+                dtype="int16",
+                device=dev,
+                blocksize=self._blocksize,
+            )
+            dummy.close()
+            log.debug("Audio system pre-warmed (microphone closed)")
         except Exception as e:
-            log.debug("Warmup stream could not be started: %s (will open on demand)", e)
+            log.debug("Warmup stream could not be initialized: %s (will open on demand)", e)
 
     def reconfigure(self, config: Config) -> None:
         """Reconfigure audio parameters and refresh the stream."""
@@ -313,8 +322,16 @@ class Recorder:
         log.info("Recording started (pre-roll chunks: %d)", len(self._chunks))
 
     def stop(self) -> bytes:
-        """Stop active recording turn, finalize streaming queue, and return WAV bytes."""
+        """Stop active recording turn, close microphone stream, and return WAV bytes."""
         self._is_recording = False
+
+        if self._stream is not None:
+            try:
+                self._stream.stop()
+                self._stream.close()
+            except Exception:
+                pass
+            self._stream = None
 
         if self._stream_queue is not None and self._loop is not None and not self._loop.is_closed():
             try:
@@ -339,8 +356,16 @@ class Recorder:
         return self._to_wav(audio)
 
     def discard(self) -> None:
-        """Stop recording turn and discard buffered frames without closing stream."""
+        """Stop recording turn, close microphone stream, and discard buffered frames."""
         self._is_recording = False
+
+        if self._stream is not None:
+            try:
+                self._stream.stop()
+                self._stream.close()
+            except Exception:
+                pass
+            self._stream = None
 
         if self._stream_queue is not None and self._loop is not None and not self._loop.is_closed():
             try:
@@ -353,20 +378,11 @@ class Recorder:
 
     def close(self) -> None:
         """Stop and close the underlying audio stream."""
-        self._is_recording = False
-        if self._stream is not None:
-            try:
-                self._stream.stop()
-                self._stream.close()
-            except Exception:
-                pass
-            self._stream = None
-        self._chunks.clear()
-        self._preroll_chunks.clear()
+        self.discard()
 
     @property
     def is_recording(self) -> bool:
-        return self._is_recording
+        return self._stream is not None and getattr(self._stream, "active", False) and self._is_recording
 
     def _callback(
         self, indata: np.ndarray, frames: int, time_info: object, status: sd.CallbackFlags
