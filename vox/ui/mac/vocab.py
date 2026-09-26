@@ -271,6 +271,8 @@ class VocabController(NSObject):
     @objc.python_method
     def remove_words(self, words: list[str]) -> None:
         if self.change(lambda: self.model.remove_words(words)):
+            # The table keeps the selected row numbers, which now point at the words that moved up
+            self.words_table.deselectAll_(None)
             self.note(f"Removed {_quoted(words)}.")
 
     @objc.python_method
@@ -377,15 +379,19 @@ class VocabController(NSObject):
             return event
         if event.window() != self.window:
             return event
-        plain = not flags & ~(AppKit.NSEventModifierFlagFunction | AppKit.NSEventModifierFlagNumericPad)
         responder = self.window.firstResponder()
+        if isinstance(responder, AppKit.NSTextView) and responder.hasMarkedText():
+            return event  # an input method is composing text
+        plain = not flags & ~(AppKit.NSEventModifierFlagFunction | AppKit.NSEventModifierFlagNumericPad)
         if code == kit.KEY_ESCAPE and plain:
             self.window.performClose_(None)
             return None
-        if flags == AppKit.NSEventModifierFlagCommand and (event.charactersIgnoringModifiers() or "").lower() == "n":
+        if flags == AppKit.NSEventModifierFlagCommand and kit.shortcut_key(event) == "n":
             self.open_editor(None)
             return None
         if code in (kit.KEY_DELETE, kit.KEY_FORWARD_DELETE) and plain:
+            if event.isARepeat() and responder in (self.words_table, self.snippets_table):
+                return None  # a held key removes what was selected, not the rows that move up after it
             if responder == self.words_table:
                 rows = self.words_table.selectedRowIndexes()
                 words = [w for i, w in enumerate(self.model.words) if rows.containsIndex_(i)]
