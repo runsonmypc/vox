@@ -450,6 +450,7 @@ class TrayManager:
             if spec is not None:
                 yield Item(_device_label(spec), self._device_setter(spec), checked=lambda _: True, radio=True)
             return
+        # Only a name is stored, so of two devices with the same name the first is checked: it's the one that records
         selected = _selected_device(spec, self._devices)
         yield Item("System Default", self._device_setter(None), checked=_is(selected, None), radio=True)
         for index, name in self._devices:
@@ -615,7 +616,11 @@ def _device_label(spec: int | str) -> str:
 
 
 def _selected_device(spec: int | str | None, devices: list[tuple[int, str]]) -> int | None:
-    """Index of the configured input device among ``devices``, or None for the system default."""
+    """Index of the configured input device among ``devices``, or None for the system default.
+
+    A name matches exactly (ignoring case) before it matches part of a longer name, the rule
+    audio.resolve_input_device must share so the checked device is the one that records.
+    """
     if isinstance(spec, int):
         return spec if any(i == spec for i, _ in devices) else None
     if isinstance(spec, str):

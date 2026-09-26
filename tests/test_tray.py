@@ -360,6 +360,22 @@ def test_selected_device_resolution():
     assert _selected_device("missing", devices) is None
     # A stored name picks its own device, not an earlier one whose name contains it
     assert _selected_device("USB Audio", [(1, "USB Audio 2"), (4, "USB Audio")]) == 4
+    linux = [(0, "HDA Intel PCH: ALC257 Analog (hw:0,0)"), (1, "sysdefault"), (2, "pulse"), (3, "default")]
+    assert _selected_device("default", linux) == 3
+    assert _selected_device("Default ", linux) == 3
+
+
+@pytest.mark.anyio
+async def test_devices_with_the_same_name_check_the_first():
+    # Only the name is stored, so either pick checks the first: the device the recorder opens
+    config = Config(audio_device=None)
+    tray, icon = make_tray(config)
+    tray.attach(asyncio.get_running_loop(), asyncio.Queue(), None, MagicMock())
+    tray.devices_changed([(1, "USB Microphone"), (3, "USB Microphone")])
+    items(find(icon.menu, "Input Device").submenu)[2](icon)
+    await settle()
+    assert config.audio_device == "USB Microphone"
+    assert device_items(icon) == [("System Default", False), ("USB Microphone", True), ("USB Microphone", False)]
 
 
 @pytest.mark.anyio
