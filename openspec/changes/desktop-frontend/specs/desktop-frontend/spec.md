@@ -53,6 +53,21 @@ The system SHALL list available audio input devices in the tray context menu and
 - **WHEN** the user selects an audio device from the tray menu
 - **THEN** the system updates the active audio input device and applies it to subsequent recording sessions without requiring a daemon restart
 
+### Requirement: Transcription Selection from Tray
+The system SHALL let the user choose OpenAI batch, OpenAI streaming, or local whisper.cpp transcription from the tray menu while idle and persist the selection.
+
+#### Scenario: Switching providers
+- **WHEN** the user selects an available transcription mode while idle
+- **THEN** the next recording uses that mode, the menu marks it selected, and the selection is saved for the next launch
+
+#### Scenario: Unavailable mode
+- **WHEN** the OpenAI API key or local whisper.cpp setup required by a mode is missing
+- **THEN** that mode is disabled in the menu and the active mode remains selected
+
+#### Scenario: Active recording
+- **WHEN** the daemon is recording or processing a dictation
+- **THEN** transcription mode choices are disabled until it returns to idle
+
 ### Requirement: Pause and Resume Dictation from Tray
 The system SHALL allow the user to temporarily pause or resume global hotkey listening from the tray menu.
 

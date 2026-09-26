@@ -68,6 +68,20 @@ model = "whisper-1"
         temp_path.unlink(missing_ok=True)
 
 
+def test_load_config_whisper_cpp_mode(tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_text('''[transcription]
+mode = "whisper_cpp"
+[whisper_cpp]
+binary = "bin/whisper-cli"
+model = "models/ggml-base.en.bin"
+''')
+    config = load_config(path)
+    assert config.mode == "whisper_cpp"
+    assert config.whisper_cpp_binary == "bin/whisper-cli"
+    assert config.whisper_cpp_model == "models/ggml-base.en.bin"
+
+
 def test_load_config_whisper_section_override():
     toml_content = """
 [whisper]
@@ -125,4 +139,3 @@ double_tap_timeout_ms = 250
         assert config.double_tap_timeout_ms == 250
     finally:
         temp_path.unlink(missing_ok=True)
-

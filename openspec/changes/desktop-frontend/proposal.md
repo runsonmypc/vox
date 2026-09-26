@@ -6,6 +6,7 @@ Currently, `vox` runs as an invisible command-line daemon with no visual feedbac
 
 - Add a cross-platform system tray via `pystray` with dynamic icon states (Idle vs. Recording): the macOS menu bar, and the Linux AppIndicator / StatusNotifierItem tray.
 - Add tray dropdown controls to switch audio input devices on the fly, toggle Vox pause/mute, and quick-copy the last 3 dictations.
+- Add a transcription submenu for OpenAI batch, OpenAI streaming, and local whisper.cpp, with persistent selection while idle.
 - Implement an automatic local SQLite history logger (`~/.local/share/vox/history.db`) that records past dictations with timestamps, app context, and durations.
 - Add a lightweight popover/drawer window for searching past dictation history with 1-click clipboard copy and re-paste.
 - Add a visual manager for custom vocabulary (`config.dictionary`) and text expansion snippets (`config.snippets`) that updates and hot-reloads `config.toml`.
@@ -14,7 +15,7 @@ Currently, `vox` runs as an invisible command-line daemon with no visual feedbac
 ## Capabilities
 
 ### New Capabilities
-- `desktop-frontend`: System tray status integration, microphone device selector, local SQLite dictation history recovery drawer, and visual dictionary/snippet manager.
+- `desktop-frontend`: System tray status integration, microphone and transcription selectors, local SQLite dictation history recovery drawer, and visual dictionary/snippet manager.
 
 ### Modified Capabilities
 <!-- None: existing streaming and platform capabilities remain unchanged. -->

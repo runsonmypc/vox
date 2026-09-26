@@ -20,7 +20,9 @@ from typing import Any, Callable
 import sounddevice as sd
 
 from ..config import DEFAULT_CONFIG_PATH, Config
+from ..errors import ConfigError
 from ..history import HistoryDB, HistoryRecord
+from ..whisper_cpp import WhisperCppTranscriber
 from .icons import IconState, is_template, make_icon
 
 log = logging.getLogger(__name__)
@@ -247,6 +249,9 @@ class TrayManager:
     def history_changed(self) -> None:
         self._dispatch(self._refresh_recent)
 
+    def mode_changed(self) -> None:
+        self._dispatch(self._icon.update_menu)
+
     def stop(self) -> None:
         self._dispatch(self._icon.stop)
 
@@ -301,6 +306,7 @@ class TrayManager:
         yield Menu.SEPARATOR
         yield Item("Pause Dictation", self._toggle_pause, checked=lambda _: self._paused)
         yield Item("Input Device", Menu(self._device_items))
+        yield Item("Transcription", Menu(self._transcription_items))
         yield Menu.SEPARATOR
         yield Item(RECENT_HEADER if self._recent else "No dictations yet", None, enabled=False)
         for rec in self._recent:
@@ -318,6 +324,39 @@ class TrayManager:
         yield Item("System Default", self._device_setter(None), checked=_is(selected, None), radio=True)
         for index, name in devices:
             yield Item(name, self._device_setter(index), checked=_is(selected, index), radio=True)
+
+    def _transcription_items(self):
+        Item = self._pystray.MenuItem
+        for label, mode in (
+            ("OpenAI (batch)", "batch"),
+            ("OpenAI (streaming)", "streaming"),
+            ("Local (whisper.cpp)", "whisper_cpp"),
+        ):
+            yield Item(
+                label, self._mode_setter(mode),
+                checked=lambda _, mode=mode: self._config.mode == mode,
+                enabled=lambda _, mode=mode: self._can_select_mode(mode),
+                radio=True,
+            )
+
+    def _can_select_mode(self, mode: str) -> bool:
+        if self._state is not IconState.IDLE:
+            return False
+        if mode == self._config.mode:
+            return True
+        if mode != "whisper_cpp":
+            return bool(self._config.openai_api_key)
+        try:
+            WhisperCppTranscriber(self._config)
+        except ConfigError:
+            return False
+        return True
+
+    def _mode_setter(self, mode: str):
+        def action(icon, item):
+            self._send(f"mode:{mode}")
+
+        return action
 
     def _input_devices(self) -> list[tuple[int, str]]:
         try:

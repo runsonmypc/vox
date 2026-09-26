@@ -13,13 +13,15 @@ from typing import TYPE_CHECKING
 
 from .attenuation import get_volume, set_volume
 from .audio import Recorder, has_speech
-from .config import Config, load_config
+from .config import DEFAULT_CONFIG_PATH, Config, load_config, update_transcription_mode
+from .errors import ConfigError
 from .history import HistoryDB
 from .hotkey import HotkeyListener
 from .injector import inject_text, paste
 from .sounds import SoundPlayer
 from .streaming import StreamingTranscriber
 from .transcribe import WhisperTranscriber
+from .whisper_cpp import WhisperCppTranscriber
 from .window import AppContext, detect_active_window, start_screen_capture
 
 if TYPE_CHECKING:
@@ -73,7 +75,9 @@ async def _main(config: Config, tray: TrayManager | None = None) -> None:
 
     recorder = Recorder(config)
     recorder.warmup()
-    batch_transcriber = WhisperTranscriber(config)
+    batch_transcriber = (
+        WhisperCppTranscriber(config) if config.mode == "whisper_cpp" else WhisperTranscriber(config)
+    )
     sounds = SoundPlayer(config)
     hotkey = HotkeyListener(config, loop, queue)
     history = _open_history()
@@ -104,6 +108,30 @@ async def _main(config: Config, tray: TrayManager | None = None) -> None:
     try:
         while True:
             event = await queue.get()
+
+            if event.startswith("mode:"):
+                mode = event.partition(":")[2]
+                if state is not State.IDLE or mode == config.mode:
+                    continue
+                try:
+                    if mode not in ("batch", "streaming", "whisper_cpp"):
+                        raise ConfigError(f"Invalid transcription mode: {mode}")
+                    if mode != "whisper_cpp" and not config.openai_api_key:
+                        raise ConfigError("Set an OpenAI API key before selecting OpenAI transcription")
+                    candidate = (
+                        WhisperCppTranscriber(config) if mode == "whisper_cpp" else WhisperTranscriber(config)
+                    )
+                    update_transcription_mode(config.config_path or DEFAULT_CONFIG_PATH, mode)
+                except (ConfigError, OSError, ValueError) as e:
+                    log.warning("Could not switch transcription mode: %s", e)
+                    sounds.play("error")
+                    continue
+                config.mode = mode
+                batch_transcriber = candidate
+                log.info("Transcription mode set to %s", mode)
+                if tray is not None:
+                    tray.mode_changed()
+                continue
 
             if event in ("pause", "resume"):
                 paused = event == "pause"
@@ -186,6 +214,20 @@ async def _main(config: Config, tray: TrayManager | None = None) -> None:
 
                     # Re-detect window at stop time (user may have switched focus)
                     stop_context = detect_active_window(config)
+
+                    try:
+                        if config.mode == "whisper_cpp" and not isinstance(batch_transcriber, WhisperCppTranscriber):
+                            batch_transcriber = WhisperCppTranscriber(config)
+                        elif config.mode != "whisper_cpp" and isinstance(batch_transcriber, WhisperCppTranscriber):
+                            batch_transcriber = WhisperTranscriber(config)
+                    except Exception as e:
+                        log.error("Transcriber configuration error: %s", e)
+                        sounds.play("error")
+                        set_state(State.IDLE)
+                        if screen_capture_future is not None and not screen_capture_future.done():
+                            screen_capture_future.cancel()
+                        screen_capture_future = None
+                        continue
 
                     process_task = asyncio.create_task(_process(
                         wav_data=wav_data,
@@ -313,7 +355,7 @@ async def _stream_worker(
 async def _process(
     wav_data: bytes,
     config: Config,
-    batch_transcriber: WhisperTranscriber,
+    batch_transcriber: WhisperTranscriber | WhisperCppTranscriber,
     streaming_transcriber: StreamingTranscriber | None,
     stream_task: asyncio.Task | None,
     sounds: SoundPlayer,
@@ -330,6 +372,16 @@ async def _process(
         # VAD gate only for batch mode. Streaming has its own silence/hallucination
         # guard and the local VAD produces false negatives that drop real speech.
         use_streaming = config.mode == "streaming" and streaming_transcriber is not None
+        if not use_streaming and streaming_transcriber is not None:
+            if stream_task is not None:
+                stream_task.cancel()
+                try:
+                    await stream_task
+                except asyncio.CancelledError:
+                    pass
+            await streaming_transcriber.close()
+            streaming_transcriber = None
+            stream_task = None
         if not use_streaming and not has_speech(wav_data):
             log.info("No speech detected, skipping transcription")
             if screen_capture_future is not None and not screen_capture_future.done():
@@ -382,7 +434,7 @@ async def _process(
 
         # Fallback to batch Whisper if streaming was not used or failed
         if not used_streaming:
-            log.info("Using batch Whisper transcription")
+            log.info("Using %s transcription", "whisper.cpp" if config.mode == "whisper_cpp" else "batch Whisper")
             text = await batch_transcriber.transcribe(wav_data, context)
 
         if not text or not text.strip():
@@ -401,12 +453,13 @@ async def _process(
         paste(text, context.app_type)
 
         if history is not None:
-            saved = await _record_history(history, text, context, wav_data, "streaming" if used_streaming else "batch")
+            saved = await _record_history(history, text, context, wav_data,
+                                          "streaming" if used_streaming else config.mode)
             if saved and tray is not None:
                 tray.history_changed()
 
         elapsed = time.monotonic() - t0
-        log.info("Done in %.3fs (%s)", elapsed, "streaming" if used_streaming else "batch")
+        log.info("Done in %.3fs (%s)", elapsed, "streaming" if used_streaming else config.mode)
 
     except asyncio.CancelledError:
         log.info("Processing task cancelled")
@@ -490,6 +543,12 @@ async def _config_reloader(config: Config, sounds: SoundPlayer, recorder: Record
             config.attenuation_level = new_config.attenuation_level
             config.mode = new_config.mode
             config.streaming_model = new_config.streaming_model
+            config.openai_api_key = new_config.openai_api_key
+            config.whisper_model = new_config.whisper_model
+            config.whisper_cpp_binary = new_config.whisper_cpp_binary
+            config.whisper_cpp_model = new_config.whisper_cpp_model
+            config.whisper_language = new_config.whisper_language
+            config.whisper_prompt = new_config.whisper_prompt
 
             # Apply audio settings only when the file changed them, so a device picked
             # from the menu bar survives unrelated edits such as vocabulary changes.

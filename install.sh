@@ -158,11 +158,16 @@ start_service() {
         say "After Quit, start it again from Vox in your applications"
         ;;
     Darwin)
-        local plist="$HOME/Library/LaunchAgents/com.runsonmypc.vox.plist"
+        local plist="$HOME/Library/LaunchAgents/com.runsonmypc.vox.plist" started=0
         mkdir -p "$(dirname "$plist")"
         cp "$REPO/com.runsonmypc.vox.plist" "$plist"
         launchctl bootout "gui/$(id -u)/com.runsonmypc.vox" 2>/dev/null || true
-        launchctl bootstrap "gui/$(id -u)" "$plist"
+        # launchd may still be retiring the old job immediately after bootout.
+        for _ in 1 2 3 4 5; do
+            if launchctl bootstrap "gui/$(id -u)" "$plist"; then started=1; break; fi
+            sleep 1
+        done
+        [ "$started" -eq 1 ] || die "could not start the Vox LaunchAgent"
         mac_launcher
         say "Vox is running (logs: /tmp/vox.stderr.log)"
         say "After Quit, start it again from Vox in Applications or Spotlight"
@@ -201,7 +206,7 @@ esac
 mkdir -p "$(dirname "$BIN")"
 ln -sfn "$VENV/bin/vox" "$BIN"
 
-if ! setup_key; then
+if ! "$VENV/bin/python" -c 'from vox.config import load_config; import sys; sys.exit(load_config().mode != "whisper_cpp")' && ! setup_key; then
     say "Add your key to $CONFIG_DIR/.env as OPENAI_API_KEY=sk-..., then run ./install.sh again"
     exit 0
 fi

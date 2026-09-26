@@ -10,6 +10,7 @@
 - [x] 2.2 Implement `TrayManager` in `vox/ui/tray.py` owning the main thread (Cocoa / GTK) while the asyncio daemon runs in a dedicated thread, with thread-safe dispatch via `loop.call_soon_threadsafe` (tray → daemon) and `AppHelper.callAfter` / `GLib.idle_add` (daemon → tray), and verify state changes update the icon
 - [x] 2.3 Add tray context menu items for current state, audio input device selector (`sounddevice.query_devices`), pause/resume toggle, and quick copy of the 3 most recent dictations
 - [x] 2.4 Integrate `TrayManager` into `vox/daemon.py` lifecycle and verify tray reflects `IDLE`, `RECORDING`, and `PROCESSING` transitions
+- [x] 2.5 Add a transcription submenu that switches between OpenAI batch, OpenAI streaming, and local whisper.cpp while idle, persists the choice, and disables unavailable modes
 
 ## 3. History Search & Clipboard Recovery UI
 

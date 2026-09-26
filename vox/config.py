@@ -36,6 +36,8 @@ class Config:
     # Transcription
     mode: str = "batch"
     streaming_model: str = "gpt-live-transcribe"
+    whisper_cpp_binary: str = "whisper-cli"
+    whisper_cpp_model: str = ""
 
     # Whisper
     whisper_model: str = "gpt-4o-mini-transcribe-2025-12-15"
@@ -116,6 +118,10 @@ def load_config(path: Path | None = None) -> Config:
             "language": "whisper_language",
             "prompt": "whisper_prompt",
         })
+        _apply_section(config, data, "whisper_cpp", {
+            "binary": "whisper_cpp_binary",
+            "model": "whisper_cpp_model",
+        })
         if "transcription" in data:
             t = data["transcription"]
             if "mode" in t:
@@ -125,15 +131,17 @@ def load_config(path: Path | None = None) -> Config:
             if "model" in t:
                 if config.mode == "batch":
                     config.whisper_model = t["model"]
-                else:
+                elif config.mode == "streaming":
                     config.streaming_model = t["model"]
+                else:
+                    config.whisper_cpp_model = t["model"]
             if "language" in t:
                 config.whisper_language = t["language"]
             if "prompt" in t:
                 config.whisper_prompt = t["prompt"]
 
-        if config.mode not in ("streaming", "batch"):
-            raise ConfigError(f"Invalid transcription mode '{config.mode}': must be 'streaming' or 'batch'")
+        if config.mode not in ("streaming", "batch", "whisper_cpp"):
+            raise ConfigError(f"Invalid transcription mode '{config.mode}': must be 'streaming', 'batch', or 'whisper_cpp'")
 
         if "snippets" in data:
             config.snippets = dict(data["snippets"])
@@ -261,6 +269,30 @@ def update_snippet(path: Path, trigger: str, expansion: str | None) -> dict[str,
     result = {str(k): str(v) for k, v in snippets.items()}
     _write_document(path, doc)
     return result
+
+
+def update_transcription_mode(path: Path, mode: str) -> None:
+    """Persist the selected mode, keeping a legacy generic model with its provider."""
+    if mode not in ("batch", "streaming", "whisper_cpp"):
+        raise ValueError(f"Invalid transcription mode: {mode}")
+    doc = _read_document(path)
+    if "transcription" not in doc:
+        doc["transcription"] = tomlkit.table()
+    transcription = doc["transcription"]
+    old_mode = transcription.get("mode", doc.get("whisper", {}).get("mode", "batch"))
+    if old_mode != mode and "model" in transcription:
+        old_model = transcription.pop("model")
+        if old_mode == "streaming":
+            if "streaming_model" not in transcription:
+                transcription["streaming_model"] = old_model
+        elif old_mode in ("batch", "whisper_cpp"):
+            section = "whisper" if old_mode == "batch" else "whisper_cpp"
+            if section not in doc:
+                doc[section] = tomlkit.table()
+            if "model" not in doc[section]:
+                doc[section]["model"] = old_model
+    transcription["mode"] = mode
+    _write_document(path, doc)
 
 
 def _snippet_key(trigger: str) -> str:

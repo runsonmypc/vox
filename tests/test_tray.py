@@ -168,6 +168,37 @@ def test_device_submenu_survives_query_failure():
         assert [i.text for i in items(find(icon.menu, "Input Device").submenu)] == ["System Default"]
 
 
+def test_transcription_submenu_shows_modes_and_availability():
+    config = Config(openai_api_key="test")
+    tray, icon = make_tray(config)
+    modes = items(find(icon.menu, "Transcription").submenu)
+    assert [(item.text, item.checked, item.enabled) for item in modes] == [
+        ("OpenAI (batch)", True, True),
+        ("OpenAI (streaming)", False, True),
+        ("Local (whisper.cpp)", False, False),
+    ]
+    tray.set_state("RECORDING")
+    assert all(not item.enabled for item in items(find(icon.menu, "Transcription").submenu))
+
+    config.mode = "whisper_cpp"
+    config.openai_api_key = ""
+    tray.set_state("IDLE")
+    modes = items(find(icon.menu, "Transcription").submenu)
+    assert [(item.checked, item.enabled) for item in modes] == [
+        (False, False), (False, False), (True, True),
+    ]
+
+
+@pytest.mark.anyio
+async def test_transcription_menu_sends_mode_to_daemon():
+    tray, icon = make_tray(Config(openai_api_key="test"))
+    queue: asyncio.Queue[str] = asyncio.Queue()
+    tray.attach(asyncio.get_running_loop(), queue, None, MagicMock())
+    find(find(icon.menu, "Transcription").submenu, "OpenAI (streaming)")(icon)
+    await settle()
+    assert queue.get_nowait() == "mode:streaming"
+
+
 @pytest.mark.anyio
 async def test_selecting_device_updates_config_on_daemon_loop():
     config = Config(audio_device=None)
@@ -249,7 +280,7 @@ async def test_recent_dictations_are_their_own_menu_section(tmp_path):
     tray.attach(asyncio.get_running_loop(), asyncio.Queue(), history, MagicMock())
     assert _sections(icon.menu) == [
         ["Vox — Idle"],
-        ["Pause Dictation", "Input Device"],
+        ["Pause Dictation", "Input Device", "Transcription"],
         [RECENT_HEADER, "“three”", "“two”", "“one”"],
         ["Search History…", "Vocabulary & Snippets…"],
         ["Quit Vox"],

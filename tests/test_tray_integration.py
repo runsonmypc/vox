@@ -12,7 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import numpy as np
 import pytest
 
-from vox.config import Config
+from vox.config import Config, load_config
 from vox.history import HistoryDB
 from vox.window import AppContext, AppType
 
@@ -90,10 +90,10 @@ async def wait_for(predicate, timeout=2.0):
         await asyncio.sleep(0.01)
 
 
-async def start_daemon(tray):
+async def start_daemon(tray, config=None):
     from vox.daemon import _main
 
-    config = Config(mode="batch", attenuation_enabled=False)
+    config = config or Config(mode="batch", attenuation_enabled=False)
     task = asyncio.create_task(_main(config, tray))
     await wait_for(lambda: tray.attached is not None if isinstance(tray, RecordingTray) else tray._queue is not None)
     return task
@@ -239,6 +239,73 @@ async def test_menu_to_daemon_to_icon_round_trip():
         find(icon.menu, "Quit Vox")(icon)
         await wait_for(task.done)
     assert icon.stopped is True
+
+
+@pytest.mark.anyio
+async def test_transcription_menu_switches_provider_and_persists_choice(tmp_path):
+    pytest.importorskip("pystray")
+    from tests.test_tray import FakeIcon, find, immediate
+    from vox.ui.tray import TrayManager
+
+    binary = tmp_path / "whisper-cli"
+    binary.write_text("#!/bin/sh\n")
+    binary.chmod(0o755)
+    model = tmp_path / "model.bin"
+    model.write_bytes(b"model")
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(
+        f'[transcription]\nmode = "batch"\n'
+        f'[whisper_cpp]\nbinary = "{binary}"\nmodel = "{model}"\n'
+    )
+    config = Config(
+        mode="batch", openai_api_key="test", attenuation_enabled=False,
+        whisper_cpp_binary=str(binary), whisper_cpp_model=str(model),
+    )
+    config._config_path = config_path
+    tray = TrayManager(config, icon_factory=FakeIcon, dispatch=immediate)
+    icon = tray._icon
+
+    class FakeLocal:
+        def __init__(self, config):
+            pass
+
+        async def transcribe(self, wav_data, context):
+            return "local text"
+
+    with daemon_env("API text") as env, patch("vox.daemon.WhisperCppTranscriber", FakeLocal):
+        task = await start_daemon(tray, config)
+        menu = find(icon.menu, "Transcription").submenu
+        assert find(menu, "Local (whisper.cpp)").enabled is True
+        find(menu, "Local (whisper.cpp)")(icon)
+        await wait_for(lambda: config.mode == "whisper_cpp")
+        assert find(menu, "Local (whisper.cpp)").checked is True
+        assert '[transcription]\nmode = "whisper_cpp"' in config_path.read_text()
+        assert load_config(config_path).whisper_cpp_model == str(model)
+
+        await tray._queue.put("toggle")
+        await wait_for(lambda: icon.title == "Vox — Recording…")
+        await tray._queue.put("mode:batch")  # a queued switch cannot interrupt a recording
+        await asyncio.sleep(0)
+        assert config.mode == "whisper_cpp"
+        await tray._queue.put("toggle")
+        await wait_for(lambda: icon.title == "Vox — Idle")
+        assert tray._history.recent(1)[0].transcription_mode == "whisper_cpp"
+
+        find(menu, "OpenAI (batch)")(icon)
+        await wait_for(lambda: config.mode == "batch")
+        assert find(menu, "OpenAI (batch)").checked is True
+        assert '[transcription]\nmode = "batch"' in config_path.read_text()
+        assert load_config(config_path).whisper_cpp_model == str(model)
+
+        await tray._queue.put("toggle")
+        await wait_for(lambda: icon.title == "Vox — Recording…")
+        await tray._queue.put("toggle")
+        await wait_for(lambda: icon.title == "Vox — Idle")
+        assert [(rec.text, rec.transcription_mode) for rec in tray._history.recent(2)] == [
+            ("API text", "batch"), ("local text", "whisper_cpp"),
+        ]
+        env["batch"].transcribe.assert_awaited_once()
+        await stop_daemon(task)
 
 
 # -- Headless fallback -----------------------------------------------------

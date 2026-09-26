@@ -102,38 +102,7 @@ class Transcriber:
         self._config = config
 
     def _build_prompt(self, context: AppContext | None) -> str:
-        """Build a vocabulary-only prompt for Whisper.
-
-        Whisper's prompt parameter is treated as example-output that biases
-        style, not as instructions. We send only a bare comma-separated list
-        of proper nouns and technical terms so it influences spelling without
-        biasing phrasing.
-        """
-        vocab: list[str] = list(self._config.dictionary)
-        if context:
-            if context.window_title:
-                vocab.extend(_extract_vocab(context.window_title, max_words=10))
-            if context.screen_text:
-                vocab.extend(_extract_vocab(context.screen_text, max_words=25))
-
-        seen: set[str] = set()
-        unique_vocab: list[str] = []
-        for w in vocab:
-            lower = w.lower()
-            if lower in seen:
-                continue
-            seen.add(lower)
-            unique_vocab.append(w)
-
-        # Cap vocabulary list to 40 most relevant terms to avoid prompt leakage
-        unique_vocab = unique_vocab[:40]
-
-        parts = []
-        if self._base_prompt:
-            parts.append(self._base_prompt)
-        if unique_vocab:
-            parts.append(", ".join(unique_vocab))
-        return "\n".join(parts) if parts else ""
+        return build_prompt(self._config, context, self._base_prompt)
 
     async def transcribe(self, wav_bytes: bytes, context: AppContext | None = None) -> str:
         """Transcribe WAV audio bytes to text with optional context."""
@@ -171,3 +140,29 @@ class Transcriber:
 
 
 WhisperTranscriber = Transcriber
+
+
+def build_prompt(config: Config, context: AppContext | None, base_prompt: str | None = None) -> str:
+    """Build a vocabulary-only prompt shared by API and local Whisper."""
+    vocab: list[str] = list(config.dictionary)
+    if context:
+        if context.window_title:
+            vocab.extend(_extract_vocab(context.window_title, max_words=10))
+        if context.screen_text:
+            vocab.extend(_extract_vocab(context.screen_text, max_words=25))
+
+    seen: set[str] = set()
+    unique_vocab: list[str] = []
+    for word in vocab:
+        lower = word.lower()
+        if lower not in seen:
+            seen.add(lower)
+            unique_vocab.append(word)
+
+    parts = []
+    initial_prompt = base_prompt if base_prompt is not None else config.whisper_prompt
+    if initial_prompt:
+        parts.append(initial_prompt)
+    if unique_vocab:
+        parts.append(", ".join(unique_vocab[:40]))
+    return "\n".join(parts)

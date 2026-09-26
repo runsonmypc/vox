@@ -83,9 +83,16 @@ def main() -> None:
         log.error("%s", e)
         sys.exit(1)
 
-    if not config.openai_api_key:
+    if config.mode != "whisper_cpp" and not config.openai_api_key:
         log.error("OPENAI_API_KEY not set. Set it in config file or environment.")
         sys.exit(1)
+    if config.mode == "whisper_cpp":
+        from .whisper_cpp import WhisperCppTranscriber
+        try:
+            WhisperCppTranscriber(config)
+        except ConfigError as e:
+            log.error("%s", e)
+            sys.exit(1)
 
     # Check system dependencies
     from .injector import check_accessibility_permission, check_dependencies

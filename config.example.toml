@@ -17,12 +17,25 @@ channels = 1
 max_recording_seconds = 30
 
 # [transcription]
-# mode = "batch"              # "batch" (Whisper) or "streaming" (gpt-live-transcribe)
+# mode = "batch"              # "batch" (OpenAI), "streaming" (OpenAI), or "whisper_cpp" (local)
 # streaming_model = "gpt-live-transcribe"
 
 [whisper]
-model = "gpt-4o-mini-transcribe-2025-12-15"
-# language = "en"         # Force language (auto-detect if unset)
+model = "gpt-4o-mini-transcribe-2025-12-15"  # OpenAI batch model
+# language = "en"         # Force language for either batch provider (auto-detect if unset)
+
+# To use local whisper.cpp, clone https://github.com/ggml-org/whisper.cpp,
+# then run these commands in that checkout:
+#   cmake -B build && cmake --build build -j --config Release
+#   sh ./models/download-ggml-model.sh base.en
+# Uncomment [transcription] and set mode = "whisper_cpp" above.
+# No OpenAI API key is needed in this mode. Paths may be absolute, use ~, or be
+# relative to the directory containing this config file.
+# [whisper_cpp]
+# binary = "/absolute/path/to/whisper.cpp/build/bin/whisper-cli"
+# model = "/absolute/path/to/whisper.cpp/models/ggml-base.en.bin"
+# Once configured, use Vox's Transcription menu to switch providers while idle.
+# The menu saves the selection to this file for the next launch.
 
 [sounds]
 enabled = true

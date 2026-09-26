@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from vox.config import load_config, update_dictionary, update_snippet
+from vox.config import load_config, update_dictionary, update_snippet, update_transcription_mode
 from vox.errors import ConfigError
 
 EXAMPLE = """\
@@ -50,6 +50,35 @@ def test_comments_and_other_settings_survive(cfg):
     config = load_config(cfg)
     assert config.sample_rate == 16000
     assert config.snippets == {"my email": "alex@example.com", "my address": "123 Main St"}
+
+
+def test_transcription_mode_update_preserves_config(cfg):
+    update_transcription_mode(cfg, "whisper_cpp")
+    assert load_config(cfg).mode == "whisper_cpp"
+    assert 'sample_rate = 16000  # keep this comment' in cfg.read_text()
+    update_transcription_mode(cfg, "streaming")
+    assert load_config(cfg).mode == "streaming"
+    assert cfg.read_text().count('mode = "streaming"') == 1
+    before = cfg.read_text()
+    with pytest.raises(ValueError):
+        update_transcription_mode(cfg, "invalid")
+    assert cfg.read_text() == before
+
+
+@pytest.mark.parametrize("old_mode, section, key", [
+    ("batch", "whisper", "model"),
+    ("streaming", "transcription", "streaming_model"),
+    ("whisper_cpp", "whisper_cpp", "model"),
+])
+def test_mode_switch_preserves_legacy_model_for_old_provider(tmp_path, old_mode, section, key):
+    path = tmp_path / "config.toml"
+    path.write_text(f'[transcription]\nmode = "{old_mode}"\nmodel = "old-model"\n')
+    new_mode = "batch" if old_mode != "batch" else "whisper_cpp"
+    update_transcription_mode(path, new_mode)
+    data = tomllib.loads(path.read_text())
+    assert data["transcription"]["mode"] == new_mode
+    assert "model" not in data["transcription"]
+    assert data[section][key] == "old-model"
 
 
 def test_add_skips_duplicates_and_blanks(cfg):
@@ -232,4 +261,3 @@ async def test_menu_device_choice_survives_vocab_edits_but_file_changes_apply(cf
         cfg.write_text(tomlkit.dumps(doc))
         await wait_until(lambda: config.audio_device == "USB")
     recorder.reconfigure.assert_called_once_with(config)  # the live object, so later menu picks reach the recorder
-
