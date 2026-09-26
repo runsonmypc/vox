@@ -336,6 +336,7 @@ class FakeOwnerProcess:
             self._write_fd = None
 
     def serve(self, count: int = 1) -> None:
+        """Serve `count` requests for the data. Like xclip 0.13, TARGETS requests are not counted."""
         for _ in range(count):
             self.served += 1
             self._say(f"  Waiting for selection request number {self.served + 1}\n".encode())
@@ -369,7 +370,7 @@ class FakeX11:
         self.keys_error: Exception | None = None
         self.writes: list[tuple[str | None, bytes]] = []
         self.events: list[str] = []
-        self.on_paste = lambda: self.owner.serve(2)  # TARGETS, then the text
+        self.on_paste = lambda: self.owner.serve(1)  # the target fetches the text once
         self.xtest = MagicMock(side_effect=self._paste)
 
     def _paste(self) -> None:
@@ -498,7 +499,7 @@ def test_linux_restore_waits_for_the_target_to_fetch_the_text(x11):
     def slow_target():
         def serve():
             x11.events.append("target fetched")
-            x11.owner.serve(2)
+            x11.owner.serve(1)
 
         threading.Timer(0.1, serve).start()
 
@@ -515,13 +516,13 @@ def test_linux_requests_before_the_keystroke_do_not_count(x11, monkeypatch):
 
     def popen_with_manager(args, **kwargs):
         owner = x11.popen(args, **kwargs)
-        owner.serve(2)  # the manager's TARGETS and text requests
+        owner.serve(1)  # the manager's fetch of the text
         return owner
 
     def target_fetches_later():
         def serve():
             x11.events.append("target fetched")
-            x11.owner.serve(2)
+            x11.owner.serve(1)
 
         threading.Timer(0.05, serve).start()
 
@@ -531,6 +532,43 @@ def test_linux_requests_before_the_keystroke_do_not_count(x11, monkeypatch):
     injector.paste("dictated", AppType.EDITOR)
 
     assert x11.events == ["keys ctrl+v", "paste", "target fetched", "restore"]
+
+
+def test_linux_single_fetch_restores_without_waiting_for_the_timeout(x11, monkeypatch):
+    """One served request is the target's whole fetch: xclip answers TARGETS without counting it."""
+    x11.clipboard = {"UTF8_STRING": b"original"}
+    monkeypatch.setattr(injector, "_X11_REQUEST_TIMEOUT", 5.0)
+
+    started = time.monotonic()
+    injector.paste("dictated", AppType.EDITOR)
+
+    assert time.monotonic() - started < 1.0
+    assert x11.writes == [("UTF8_STRING", b"original")]
+
+
+def test_linux_late_clipboard_manager_fetch_is_not_taken_for_the_target(x11, monkeypatch):
+    """A manager fetching just after the keystroke must not trigger the restore before the target reads."""
+    x11.clipboard = {"UTF8_STRING": b"original"}
+    monkeypatch.setattr(injector, "_X11_FOLLOW_UP_TIMEOUT", 2.0)
+
+    def manager_then_target():
+        x11.events.append("manager fetched")
+        x11.owner.serve(1)
+
+        def target():
+            x11.events.append("target fetched")
+            x11.owner.serve(1)
+
+        threading.Timer(0.02, target).start()
+
+    x11.on_paste = manager_then_target
+
+    started = time.monotonic()
+    injector.paste("dictated", AppType.EDITOR)
+
+    assert x11.events == ["keys ctrl+v", "paste", "manager fetched", "target fetched", "restore"]
+    # The restore goes ahead once the second fetch is served, not after the whole grace
+    assert time.monotonic() - started < 1.5
 
 
 def test_linux_restore_goes_ahead_when_the_target_never_asks(x11):

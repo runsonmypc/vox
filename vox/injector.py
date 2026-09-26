@@ -35,8 +35,9 @@ _CMD_KEY_STATE = 1  # Carbon cmdKey >> 8, the modifier state UCKeyTranslate expe
 # X11: how long the target gets to request the text after the paste keystroke before the
 # restore goes ahead anyway (a slow app, or a window that ignores the paste).
 _X11_REQUEST_TIMEOUT = 1.0
-# Most toolkits ask for TARGETS first and the text right after
-_X11_FOLLOW_UP_TIMEOUT = 0.25
+# A target fetches the text once (xclip does not count TARGETS requests). This grace covers an
+# app that asks twice, or a clipboard manager's late fetch that was counted as the target's.
+_X11_FOLLOW_UP_TIMEOUT = 0.1
 _TOOL_TIMEOUT = 2.0
 
 # X11 restore preference. xclip serves one target, so a clipboard that offered several comes
@@ -284,7 +285,8 @@ class _ClipboardOwner:
     """A foreground `xclip -quiet` that owns CLIPBOARD and reports each request it serves.
 
     Before every wait xclip prints "Waiting for selection request number N" on stderr, so N - 1
-    requests have been served. It exits once another client takes the selection.
+    requests for the data have been served (TARGETS requests are answered but not counted).
+    It exits once another client takes the selection.
     """
 
     _REQUEST = re.compile(rb"selection request number (\d+)")
