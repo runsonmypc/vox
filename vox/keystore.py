@@ -39,23 +39,24 @@ class KeystoreError(Exception):
     """A keychain exists but could not be read or written."""
 
 
-def env_override() -> str:
-    """The key set in Vox's environment, which wins over the stored one, or ""."""
-    return _env_key or os.environ.get(ENV_VAR, "").strip()
+def env_override() -> bool:
+    """Whether OPENAI_API_KEY overrides the saved key, also in a window Vox started, which gets only the flag."""
+    return bool(_env_value()) or os.environ.get(OVERRIDE_FLAG) == "1"
 
 
 def hide_env_override() -> None:
     """Move OPENAI_API_KEY out of os.environ, so no process Vox starts inherits it. Call before starting any."""
     global _env_key
-    key = os.environ.pop(ENV_VAR, "").strip()
-    if key:
-        _env_key = key
+    _env_key = os.environ.pop(ENV_VAR, "").strip() or _env_key
+    if _env_key:
         os.environ[OVERRIDE_FLAG] = "1"
+    else:
+        os.environ.pop(OVERRIDE_FLAG, None)  # a flag inherited from elsewhere, with no key behind it
 
 
-def env_override_in_effect() -> bool:
-    """Whether OPENAI_API_KEY overrides the saved key, also in a window process Vox started without the key."""
-    return bool(env_override()) or os.environ.get(OVERRIDE_FLAG) == "1"
+def _env_value() -> str:
+    """The OPENAI_API_KEY set in Vox's environment, or ""."""
+    return _env_key or os.environ.get(ENV_VAR, "").strip()
 
 
 def has_keychain() -> bool:
@@ -81,7 +82,7 @@ def storage_name() -> str | None:
 
 def get_api_key() -> str:
     """The key Vox should use: the environment variable, else the stored key. Raises KeystoreError."""
-    return env_override() or get_stored_key()
+    return _env_value() or get_stored_key()
 
 
 def get_stored_key() -> str:

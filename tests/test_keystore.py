@@ -302,9 +302,10 @@ def test_hidden_environment_key_still_overrides_but_is_not_inherited(environ):
     keystore.set_api_key(KEY)
     environ["OPENAI_API_KEY"] = f" {OTHER} "
     keystore.hide_env_override()
+    keystore.hide_env_override()  # a second call keeps the key it took
     assert "OPENAI_API_KEY" not in environ
     assert keystore.get_api_key() == OTHER
-    assert keystore.env_override_in_effect()
+    assert keystore.env_override()
     child = subprocess.run(
         [sys.executable, "-c", "import os; print(os.environ.get('OPENAI_API_KEY', 'absent'))"],
         capture_output=True, text=True, check=True,
@@ -313,18 +314,31 @@ def test_hidden_environment_key_still_overrides_but_is_not_inherited(environ):
 
 
 def test_a_window_process_knows_an_override_is_in_effect_without_the_key(environ):
+    keystore.set_api_key(KEY)
     environ["OPENAI_API_KEY"] = OTHER
     keystore.hide_env_override()
     child_env = dict(environ)
     keystore._env_key = ""  # what a process Vox starts sees: the flag, not the key
     with patch.dict(os.environ, child_env, clear=True):
-        assert keystore.env_override() == ""
-        assert keystore.env_override_in_effect()
+        assert keystore.env_override()
+        assert keystore.get_api_key() == KEY  # the flag is never mistaken for a key
+
+
+def test_the_key_window_explains_an_override_it_cannot_see(environ):
+    """The API key window runs as its own process, started with the environment Vox has after startup."""
+    environ["OPENAI_API_KEY"] = OTHER
+    keystore.hide_env_override()
+    code = (
+        "import os; from vox.ui.key_model import KeyModel; "
+        "print(os.environ.get('OPENAI_API_KEY', 'absent')); print('OPENAI_API_KEY' in KeyModel().override_text)"
+    )
+    child = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)
+    assert child.stdout.split() == ["absent", "True"]
 
 
 def test_no_environment_key_means_no_override(environ):
     environ.pop("OPENAI_API_KEY", None)
-    environ.pop(keystore.OVERRIDE_FLAG, None)
+    environ[keystore.OVERRIDE_FLAG] = "1"  # inherited from somewhere, with no key behind it
     keystore.hide_env_override()
     assert keystore.OVERRIDE_FLAG not in environ
-    assert not keystore.env_override_in_effect()
+    assert not keystore.env_override()
