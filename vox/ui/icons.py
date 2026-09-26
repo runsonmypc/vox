@@ -111,7 +111,7 @@ def make_app_icon(size: int = 1024) -> Image.Image:
     ImageDraw.Draw(plate).rounded_rectangle(box, radius=radius, fill=255)
     ramp = Image.linear_gradient("L").resize((size, size))
     shade = Image.merge("RGB", [ramp.point([round(a + (b - a) * v / 255) for v in range(256)])
-                                for a, b in zip(_PLATE_TOP, _PLATE_BOTTOM)])
+                                for a, b in zip(_PLATE_TOP, _PLATE_BOTTOM, strict=True)])
     img.paste(shade, (0, 0), plate)
     rim = Image.new("L", (size, size), 0)
     ImageDraw.Draw(rim).rounded_rectangle(box, radius=radius, outline=70, width=max(2, size // 256))
