@@ -37,6 +37,7 @@ _STATUS_TEXT = {
 }
 _RECENT_COUNT = 3
 _RECENT_LABEL_CHARS = 48
+_MENU_RETRY_SECONDS = 0.05
 
 RECENT_HEADER = "Click a recent dictation to copy it"
 
@@ -137,14 +138,38 @@ def _linux_icon_class(pystray: Any) -> type:
     return VoxIcon
 
 
+def _menu_is_tracking() -> bool:
+    """Whether a menu is open: AppKit runs the main run loop in event-tracking mode while it tracks one."""
+    import AppKit
+
+    return AppKit.NSRunLoop.currentRunLoop().currentMode() == AppKit.NSEventTrackingRunLoopMode
+
+
 def _darwin_icon_class() -> type:
     import AppKit
     import pystray
+    from PyObjCTools import AppHelper
 
     class VoxIcon(pystray.Icon):
         """pystray's macOS icon, drawn at Retina resolution and as a template image when monochrome."""
 
         template = True
+        _menu_update_pending = False
+
+        def _update_menu(self) -> None:
+            # pystray resolves a click by the item's tag in the newest callbacks list, so rebuilding the menu while
+            # it is open makes a click on the menu still on screen run another item. callLater fires only in the
+            # default run-loop mode: after the menu closes and the clicked item's action has run.
+            if _menu_is_tracking():
+                if not self._menu_update_pending:
+                    self._menu_update_pending = True
+                    AppHelper.callLater(_MENU_RETRY_SECONDS, self._deferred_update_menu)
+                return
+            super()._update_menu()
+
+        def _deferred_update_menu(self) -> None:
+            self._menu_update_pending = False
+            self._update_menu()
 
         def _assert_image(self) -> None:
             try:

@@ -524,3 +524,34 @@ def test_daemon_can_open_the_key_window():
     with patch("vox.ui.tray.threading.Thread"):
         tray.open_key_window()
     launcher.assert_called_once_with([sys.executable, "-m", KEY_WINDOW])
+
+
+# -- macOS menu ---------------------------------------------------------------------
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="pystray's macOS backend")
+def test_darwin_menu_is_not_rebuilt_while_it_is_open():
+    """pystray maps a click to the item's tag in the newest callbacks list, so an open menu must keep its own."""
+    import pystray._darwin
+
+    from vox.ui import tray
+
+    VoxIcon = tray._darwin_icon_class()
+    icon = VoxIcon.__new__(VoxIcon)  # no __init__: never put a real item in the menu bar
+    icon._visible = False
+    with patch.object(pystray._darwin.Icon, "_update_menu") as rebuild, \
+         patch.object(tray, "_menu_is_tracking", return_value=True) as tracking, \
+         patch("PyObjCTools.AppHelper.callLater") as later:
+        icon.update_menu()
+        icon.update_menu()
+        rebuild.assert_not_called()  # the open menu and its callbacks stay as they are
+        later.assert_called_once()  # one rebuild, however many updates arrived
+
+        tracking.return_value = False  # the menu closed and the clicked item's action ran
+        delay, deferred = later.call_args.args
+        assert delay > 0  # a delayed call runs only in the default run-loop mode, never during tracking
+        deferred()
+        rebuild.assert_called_once_with()
+
+        icon.update_menu()
+        assert rebuild.call_count == 2  # closed: rebuilt at once
