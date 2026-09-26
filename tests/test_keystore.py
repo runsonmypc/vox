@@ -200,3 +200,84 @@ def test_without_a_keychain_the_plain_text_file_is_the_store(no_keychain, cfg):
     keystore.FALLBACK_PATH.write_text(f"OPENAI_API_KEY={KEY}\n")
     keystore.migrate_plaintext(cfg)
     assert keystore.get_api_key() == KEY
+
+
+def test_env_file_with_different_keys_is_left_alone(memory_keyring, cfg, caplog):
+    """Old Vox used the first key line, the fallback reader the last: guessing could delete the working key."""
+    text = f"OPENAI_API_KEY={KEY}\nOPENAI_API_KEY={OTHER}\n"
+    keystore.FALLBACK_PATH.write_text(text)
+    with caplog.at_level(logging.WARNING, logger="vox.keystore"):
+        keystore.migrate_plaintext(cfg)
+    assert stored(memory_keyring) is None
+    assert keystore.FALLBACK_PATH.read_text() == text
+    assert "more than one OpenAI API key" in caplog.text
+    assert KEY not in caplog.text and OTHER not in caplog.text
+
+
+def test_env_file_repeating_one_key_moves_it(memory_keyring, cfg):
+    keystore.FALLBACK_PATH.write_text(f"OPENAI_API_KEY={KEY}\nOPENAI_API_KEY='{KEY}'\nOPENAI_API_KEY=\n")
+    keystore.migrate_plaintext(cfg)
+    assert stored(memory_keyring) == KEY
+    assert not keystore.FALLBACK_PATH.exists()
+
+
+def test_without_a_keychain_a_config_toml_key_gets_a_warning(no_keychain, cfg, caplog):
+    cfg.write_text(f'[api]\nopenai_api_key = "{KEY}"\n')
+    with caplog.at_level(logging.WARNING, logger="vox.keystore"):
+        keystore.migrate_plaintext(cfg)
+    assert "doesn't read openai_api_key" in caplog.text
+    assert KEY not in caplog.text
+    assert KEY in cfg.read_text()  # nowhere safer to put it
+    assert keystore.get_api_key() == ""
+
+
+def test_without_a_keychain_and_no_config_toml_key_nothing_is_logged(no_keychain, cfg, caplog):
+    cfg.write_text('[hotkey]\nkey = "f8"\n')
+    with caplog.at_level(logging.WARNING, logger="vox.keystore"):
+        keystore.migrate_plaintext(cfg)
+    assert caplog.text == ""
+
+
+# -- Symlinked key files (dotfiles) -------------------------------------------------
+
+
+@pytest.fixture
+def linked_env(tmp_path, monkeypatch):
+    """~/.config/vox/.env as a symlink into a dotfiles checkout; returns the real file."""
+    target = tmp_path / "dotfiles" / "vox.env"
+    target.parent.mkdir()
+    link = tmp_path / "linked.env"
+    link.symlink_to(target)
+    monkeypatch.setattr(keystore, "FALLBACK_PATH", link)
+    return target
+
+
+def test_moving_a_key_deletes_it_from_the_file_a_symlink_points_to(memory_keyring, cfg, linked_env):
+    linked_env.write_text(f"OPENAI_API_KEY={KEY}\n")
+    keystore.migrate_plaintext(cfg)
+    assert stored(memory_keyring) == KEY
+    assert not linked_env.exists()
+
+
+def test_moving_a_key_keeps_the_symlink_and_the_other_lines(memory_keyring, cfg, linked_env):
+    linked_env.write_text(f"# mine\nOTHER_SETTING=1\nOPENAI_API_KEY={KEY}\n")
+    keystore.migrate_plaintext(cfg)
+    assert keystore.FALLBACK_PATH.is_symlink()
+    assert linked_env.read_text() == "# mine\nOTHER_SETTING=1\n"
+
+
+def test_without_a_keychain_saving_and_removing_go_through_the_symlink(no_keychain, linked_env):
+    linked_env.write_text("OTHER_SETTING=1\n")
+    keystore.set_api_key(KEY)
+    assert keystore.FALLBACK_PATH.is_symlink()
+    assert linked_env.read_text() == f"OTHER_SETTING=1\nOPENAI_API_KEY={KEY}\n"
+    assert stat.S_IMODE(linked_env.stat().st_mode) == 0o600
+    keystore.delete_api_key()
+    assert keystore.FALLBACK_PATH.is_symlink()
+    assert linked_env.read_text() == "OTHER_SETTING=1\n"
+
+
+def test_new_fallback_directory_is_owner_only(no_keychain, tmp_path, monkeypatch):
+    monkeypatch.setattr(keystore, "FALLBACK_PATH", tmp_path / "vox" / ".env")
+    keystore.set_api_key(KEY)
+    assert stat.S_IMODE(keystore.FALLBACK_PATH.parent.stat().st_mode) == 0o700
