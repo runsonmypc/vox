@@ -25,11 +25,11 @@ The system SHALL provide a system tray icon on macOS (menu bar) and Linux (AppIn
 - **THEN** the tray icon is still registered, a notice explains how to enable a tray host, and the icon appears once a host starts
 
 ### Requirement: Self-Contained Per-User Installation
-The system SHALL provide one install script for macOS and Linux that installs Vox and its tray support for the current user, without keeping the source checkout and without a compiler.
+The system SHALL provide one install script for macOS and Linux that installs Vox and its tray support for the current user, without keeping the source checkout and without a compiler. The installer SHALL NOT ask for, copy, or store the OpenAI API key.
 
 #### Scenario: Fresh install
 - **WHEN** the user runs `./install.sh`
-- **THEN** Vox is installed into its own virtualenv with a `vox` command, missing system packages are installed, and once an OpenAI API key is configured Vox starts at login and a Vox launcher is added to the system's applications
+- **THEN** Vox is installed into its own virtualenv with a `vox` command, missing system packages are installed, Vox starts at login whether or not an OpenAI API key is set, and a Vox launcher is added to the system's applications
 
 #### Scenario: Start after Quit
 - **WHEN** the user has quit Vox from the tray and opens the Vox launcher (the Applications folder or Spotlight on macOS, the applications list on Linux)
