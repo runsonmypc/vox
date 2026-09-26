@@ -261,7 +261,7 @@ def update_snippet(path: Path, trigger: str, expansion: str | None) -> dict[str,
     if "snippets" not in doc:
         doc["snippets"] = tomlkit.table()
     snippets = doc["snippets"]
-    for key in [k for k in snippets if _snippet_key(k) == _snippet_key(trigger)]:
+    for key in [k for k in snippets if snippet_key(k) == snippet_key(trigger)]:
         del snippets[key]
     if expansion is not None:
         snippets[trigger] = expansion
@@ -295,7 +295,8 @@ def update_transcription_mode(path: Path, mode: str) -> None:
     _write_document(path, doc)
 
 
-def _snippet_key(trigger: str) -> str:
+def snippet_key(trigger: str) -> str:
+    """Normalize a trigger the way the daemon matches it: ignoring case and trailing punctuation."""
     return trigger.strip().rstrip(".?!,").lower()
 
 

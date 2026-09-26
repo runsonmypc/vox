@@ -22,7 +22,7 @@ Currently, `vox` runs as an invisible command-line daemon with no visual feedbac
 
 ## Impact
 
-- Added dependencies: `pystray`, `Pillow` (for dynamic tray icons), and `tomlkit` (comment-preserving `config.toml` writes). Windows use the stdlib `tkinter`. On Linux the tray uses the system `python3-gi` and AppIndicator typelib, which `install.sh` installs when missing.
+- Added dependencies: `pystray`, `Pillow` (for dynamic tray icons), and `tomlkit` (comment-preserving `config.toml` writes). Windows use native toolkits: AppKit through the existing PyObjC dependency on macOS, and GTK 4 with libadwaita on Linux. On Linux the tray and windows use the system `python3-gi` with the AppIndicator, GTK 4 and libadwaita typelibs, which `install.sh` installs when missing.
 - `webrtcvad` (source-only, needs a compiler and pins `setuptools<81` for `pkg_resources`) is replaced by the drop-in `webrtcvad-wheels`, which ships prebuilt wheels.
 - Code paths affected: `vox.daemon` (lifecycle hooks, state broadcast, history persistence), `vox.config` (programmatic updates to dictionary and snippets), and new frontend package `vox.ui`.
 - Storage impact: Creates local SQLite database at `~/.local/share/vox/history.db`.

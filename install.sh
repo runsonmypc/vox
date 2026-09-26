@@ -29,8 +29,12 @@ linux_deps() {
     command -v xclip >/dev/null || missing+=(xclip)
     "$py" -c 'import ctypes.util, sys; sys.exit(not ctypes.util.find_library("portaudio"))' || missing+=(libportaudio2)
     "$py" -c 'import ensurepip' 2>/dev/null || missing+=(python3-venv)
-    "$py" -c 'import tkinter' 2>/dev/null || missing+=(python3-tk)
     "$py" -c 'import gi' 2>/dev/null || missing+=(python3-gi)
+    # The history and vocabulary windows need GTK 4 and libadwaita 1.5+ (Ubuntu 24.04 ships 1.5)
+    "$py" -c '
+import gi
+gi.require_version("Gtk", "4.0")
+gi.require_version("Adw", "1")' 2>/dev/null || missing+=(gir1.2-gtk-4.0 gir1.2-adw-1)
     "$py" -c '
 import gi
 try:
@@ -195,7 +199,6 @@ Darwin)
     command -v uv >/dev/null || die "Vox installs with uv on macOS: brew install uv (or see https://docs.astral.sh/uv/)"
     say "Installing Vox into $VENV"
     rm -rf "$VENV"
-    # uv's Python builds include Tk, which the history and vocabulary windows need
     uv venv --quiet --managed-python --python 3.12 "$VENV"
     uv pip install --quiet --python "$VENV/bin/python" "$REPO"
     ;;

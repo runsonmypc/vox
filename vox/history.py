@@ -82,6 +82,12 @@ class HistoryDB:
             rows = self._conn.execute(sql, params).fetchall()
         return [HistoryRecord(*row) for row in rows]
 
+    def stats(self) -> tuple[int, int | None]:
+        """Number of dictations and the newest row id, a cheap way to notice new ones."""
+        with self._lock:
+            count, latest = self._conn.execute("SELECT COUNT(*), MAX(id) FROM history").fetchone()
+        return count, latest
+
     def close(self) -> None:
         with self._lock:
             self._conn.close()

@@ -170,6 +170,48 @@ def _launch_window(args: list[str]) -> subprocess.Popen:
     return subprocess.Popen(args, stdin=subprocess.DEVNULL)
 
 
+def _focus_window(proc: subprocess.Popen, reopen: list[str] | None) -> None:
+    """Bring a window process to the front: just launched, or already open when ``reopen`` is its command."""
+    try:
+        if sys.platform == "darwin":
+            _hand_focus_to(proc)
+        elif reopen is not None:
+            # The windows are single-instance GTK apps: a second launch presents the open window and exits
+            _launch_window(reopen)
+    except Exception as e:
+        log.debug("Could not bring the window forward: %s", e)
+
+
+def _hand_focus_to(proc: subprocess.Popen, wait: float = 15.0) -> None:
+    """Activate a window process on macOS once it has started.
+
+    Since macOS 14 an app can't activate itself unless the user just
+    interacted with it, so a freshly spawned window would open behind the
+    frontmost app. The menu click is interaction with Vox, so Vox takes focus
+    here and passes it on to the window process.
+    """
+    import time
+
+    import AppKit
+    from PyObjCTools import AppHelper
+
+    app = AppKit.NSApplication.sharedApplication()
+    if app.respondsToSelector_("activate"):
+        app.activate()
+    else:
+        app.activateIgnoringOtherApps_(True)
+    deadline = time.monotonic() + wait
+
+    def attempt() -> None:
+        target = AppKit.NSRunningApplication.runningApplicationWithProcessIdentifier_(proc.pid)
+        if target is not None and target.isFinishedLaunching():
+            target.activateWithOptions_(AppKit.NSApplicationActivateAllWindows)
+        elif proc.poll() is None and time.monotonic() < deadline:
+            AppHelper.callLater(0.05, attempt)
+
+    attempt()
+
+
 def copy_to_clipboard(text: str) -> None:
     from ..injector import set_clipboard
 
@@ -185,6 +227,7 @@ class TrayManager:
         launcher: Callable[[list[str]], subprocess.Popen] = _launch_window,
         copy: Callable[[str], None] = copy_to_clipboard,
         light: bool = False,
+        focus: Callable[[subprocess.Popen, list[str] | None], None] | None = None,
     ) -> None:
         import pystray
 
@@ -192,6 +235,7 @@ class TrayManager:
         self._config = config
         self._dispatch = dispatch
         self._launcher = launcher
+        self._focus = focus or _focus_window
         self._copy = copy
 
         # Main thread only
@@ -409,14 +453,18 @@ class TrayManager:
     # -- Plumbing ----------------------------------------------------------
 
     def _open_window(self, module: str, *args: str) -> None:
+        command = [sys.executable, "-m", module, *args]
         proc = self._windows.get(module)
         if proc is not None and proc.poll() is None:
-            log.info("%s is already open", module)
+            log.info("%s is already open; bringing it forward", module)
+            self._focus(proc, command)
             return
         try:
-            self._windows[module] = self._launcher([sys.executable, "-m", module, *args])
+            proc = self._windows[module] = self._launcher(command)
         except Exception as e:
             log.warning("Failed to open %s: %s", module, e)
+            return
+        self._focus(proc, None)
 
     def _close_windows(self) -> None:
         for proc in self._windows.values():

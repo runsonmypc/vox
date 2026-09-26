@@ -46,6 +46,7 @@ def immediate(fn, *args):
 
 
 def make_tray(config=None, **kwargs):
+    kwargs.setdefault("focus", MagicMock())  # keep window tests away from the real window server
     tray = TrayManager(config or Config(), icon_factory=FakeIcon, dispatch=immediate, **kwargs)
     return tray, tray._icon
 
@@ -339,19 +340,23 @@ def test_history_item_disabled_without_history():
 def test_history_window_launch_is_single_instance(tmp_path):
     history = HistoryDB(tmp_path / "history.db")
     procs = [_fake_proc(alive=True), _fake_proc(alive=True)]
-    launcher = MagicMock(side_effect=procs)
-    tray, icon = make_tray(launcher=launcher)
+    launcher, focus = MagicMock(side_effect=procs), MagicMock()
+    tray, icon = make_tray(launcher=launcher, focus=focus)
     tray.attach(MagicMock(), MagicMock(), history, MagicMock())
+    command = [sys.executable, "-m", HISTORY_WINDOW, "--db", str(history.path)]
 
     find(icon.menu, "Search History…")(icon)
-    launcher.assert_called_once_with([sys.executable, "-m", HISTORY_WINDOW, "--db", str(history.path)])
+    launcher.assert_called_once_with(command)
+    focus.assert_called_once_with(procs[0], None)
 
-    find(icon.menu, "Search History…")(icon)  # still open: not relaunched
+    find(icon.menu, "Search History…")(icon)  # still open: brought forward, not relaunched
     assert launcher.call_count == 1
+    focus.assert_called_with(procs[0], command)
 
     procs[0].poll.return_value = 0  # user closed it
     find(icon.menu, "Search History…")(icon)
     assert launcher.call_count == 2
+    focus.assert_called_with(procs[1], None)
     history.close()
 
 
@@ -379,8 +384,38 @@ def test_open_windows_are_closed_when_tray_exits(tmp_path):
 def test_launch_failure_is_logged_not_raised(tmp_path):
     config = Config()
     config._config_path = tmp_path / "config.toml"
-    _, icon = make_tray(config, launcher=MagicMock(side_effect=OSError("no python")))
+    focus = MagicMock()
+    _, icon = make_tray(config, launcher=MagicMock(side_effect=OSError("no python")), focus=focus)
     find(icon.menu, "Vocabulary & Snippets…")(icon)
+    focus.assert_not_called()
+
+
+def test_focus_on_linux_relaunches_only_an_open_window():
+    from vox.ui import tray
+
+    proc = _fake_proc()
+    with patch.object(tray.sys, "platform", "linux"), patch.object(tray, "_launch_window") as launch:
+        tray._focus_window(proc, None)  # just launched: GTK presents it
+        launch.assert_not_called()
+        tray._focus_window(proc, ["python", "-m", VOCAB_WINDOW])  # the single-instance app presents the open one
+        launch.assert_called_once_with(["python", "-m", VOCAB_WINDOW])
+
+
+def test_focus_on_macos_hands_activation_to_the_window():
+    from vox.ui import tray
+
+    proc = _fake_proc()
+    with patch.object(tray.sys, "platform", "darwin"), patch.object(tray, "_hand_focus_to") as hand:
+        tray._focus_window(proc, ["python"])
+    hand.assert_called_once_with(proc)
+
+
+def test_focus_failure_is_not_raised():
+    from vox.ui import tray
+
+    with patch.object(tray.sys, "platform", "darwin"), \
+         patch.object(tray, "_hand_focus_to", side_effect=RuntimeError("no window server")):
+        tray._focus_window(_fake_proc(), None)
 
 
 def test_windows_close_even_if_tray_loop_raises(tmp_path):
