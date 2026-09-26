@@ -112,7 +112,7 @@ def main() -> None:
         config = load_config(args.config)
     except ConfigError as e:
         log.error("%s", e)
-        sys.exit(1)
+        sys.exit(EXIT_CANNOT_START)
 
     # Without a key Vox still starts: the menu asks for one, and a service exiting here would only be restarted
     from .keystore import KeystoreError, get_api_key, hide_env_override, migrate_plaintext
@@ -130,8 +130,9 @@ def main() -> None:
         try:
             WhisperCppTranscriber(config)
         except ConfigError as e:
-            log.error("%s", e)
-            sys.exit(1)
+            # Start anyway, like without a key: the menu can switch modes, and exiting would only get Vox restarted
+            config.mode_error = str(e)
+            log.error("Local transcription can't run: %s. Choose another mode from the Vox menu.", e)
 
     # Check system dependencies
     from .injector import check_accessibility_permission, check_dependencies
@@ -139,7 +140,7 @@ def main() -> None:
         check_dependencies()
     except DependencyError as e:
         log.error("%s", e)
-        sys.exit(1)
+        sys.exit(EXIT_CANNOT_START)
 
     # Check macOS permissions
     if sys.platform == "darwin" and not check_accessibility_permission(prompt=True):

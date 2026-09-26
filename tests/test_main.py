@@ -11,6 +11,7 @@ import vox.daemon  # noqa: F401  imported now, so patch("vox.daemon.run") can't 
 from vox import __main__ as cli
 from vox import keystore
 from vox.config import Config
+from vox.errors import DependencyError
 
 KEY = "sk-test-dummy-0001"
 
@@ -113,23 +114,6 @@ def test_whisper_cpp_starts_without_openai_key(monkeypatch):
     run.assert_called_once_with(config)
 
 
-def test_whisper_cpp_reports_missing_model_before_starting(monkeypatch, tmp_path):
-    monkeypatch.setattr("sys.argv", ["vox"])
-    binary = tmp_path / "whisper-cli"
-    binary.write_text("#!/bin/sh\n")
-    binary.chmod(0o755)
-    config = Config(mode="whisper_cpp", whisper_cpp_binary=str(binary), whisper_cpp_model="")
-    with (
-        patch.object(cli, "_acquire_instance_lock", return_value=object()),
-        patch("vox.config.load_config", return_value=config),
-        patch("vox.daemon.run") as run,
-        pytest.raises(SystemExit) as exit_info,
-    ):
-        cli.main()
-    assert exit_info.value.code == 1
-    run.assert_not_called()
-
-
 def start(config, monkeypatch):
     """Run the vox command up to the daemon with ``config``, returning the mocked daemon.run."""
     monkeypatch.setattr("sys.argv", ["vox"])
@@ -142,6 +126,55 @@ def start(config, monkeypatch):
     ):
         cli.main()
     return run
+
+
+def test_whisper_cpp_setup_error_is_recorded_and_vox_still_starts(monkeypatch, tmp_path, caplog):
+    """Exiting would restart Vox forever with no menu to switch modes; the menu shows the error instead."""
+    binary = tmp_path / "whisper-cli"
+    binary.write_text("#!/bin/sh\n")
+    binary.chmod(0o755)
+    config = Config(mode="whisper_cpp", whisper_cpp_binary=str(binary), whisper_cpp_model=str(tmp_path / "gone.bin"))
+    run = start(config, monkeypatch)
+    run.assert_called_once_with(config)
+    assert config.mode == "whisper_cpp"
+    assert config.mode_error == f"whisper.cpp model not found: {tmp_path / 'gone.bin'}"
+    assert "whisper.cpp model not found" in caplog.text
+
+
+def test_valid_whisper_cpp_setup_has_no_mode_error(monkeypatch):
+    config = Config(mode="whisper_cpp")
+    with patch("vox.whisper_cpp.WhisperCppTranscriber"):
+        start(config, monkeypatch)
+    assert config.mode_error is None
+
+
+def test_invalid_config_exits_with_the_code_services_do_not_retry(monkeypatch, tmp_path, caplog):
+    path = tmp_path / "config.toml"
+    path.write_text('[attenuation]\nlevel = "0.5"\n')
+    monkeypatch.setattr("sys.argv", ["vox", "--config", str(path)])
+    with (
+        patch.object(cli, "_acquire_instance_lock", return_value=object()),
+        patch("vox.daemon.run") as run,
+        pytest.raises(SystemExit) as exit_info,
+    ):
+        cli.main()
+    assert exit_info.value.code == cli.EXIT_CANNOT_START
+    assert "[attenuation] level" in caplog.text
+    run.assert_not_called()
+
+
+def test_missing_system_dependency_exits_with_the_code_services_do_not_retry(monkeypatch):
+    monkeypatch.setattr("sys.argv", ["vox"])
+    with (
+        patch.object(cli, "_acquire_instance_lock", return_value=object()),
+        patch("vox.config.load_config", return_value=Config()),
+        patch("vox.injector.check_dependencies", side_effect=DependencyError("Missing system dependencies: xdotool")),
+        patch("vox.daemon.run") as run,
+        pytest.raises(SystemExit) as exit_info,
+    ):
+        cli.main()
+    assert exit_info.value.code == cli.EXIT_CANNOT_START
+    run.assert_not_called()
 
 
 def test_starts_without_a_key_instead_of_exiting(monkeypatch):
