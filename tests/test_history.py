@@ -1,6 +1,8 @@
 """Unit tests for the SQLite dictation history."""
 
+import os
 import sqlite3
+import stat
 import threading
 
 import pytest
@@ -98,3 +100,61 @@ def test_persists_across_instances(tmp_path):
         assert [r.text for r in second.search()] == ["survives restart"]
     finally:
         second.close()
+
+
+def test_search_folds_non_ascii_case(db):
+    db.insert("Über das Café")
+    db.insert("Élan vital")
+    db.insert("Straße")
+    assert [r.text for r in db.search("über")] == ["Über das Café"]
+    assert [r.text for r in db.search("CAFÉ")] == ["Über das Café"]
+    assert [r.text for r in db.search("élan")] == ["Élan vital"]
+    assert [r.text for r in db.search("STRASSE")] == ["Straße"]
+
+
+def test_search_treats_backslashes_literally(db):
+    db.insert(r"C:\Users\me")
+    db.insert("C:Usersme")
+    assert [r.text for r in db.search("\\users")] == [r"C:\Users\me"]
+
+
+def test_database_and_new_directory_are_owner_only(tmp_path):
+    path = tmp_path / "vox" / "history.db"
+    history = HistoryDB(path)
+    history.insert("private words")
+    history.close()
+    assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def test_existing_database_is_made_owner_only(tmp_path):
+    path = tmp_path / "history.db"
+    HistoryDB(path).close()
+    os.chmod(path, 0o644)
+    HistoryDB(path).close()
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def test_delete_and_clear_remove_rows(db):
+    first = db.insert("first")
+    db.insert("second")
+    db.insert("third")
+    db.delete(first)
+    assert [r.text for r in db.search()] == ["third", "second"]
+    db.clear()
+    assert db.search() == []
+    assert db.stats() == (0, None)
+
+
+@pytest.mark.parametrize("erase", ["delete", "clear"])
+def test_deleted_text_is_erased_from_the_file(tmp_path, erase):
+    path = tmp_path / "history.db"
+    history = HistoryDB(path)
+    history.insert("keep this one")
+    secret_id = history.insert("my password is hunter2-zebra")
+    if erase == "delete":
+        history.delete(secret_id)
+    else:
+        history.clear()
+    history.close()
+    assert b"hunter2-zebra" not in path.read_bytes()

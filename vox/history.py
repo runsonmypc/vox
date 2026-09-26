@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import sqlite3
 import threading
 from dataclasses import dataclass
@@ -42,9 +43,15 @@ class HistoryDB:
 
     def __init__(self, path: Path | None = None) -> None:
         self.path = path or DEFAULT_HISTORY_PATH
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        # Dictations are private: an owner-only file, whose mode SQLite also gives its journal files
+        self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        os.close(os.open(self.path, os.O_RDWR | os.O_CREAT, 0o600))
+        os.chmod(self.path, 0o600)  # tightens a database made before this
         self._lock = threading.Lock()
         self._conn = sqlite3.connect(self.path, check_same_thread=False)
+        self._conn.create_function("casefold", 1, _casefold, deterministic=True)
+        # Overwrite deleted rows with zeros, so Delete and Clear History really erase the text
+        self._conn.execute("PRAGMA secure_delete = ON")
         with self._lock, self._conn:
             self._conn.executescript(_SCHEMA)
 
@@ -69,13 +76,12 @@ class HistoryDB:
         return self.search("", limit=limit)
 
     def search(self, query: str = "", limit: int = 200) -> list[HistoryRecord]:
-        """Case-insensitive substring match on text, newest first."""
+        """Case-insensitive substring match on text, newest first. Folds case beyond ASCII, unlike LIKE."""
         sql = f"SELECT {_COLUMNS} FROM history"
         params: list[object] = []
         if query.strip():
-            escaped = query.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-            sql += " WHERE text LIKE ? ESCAPE '\\'"
-            params.append(f"%{escaped}%")
+            sql += " WHERE instr(casefold(text), ?) > 0"
+            params.append(_casefold(query.strip()))
         sql += " ORDER BY created_at DESC, id DESC LIMIT ?"
         params.append(limit)
         with self._lock:
@@ -101,3 +107,7 @@ class HistoryDB:
     def close(self) -> None:
         with self._lock:
             self._conn.close()
+
+
+def _casefold(text: str | None) -> str | None:
+    return text.casefold() if text is not None else None
