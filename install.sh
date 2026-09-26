@@ -180,6 +180,9 @@ start_service() {
     esac
 }
 
+# setuptools packs whatever is left in build/lib into the wheel, including modules deleted since
+rm -rf "$REPO/build"
+
 case "$(uname -s)" in
 Linux)
     PY=/usr/bin/python3  # the system Python: python3-gi (the tray's GTK binding) only installs there
