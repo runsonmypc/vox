@@ -9,7 +9,9 @@ import os
 import sys
 from pathlib import Path
 
-# A startup problem only the user can fix (sysexits EX_CONFIG): the login services don't restart Vox on it
+# A startup problem only the user can fix (sysexits EX_CONFIG), so restarting can't help. The login services
+# restart Vox on it unless their files opt out: RestartPreventExitStatus=78 in vox.service, and on macOS,
+# where launchd has no such setting, a plist wrapper that turns 78 into a clean exit.
 EXIT_CANNOT_START = os.EX_CONFIG
 
 
