@@ -1,6 +1,7 @@
 """Tests for writing dictionary words and snippets back to config.toml."""
 
 import asyncio
+import logging
 import os
 import stat
 import tomllib
@@ -102,6 +103,13 @@ def test_edits_dictionary_where_load_config_reads_it(tmp_path, section):
     assert data[section]["dictionary"] == ["Vox", "Kubernetes"]
     assert "# the app" in path.read_text()
     assert load_config(path).dictionary == ["Vox", "Kubernetes"]
+
+
+def test_edits_the_dictionary_load_config_reads_when_several_sections_have_one(tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_text('[attenuation]\ndictionary = ["A"]\n\n[whisper]\ndictionary = ["W"]\n')
+    update_dictionary(path, add=["x"])
+    assert load_config(path).dictionary == ["A", "x"]
 
 
 def test_add_snippet_creates_table(tmp_path):
@@ -261,3 +269,17 @@ async def test_menu_device_choice_survives_vocab_edits_but_file_changes_apply(cf
         cfg.write_text(tomlkit.dumps(doc))
         await wait_until(lambda: config.audio_device == "USB")
     recorder.reconfigure.assert_called_once_with(config)  # the live object, so later menu picks reach the recorder
+
+
+@pytest.mark.anyio
+async def test_invalid_edit_keeps_the_running_value(tmp_path, caplog):
+    path = tmp_path / "config.toml"
+    path.write_text("[attenuation]\nlevel = 0.3\n")
+    config = load_config(path)
+
+    with caplog.at_level(logging.WARNING, logger="vox.daemon"):
+        async with running_reloader(config, MagicMock()) as wait_until:
+            path.write_text('[attenuation]\nlevel = "0.8"\n')
+            await wait_until(lambda: "Config reload failed" in caplog.text)
+    assert config.attenuation_level == 0.3
+    assert "[attenuation] level" in caplog.text
