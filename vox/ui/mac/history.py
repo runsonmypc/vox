@@ -193,7 +193,7 @@ class HistoryController(NSObject):
         self.copy_button.setKeyEquivalent_("\r")  # the accent-colored default button; Return triggers it
         self.copy_button.setToolTip_("Copy to the clipboard (Return)")
         self.copy_button.setTranslatesAutoresizingMaskIntoConstraints_(False)
-        self.delete_button = kit.icon_button("trash", self, "deleteSelected:", "Delete this dictation (⌘⌫)", 14)
+        self.delete_button = kit.icon_button("trash", self, "deleteSelected:", "Delete this dictation", 14)
 
         self.text_scroll = AppKit.NSTextView.scrollableTextView()
         self.text_scroll.setDrawsBackground_(False)
