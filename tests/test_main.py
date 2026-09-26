@@ -1,6 +1,7 @@
 """Tests for the vox command's startup checks."""
 
 import os
+import stat
 from unittest.mock import patch
 
 import pytest
@@ -14,14 +15,65 @@ KEY = "sk-test-dummy-0001"
 
 
 def test_instance_lock_is_exclusive_until_released(tmp_path):
-    path = tmp_path / "vox.lock"
-    first = cli._acquire_instance_lock(path)
+    lock_dir = tmp_path / "vox"
+    first = cli._acquire_instance_lock(lock_dir)
     assert first is not None
-    assert cli._acquire_instance_lock(path) is None
-    first.close()
-    second = cli._acquire_instance_lock(path)
+    assert cli._acquire_instance_lock(lock_dir) is None
+    os.close(first)
+    second = cli._acquire_instance_lock(lock_dir)
     assert second is not None
-    second.close()
+    os.close(second)
+
+
+def test_lock_directory_is_created_owner_only(tmp_path):
+    lock_dir = tmp_path / "state" / "vox"
+    os.close(cli._acquire_instance_lock(lock_dir))
+    assert stat.S_IMODE(lock_dir.stat().st_mode) == 0o700
+
+
+def test_deleting_files_in_the_lock_directory_does_not_admit_a_second_instance(tmp_path):
+    """The old lock file in /tmp was deleted under a running Vox, and the next start ran a second one."""
+    lock_dir = tmp_path / "vox"
+    first = cli._acquire_instance_lock(lock_dir)
+    (lock_dir / "daemon.lock").touch()
+    (lock_dir / "daemon.lock").unlink()
+    assert cli._acquire_instance_lock(lock_dir) is None
+    os.close(first)
+
+
+@pytest.mark.parametrize("platform, runtime_dir, expected", [
+    ("linux", "RUNTIME", "RUNTIME/vox"),
+    ("linux", None, "HOME/.local/state/vox"),
+    ("linux", "relative/dir", "HOME/.local/state/vox"),
+    ("darwin", "RUNTIME", "HOME/.local/state/vox"),
+])
+def test_lock_directory_is_per_user_and_outside_tmp(tmp_path, monkeypatch, platform, runtime_dir, expected):
+    home, runtime = tmp_path / "home", tmp_path / "run-user-501"
+    runtime.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(cli.sys, "platform", platform)
+    monkeypatch.setattr(cli.os, "getuid", lambda: 999_999)  # no real /run/user/999999
+    if runtime_dir is None:
+        monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
+    else:
+        monkeypatch.setenv("XDG_RUNTIME_DIR", runtime_dir.replace("RUNTIME", str(runtime)))
+    assert str(cli._lock_dir()) == expected.replace("RUNTIME", str(runtime)).replace("HOME", str(home))
+
+
+def test_a_lock_that_cannot_be_made_is_an_error_not_another_instance(tmp_path, monkeypatch):
+    """Before, any error opening the lock was reported as 'already running' with exit 0, so nothing retried."""
+    parent = tmp_path / "read-only"
+    parent.mkdir()
+    parent.chmod(0o500)
+    monkeypatch.setattr("sys.argv", ["vox"])
+    monkeypatch.setattr(cli, "_lock_dir", lambda: parent / "vox")
+    try:
+        with patch("vox.config.load_config") as load_config, pytest.raises(SystemExit) as exit_info:
+            cli.main()
+    finally:
+        parent.chmod(0o700)
+    assert exit_info.value.code == cli.EXIT_CANNOT_START == 78
+    load_config.assert_not_called()
 
 
 def test_second_instance_exits_cleanly_before_config_and_permission_prompt(monkeypatch):

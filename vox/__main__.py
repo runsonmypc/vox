@@ -4,26 +4,43 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 from pathlib import Path
-from typing import IO
 
-LOCK_PATH = Path("/tmp/vox-daemon.lock")
+# A startup problem only the user can fix (sysexits EX_CONFIG): the login services don't restart Vox on it
+EXIT_CANNOT_START = os.EX_CONFIG
 
 
-def _acquire_instance_lock(path: Path = LOCK_PATH) -> IO[str] | None:
-    """Hold an advisory lock for the life of the process; None if another instance has it."""
+def _lock_dir() -> Path:
+    """Vox's per-user lock directory, where no cleaner deletes old files."""
+    if sys.platform != "darwin":
+        # The same runtime directory however Vox was started, even without XDG_RUNTIME_DIR set
+        runtime = Path(os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}")
+        if runtime.is_absolute() and runtime.is_dir():
+            return runtime / "vox"
+    return Path.home() / ".local" / "state" / "vox"
+
+
+def _acquire_instance_lock(directory: Path) -> int | None:
+    """Lock ``directory`` for the life of the process; None if another instance holds it. Raises OSError.
+
+    The lock is on the directory rather than on a file in it, so deleting a file can't let a second
+    Vox start next to the first, as happened with the old /tmp/vox-daemon.lock.
+    """
     import fcntl
+
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
     try:
-        lock = open(path, "a")
-    except OSError:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        os.close(fd)
         return None
-    try:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
-        lock.close()
-        return None
-    return lock
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
 
 
 def main() -> None:
@@ -69,7 +86,12 @@ def main() -> None:
         return
 
     # One instance at a time. Exit cleanly so launchd/systemd don't retry it, and before any permission prompt
-    lock = _acquire_instance_lock()
+    lock_dir = _lock_dir()
+    try:
+        lock = _acquire_instance_lock(lock_dir)
+    except OSError as e:
+        log.error("Couldn't lock %s to keep Vox to one instance: %s", lock_dir, e)
+        sys.exit(EXIT_CANNOT_START)
     if lock is None:
         log.info("Vox is already running.")
         return
