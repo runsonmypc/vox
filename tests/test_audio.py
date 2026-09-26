@@ -8,8 +8,17 @@ from unittest.mock import MagicMock, patch
 import numpy as np
 import pytest
 
-from vox.audio import Recorder, has_speech, resolve_input_device, to_pcm24k
+from vox.audio import (
+    Recorder,
+    has_speech,
+    is_digital_silence,
+    resolve_input_device,
+    split_at_pauses,
+    to_pcm24k,
+    upload_wavs,
+)
 from vox.config import Config
+from vox.errors import AudioError
 
 
 def test_to_pcm24k_from_48k():
@@ -98,7 +107,7 @@ async def test_recorder_streaming_and_buffer_retention():
 
     with patch("vox.audio.sd.InputStream", return_value=mock_stream):
         loop = asyncio.get_running_loop()
-        recorder.start(loop=loop)
+        recorder.start(loop=loop, stream=True)
         assert recorder.is_recording
 
         collected_chunks = []
@@ -207,43 +216,6 @@ def test_recorder_uses_resolved_device():
         assert kwargs["device"] == 1
 
 
-def test_recorder_preroll_buffer_prepended_on_start():
-    """Verify that idle pre-roll audio is prepended to the recording buffer upon start()."""
-    config = Config()
-    config.sample_rate = 16000
-    recorder = Recorder(config, preroll_ms=500)
-
-    # Simulate 3 idle chunks arriving before start() (50ms at 16kHz = 800 samples each)
-    preroll_chunk1 = np.ones(800, dtype=np.int16) * 11
-    preroll_chunk2 = np.ones(800, dtype=np.int16) * 22
-    preroll_chunk3 = np.ones(800, dtype=np.int16) * 33
-
-    recorder._callback(preroll_chunk1, 800, None, 0)
-    recorder._callback(preroll_chunk2, 800, None, 0)
-    recorder._callback(preroll_chunk3, 800, None, 0)
-
-    mock_stream = MagicMock()
-    mock_stream.active = True
-
-    with patch("vox.audio.sd.InputStream", return_value=mock_stream):
-        recorder.start()
-
-        # Active chunk during recording
-        active_chunk = np.ones(800, dtype=np.int16) * 99
-        recorder._callback(active_chunk, 800, None, 0)
-
-        wav_bytes = recorder.stop()
-
-    with wave.open(io.BytesIO(wav_bytes), "rb") as wf:
-        assert wf.getnframes() == 3200  # 3 preroll chunks + 1 active chunk = 4 * 800
-        data = np.frombuffer(wf.readframes(3200), dtype=np.int16)
-        # Verify pre-roll chunks come first
-        np.testing.assert_array_equal(data[:800], preroll_chunk1)
-        np.testing.assert_array_equal(data[800:1600], preroll_chunk2)
-        np.testing.assert_array_equal(data[1600:2400], preroll_chunk3)
-        np.testing.assert_array_equal(data[2400:], active_chunk)
-
-
 def test_has_speech_soft_and_short_utterances():
     """Verify that soft speech and short words (>=80ms) are detected and not falsely dropped."""
     sr = 16000
@@ -262,3 +234,272 @@ def test_has_speech_soft_and_short_utterances():
     assert has_speech(buf.getvalue())
 
 
+
+
+# -- Recorder: limit, memory, streaming only when asked --------------------------
+
+
+@pytest.fixture(autouse=True)
+def _no_real_devices():
+    """Keep device resolution off the real audio hardware; tests that care patch it themselves."""
+    with patch("vox.audio.sd.query_devices", return_value=[{"name": "Test Mic", "max_input_channels": 2}]):
+        yield
+
+
+class FakeStream:
+    """An InputStream stand-in; stop() can deliver one last block, as PortAudio may."""
+
+    def __init__(self, on_stop=None):
+        self.active = False
+        self._on_stop = on_stop
+
+    def start(self):
+        self.active = True
+
+    def stop(self):
+        if self._on_stop is not None:
+            self._on_stop()
+        self.active = False
+
+    def close(self):
+        pass
+
+
+def _block(value, frames=800):
+    return np.full((frames, 1), value, dtype=np.int16)
+
+
+def _wav(samples, rate, channels=1):
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(channels)
+        wf.setsampwidth(2)
+        wf.setframerate(rate)
+        wf.writeframes(np.asarray(samples, dtype=np.int16).tobytes())
+    return buf.getvalue()
+
+
+def _wav_samples(wav_bytes):
+    with wave.open(io.BytesIO(wav_bytes), "rb") as wf:
+        return np.frombuffer(wf.readframes(wf.getnframes()), dtype=np.int16), wf.getframerate()
+
+
+@pytest.mark.anyio
+async def test_recorder_stops_buffering_at_the_limit_and_reports_it_once():
+    recorder = Recorder(Config(sample_rate=16000, max_recording_seconds=1))
+    limits = []
+    with patch("vox.audio.sd.InputStream", return_value=FakeStream()):
+        recorder.start(loop=asyncio.get_running_loop(), stream=True, on_limit=lambda: limits.append(True))
+        for value in range(1, 26):  # 25 blocks of 50 ms: 1.25 s
+            recorder._callback(_block(value), 800, None, 0)
+        await asyncio.sleep(0)
+        assert recorder.limit_reached
+        assert limits == [True]
+        queued = recorder.get_chunk_queue().qsize()
+        samples, rate = _wav_samples(recorder.stop())
+
+    assert rate == 16000
+    assert len(samples) == 16000  # exactly the limit; nothing after it was kept
+    assert samples[-1] == 20
+    assert queued == 20  # the live stream stops at the same point
+
+
+@pytest.mark.anyio
+async def test_recorder_trims_the_block_that_crosses_the_limit():
+    recorder = Recorder(Config(sample_rate=16000, max_recording_seconds=1))
+    with patch("vox.audio.sd.InputStream", return_value=FakeStream()):
+        recorder.start(loop=asyncio.get_running_loop())
+        recorder._callback(_block(1, 15000), 15000, None, 0)
+        recorder._callback(_block(2, 1500), 1500, None, 0)
+        samples, _ = _wav_samples(recorder.stop())
+    assert len(samples) == 16000
+    assert (samples[15000:] == 2).all()
+
+
+@pytest.mark.anyio
+async def test_recorder_reads_the_limit_when_a_recording_starts():
+    config = Config(sample_rate=16000, max_recording_seconds=1)
+    recorder = Recorder(config)
+    with patch("vox.audio.sd.InputStream", return_value=FakeStream()):
+        recorder.start(loop=asyncio.get_running_loop())
+        config.max_recording_seconds = 60  # picked from the menu mid-recording
+        for value in range(30):
+            recorder._callback(_block(value), 800, None, 0)
+        assert len(_wav_samples(recorder.stop())[0]) == 16000
+
+        recorder.start(loop=asyncio.get_running_loop())
+        assert not recorder.limit_reached
+        for value in range(30):
+            recorder._callback(_block(value), 800, None, 0)
+        assert len(_wav_samples(recorder.stop())[0]) == 24000
+        assert not recorder.limit_reached
+
+
+@pytest.mark.anyio
+async def test_batch_recording_does_not_feed_the_stream_queue_and_stop_releases_audio():
+    recorder = Recorder(Config(sample_rate=16000))
+    with patch("vox.audio.sd.InputStream", return_value=FakeStream()):
+        recorder.start(loop=asyncio.get_running_loop())
+        recorder._callback(_block(5), 800, None, 0)
+        await asyncio.sleep(0)
+        assert recorder.get_chunk_queue().empty()
+        recorder.stop()
+        await asyncio.sleep(0)
+        assert recorder.get_chunk_queue().empty()  # no end marker either: nobody reads it
+    assert recorder._chunks == []
+
+
+def test_stop_does_not_leak_audio_into_the_next_recording():
+    """Replaces the old pre-roll test: the mic is closed between recordings, so nothing carries over."""
+    recorder = Recorder(Config(sample_rate=16000))
+    first = FakeStream(on_stop=lambda: recorder._callback(_block(7), 800, None, 0))
+    with patch("vox.audio.sd.InputStream", side_effect=[first, FakeStream()]):
+        recorder.start()
+        recorder._callback(_block(1), 800, None, 0)
+        samples, _ = _wav_samples(recorder.stop())
+        assert list(np.unique(samples)) == [1, 7]  # the block delivered while stopping is kept
+
+        recorder._callback(_block(9), 800, None, 0)  # a stray block between recordings is dropped
+        recorder.start()
+        recorder._callback(_block(2), 800, None, 0)
+        samples, _ = _wav_samples(recorder.stop())
+    assert list(np.unique(samples)) == [2]
+
+
+def test_stop_without_audio_raises_and_the_recorder_still_works():
+    recorder = Recorder(Config(sample_rate=16000))
+    with patch("vox.audio.sd.InputStream", side_effect=[FakeStream(), FakeStream()]):
+        recorder.start()
+        with pytest.raises(AudioError):
+            recorder.stop()
+        recorder.start()
+        recorder._callback(_block(4), 800, None, 0)
+        assert len(_wav_samples(recorder.stop())[0]) == 800
+
+
+def test_start_failure_leaves_the_recorder_idle():
+    recorder = Recorder(Config(sample_rate=16000))
+    with patch("vox.audio.sd.InputStream", side_effect=RuntimeError("no device")):
+        with pytest.raises(AudioError):
+            recorder.start()
+    assert not recorder._is_recording
+    recorder._callback(_block(3), 800, None, 0)
+    assert recorder._chunks == []
+
+
+def test_reconfigure_during_a_recording_waits_for_it_to_end():
+    config = Config(sample_rate=48000, max_recording_seconds=30)
+    recorder = Recorder(config)
+    with patch("vox.audio.sd.InputStream", return_value=FakeStream()), patch.object(recorder, "warmup"):
+        recorder.start()
+        recorder._callback(_block(3, 2400), 2400, None, 0)
+        recorder.reconfigure(Config(sample_rate=16000, max_recording_seconds=30))
+        assert recorder._sample_rate == 48000
+        samples, rate = _wav_samples(recorder.stop())
+        assert (len(samples), rate) == (2400, 48000)  # the recording survived, at its own rate
+
+        assert recorder._sample_rate == 16000
+        recorder.start()
+        assert recorder._max_frames == 30 * 16000  # the limit follows the new rate
+        recorder.discard()
+
+
+def test_refresh_input_devices_restarts_portaudio_only_when_idle():
+    devices = [
+        {"name": "Speakers", "max_input_channels": 0},
+        {"name": "USB Mic", "max_input_channels": 1},
+        {"name": "Built-in Mic", "max_input_channels": 2},
+    ]
+    recorder = Recorder(Config())
+    recorder._resolved_device = 5
+    with patch("vox.audio.sd.query_devices", return_value=devices), \
+         patch("vox.audio.sd._initialized", 1), \
+         patch("vox.audio.sd._terminate") as terminate, \
+         patch("vox.audio.sd._initialize") as initialize, \
+         patch("vox.audio.sd.stop") as stop_playback, \
+         patch("vox.audio.sd.InputStream", return_value=FakeStream()):
+        assert recorder.refresh_input_devices() == [(1, "USB Mic"), (2, "Built-in Mic")]
+        stop_playback.assert_called_once()
+        terminate.assert_called_once()
+        initialize.assert_called_once()
+        assert recorder._resolved_device is None  # indices may have moved
+
+        recorder.start()
+        assert recorder.refresh_input_devices() is None  # would close the open stream
+        assert terminate.call_count == 1
+        recorder.discard()
+
+
+def test_resolve_input_device_prefers_an_exact_name():
+    devices = [
+        {"name": "USB Mic 2", "max_input_channels": 1},
+        {"name": "USB Mic", "max_input_channels": 1},
+    ]
+    with patch("vox.audio.sd.query_devices", return_value=devices):
+        assert resolve_input_device("USB Mic") == 1
+        assert resolve_input_device("usb mic 2") == 0
+        assert resolve_input_device("usb") == 0
+
+
+# -- Speech detection and WAV conversion ---------------------------------------------
+
+
+def test_has_speech_stops_at_the_first_80ms_of_speech():
+    loud = (np.sin(np.linspace(0, 20000, 48000 * 60)) * 8000).astype(np.int16)
+    with patch("vox.audio.webrtcvad.Vad") as vad:
+        vad.return_value.is_speech.return_value = True
+        assert has_speech(_wav(loud, 48000))
+    assert vad.return_value.is_speech.call_count == 3  # ceil(80 / 30), not 2000 frames
+
+
+def test_has_speech_assumes_speech_when_detection_breaks(caplog):
+    assert has_speech(b"not a wav") is True
+    assert "transcribing anyway" in caplog.text
+
+
+def test_upload_wavs_downsamples_to_16k_mono():
+    ramp = (np.arange(48000 * 3) % 30000).astype(np.int16)
+    [upload] = upload_wavs(_wav(ramp, 48000))
+    with wave.open(io.BytesIO(upload), "rb") as wf:
+        assert (wf.getframerate(), wf.getnchannels(), wf.getsampwidth()) == (16000, 1, 2)
+        samples = np.frombuffer(wf.readframes(wf.getnframes()), dtype=np.int16)
+    np.testing.assert_array_equal(samples, ramp[::3])
+
+    stereo = np.stack([np.full(4410, 1000), np.full(4410, 3000)], axis=1).astype(np.int16)
+    [upload] = upload_wavs(_wav(stereo.ravel(), 44100, channels=2))
+    with wave.open(io.BytesIO(upload), "rb") as wf:
+        assert (wf.getframerate(), wf.getnchannels(), wf.getnframes()) == (16000, 1, 1600)
+        assert set(np.frombuffer(wf.readframes(1600), dtype=np.int16).tolist()) == {2000}
+
+
+def test_upload_wavs_splits_an_oversized_recording_in_a_pause():
+    rate = 16000
+    speech = (np.sin(np.linspace(0, 30000, rate * 10)) * 8000).astype(np.int16)
+    speech[int(rate * 7.0):int(rate * 7.5)] = 0  # a half-second pause
+    max_bytes = 44 + 2 * rate * 8  # room for 8 s per upload
+
+    parts = upload_wavs(_wav(speech, rate), max_bytes=max_bytes)
+
+    assert len(parts) == 2
+    assert all(len(part) <= max_bytes for part in parts)
+    first, second = (_wav_samples(part)[0] for part in parts)
+    assert rate * 7.0 <= len(first) <= rate * 7.5  # cut inside the pause, not mid-word
+    np.testing.assert_array_equal(np.concatenate([first, second]), speech)
+
+
+def test_split_at_pauses_keeps_short_audio_whole_and_bounds_every_part():
+    samples = np.ones(100, dtype=np.int16)
+    [part] = split_at_pauses(samples, 16000, 1000)
+    np.testing.assert_array_equal(part, samples)
+
+    noise = np.random.default_rng(0).integers(-3000, 3000, 16000 * 30).astype(np.int16)
+    parts = split_at_pauses(noise, 16000, 16000 * 7)
+    assert all(len(p) <= 16000 * 7 for p in parts)
+    np.testing.assert_array_equal(np.concatenate(parts), noise)
+
+
+def test_is_digital_silence_flags_only_all_zero_audio():
+    assert is_digital_silence(_wav(np.zeros(1600), 16000))
+    assert not is_digital_silence(_wav(np.r_[np.zeros(1599), 1], 16000))
+    assert not is_digital_silence(_wav([], 16000))
+    assert not is_digital_silence(b"")
