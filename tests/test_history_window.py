@@ -378,6 +378,14 @@ def test_mac_command_delete_in_the_list_deletes_once_but_edits_text_in_the_searc
         assert len(db.search("")) == 2
 
 
+def test_mac_command_delete_while_reading_does_not_delete(appkit, db, mac_window):
+    window = mac_window.window
+    assert window.makeFirstResponder_(mac_window.text_view)
+    event = _key(appkit, window, "\x7f", 51, appkit.NSEventModifierFlagCommand)
+    assert mac_window.handle_key(event) is event
+    assert len(db.search("")) == 3
+
+
 def test_mac_clear_history_asks_first_then_empties_the_list(appkit, db, mac_window):
     assert mac_window.clear_button.isEnabled()
     mac_window.clearHistory_(mac_window.clear_button)

@@ -480,8 +480,8 @@ class HistoryController(NSObject):
             self._sync_search()  # move through the results for what's typed, not the previous search
             self.move_selection(1 if code == kit.KEY_DOWN else -1)
             return None
-        if command and code == kit.KEY_DELETE and not in_search:
-            # In the search field ⌘⌫ edits the text; a held key deletes one dictation, not a run of them
+        if command and code == kit.KEY_DELETE and responder == self.table:
+            # Only in the list: elsewhere ⌘⌫ edits text or does nothing; a held key deletes one dictation, not a run
             if not event.isARepeat():
                 self.deleteSelected_(None)
             return None
