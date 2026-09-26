@@ -32,21 +32,6 @@ def _in_background(work: Callable[[], object], done: Callable[[object], None]) -
     threading.Thread(target=lambda: AppHelper.callAfter(done, work()), daemon=True).start()
 
 
-def _confirm(window: AppKit.NSWindow, title: str, message: str, button: str, destructive: bool,
-             then: Callable[[], None]) -> None:
-    alert = AppKit.NSAlert.alloc().init()
-    alert.setMessageText_(title)
-    alert.setInformativeText_(message)
-    alert.addButtonWithTitle_(button).setHasDestructiveAction_(destructive)
-    alert.addButtonWithTitle_("Cancel")
-
-    def done(response: int) -> None:
-        if response == AppKit.NSAlertFirstButtonReturn:
-            then()
-
-    alert.beginSheetModalForWindow_completionHandler_(window, done)
-
-
 def _key_field(secure: bool) -> AppKit.NSTextField:
     field = (AppKit.NSSecureTextField if secure else AppKit.NSTextField).alloc().init()
     field.setPlaceholderString_("sk-…")
@@ -65,7 +50,7 @@ class KeyController(NSObject):
         self.model = model
         self.closed = False
         self.background = _in_background  # replaced in tests
-        self.confirm = _confirm
+        self.confirm = kit.confirm
         self._build()
         self.render()
         return self

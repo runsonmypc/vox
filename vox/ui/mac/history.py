@@ -1,8 +1,9 @@
 """History window for macOS: a translucent sidebar of dictations beside a reading pane.
 
 Type to search, move with the arrow keys, and press Return (or double-click,
-or use a row's copy button) to put a dictation back on the clipboard. New
-dictations appear while the window is open.
+or use a row's copy button) to put a dictation back on the clipboard. Delete
+removes the dictation you're reading (⌘⌫ in the list), and Clear History in
+the toolbar removes them all. New dictations appear while the window is open.
 """
 
 from __future__ import annotations
@@ -14,7 +15,7 @@ import objc
 from Foundation import NSObject
 
 from ...history import HistoryDB
-from ..history_model import Entry, HistoryModel
+from ..history_model import CLEAR_BUTTON, Entry, HistoryModel
 from . import kit
 
 log = logging.getLogger(__name__)
@@ -26,6 +27,7 @@ _DAY_HEIGHT = 24
 _POLL_SECONDS = 2.0
 _COPIED_SECONDS = 1.5
 _TEXT_INSET = 28
+_CLEAR_ITEM = "VoxClearHistory"
 
 
 def uses_24_hour_clock() -> bool:
@@ -92,6 +94,8 @@ class HistoryController(NSObject):
             return None
         self.model = model
         self._flash_token = 0
+        self._shown_id: int | None = None  # the dictation in the reading pane
+        self.confirm = kit.confirm  # replaced in tests
         self._build()
         kit.attach(self.table, self)
         self.refresh()
@@ -119,6 +123,9 @@ class HistoryController(NSObject):
         self.window.setContentViewController_(split)
         self.window.setContentSize_(_SIZE)
 
+        self.clear_button = AppKit.NSButton.buttonWithTitle_target_action_(f"{CLEAR_BUTTON}…", self, "clearHistory:")
+        self.clear_button.setBezelStyle_(AppKit.NSBezelStyleTexturedRounded)
+        self.clear_button.setToolTip_("Delete every dictation")
         toolbar = AppKit.NSToolbar.alloc().initWithIdentifier_("VoxHistory")
         toolbar.setDelegate_(self)
         toolbar.setDisplayMode_(AppKit.NSToolbarDisplayModeIconOnly)
@@ -142,8 +149,14 @@ class HistoryController(NSObject):
         self.table.setFloatsGroupRows_(True)
         self.table.setDoubleAction_("copySelected:")
 
-        view.addSubview_(self.search)
-        view.addSubview_(scroll)
+        # Under the list when it shows only the newest results
+        self.footer = kit.label("", 11, color=AppKit.NSColor.tertiaryLabelColor(), wrap=True)
+        self.footer.setAlignment_(AppKit.NSTextAlignmentCenter)
+        self.footer.setPreferredMaxLayoutWidth_(228)  # the narrowest sidebar, less its margins
+        self.footer.setHidden_(True)
+
+        for sub in (self.search, scroll, self.footer):
+            view.addSubview_(sub)
         safe = view.safeAreaLayoutGuide()
         kit.constrain(
             self.search.topAnchor().constraintEqualToAnchor_constant_(safe.topAnchor(), 6),
@@ -152,8 +165,13 @@ class HistoryController(NSObject):
             scroll.topAnchor().constraintEqualToAnchor_constant_(self.search.bottomAnchor(), 8),
             scroll.leadingAnchor().constraintEqualToAnchor_(view.leadingAnchor()),
             scroll.trailingAnchor().constraintEqualToAnchor_(view.trailingAnchor()),
-            scroll.bottomAnchor().constraintEqualToAnchor_(view.bottomAnchor()),
+            self.footer.leadingAnchor().constraintEqualToAnchor_constant_(view.leadingAnchor(), 16),
+            view.trailingAnchor().constraintEqualToAnchor_constant_(self.footer.trailingAnchor(), 16),
+            view.bottomAnchor().constraintEqualToAnchor_constant_(self.footer.bottomAnchor(), 10),
         )
+        self._list_to_bottom = scroll.bottomAnchor().constraintEqualToAnchor_(view.bottomAnchor())
+        self._list_to_footer = self.footer.topAnchor().constraintEqualToAnchor_constant_(scroll.bottomAnchor(), 8)
+        self._list_to_bottom.setActive_(True)
         return view
 
     @objc.python_method
@@ -175,6 +193,7 @@ class HistoryController(NSObject):
         self.copy_button.setKeyEquivalent_("\r")  # the accent-colored default button; Return triggers it
         self.copy_button.setToolTip_("Copy to the clipboard (Return)")
         self.copy_button.setTranslatesAutoresizingMaskIntoConstraints_(False)
+        self.delete_button = kit.icon_button("trash", self, "deleteSelected:", "Delete this dictation (⌘⌫)", 14)
 
         self.text_scroll = AppKit.NSTextView.scrollableTextView()
         self.text_scroll.setDrawsBackground_(False)
@@ -187,12 +206,14 @@ class HistoryController(NSObject):
         self.text_view.textContainer().setLineFragmentPadding_(0)
 
         self.content = AppKit.NSView.alloc().init()
-        for sub in (titles, self.copy_button, self.text_scroll):
+        for sub in (titles, self.delete_button, self.copy_button, self.text_scroll):
             self.content.addSubview_(sub)
         kit.constrain(
             titles.topAnchor().constraintEqualToAnchor_constant_(self.content.topAnchor(), 18),
             titles.leadingAnchor().constraintEqualToAnchor_constant_(self.content.leadingAnchor(), _TEXT_INSET),
-            titles.trailingAnchor().constraintLessThanOrEqualToAnchor_constant_(self.copy_button.leadingAnchor(), -16),
+            titles.trailingAnchor().constraintLessThanOrEqualToAnchor_constant_(self.delete_button.leadingAnchor(), -16),
+            self.delete_button.centerYAnchor().constraintEqualToAnchor_(titles.centerYAnchor()),
+            self.copy_button.leadingAnchor().constraintEqualToAnchor_constant_(self.delete_button.trailingAnchor(), 12),
             self.copy_button.centerYAnchor().constraintEqualToAnchor_(titles.centerYAnchor()),
             self.content.trailingAnchor().constraintEqualToAnchor_constant_(self.copy_button.trailingAnchor(), _TEXT_INSET - 4),
             self.text_scroll.topAnchor().constraintEqualToAnchor_constant_(titles.bottomAnchor(), 18),
@@ -208,16 +229,22 @@ class HistoryController(NSObject):
         kit.center(self.empty, view.safeAreaLayoutGuide())
         return view
 
-    # -- Toolbar: only the sidebar separator, so the title sits over the reading pane
+    # -- Toolbar: the sidebar separator, so the title sits over the reading pane, then Clear History at the end
 
     def toolbarDefaultItemIdentifiers_(self, toolbar) -> list:
-        return [AppKit.NSToolbarSidebarTrackingSeparatorItemIdentifier]
+        return [AppKit.NSToolbarSidebarTrackingSeparatorItemIdentifier, AppKit.NSToolbarFlexibleSpaceItemIdentifier,
+                _CLEAR_ITEM]
 
     def toolbarAllowedItemIdentifiers_(self, toolbar) -> list:
         return self.toolbarDefaultItemIdentifiers_(toolbar)
 
     def toolbar_itemForItemIdentifier_willBeInsertedIntoToolbar_(self, toolbar, identifier, insert):
-        return None
+        if identifier != _CLEAR_ITEM:
+            return None
+        item = AppKit.NSToolbarItem.alloc().initWithItemIdentifier_(identifier)
+        item.setLabel_(CLEAR_BUTTON)
+        item.setView_(self.clear_button)
+        return item
 
     # -- Table ------------------------------------------------------------
 
@@ -254,18 +281,41 @@ class HistoryController(NSObject):
     # -- Actions ----------------------------------------------------------
 
     def searchChanged_(self, sender) -> None:
-        self.refresh()
+        # The field sends this after a typing pause, often after Return or an arrow key already ran the search
+        self._sync_search()
 
     def copySelected_(self, sender) -> None:
-        entry = self.selected_entry()
+        if isinstance(sender, AppKit.NSTableView):
+            # A double-click copies the row clicked; on a day heading or blank space, nothing
+            entry = self._entry_at(sender.clickedRow())
+        else:
+            self._sync_search()  # Return right after typing copies the newest match, not the old selection
+            entry = self.selected_entry()
         if entry is not None:
             self._copy(entry, self.copy_button)
 
     def copyRow_(self, sender) -> None:
         row = self.table.rowForView_(sender)
-        if 0 <= row < len(self.model.rows) and isinstance(self.model.rows[row], Entry):
+        entry = self._entry_at(row)
+        if entry is not None:
             self.table.selectRowIndexes_byExtendingSelection_(AppKit.NSIndexSet.indexSetWithIndex_(row), False)
-            self._copy(self.model.rows[row], sender)
+            self._copy(entry, sender)
+
+    def deleteSelected_(self, sender) -> None:
+        entry = self.selected_entry()
+        if entry is None:
+            return
+        keep = self.model.neighbor_id(entry)
+        error = self.model.delete(entry)
+        if error:
+            kit.alert(self.window, "Couldn’t Delete the Dictation", error)
+            return
+        self._render(keep)
+
+    def clearHistory_(self, sender) -> None:
+        if self.model.total:
+            title, message = self.model.clear_confirmation()
+            self.confirm(self.window, title, message, CLEAR_BUTTON, True, self._clear)
 
     def poll_(self, timer) -> None:
         entry = self.selected_entry()
@@ -285,8 +335,29 @@ class HistoryController(NSObject):
         self._render(None)
 
     @objc.python_method
+    def _sync_search(self) -> None:
+        if self.search.stringValue() != self.model.query:
+            self.refresh()
+
+    @objc.python_method
+    def _clear(self) -> None:
+        error = self.model.clear()
+        if error:
+            kit.alert(self.window, "Couldn’t Clear the History", error)
+            return
+        self._render(None)
+
+    @objc.python_method
     def _render(self, keep_id: int | None) -> None:
         self.search.setPlaceholderString_(self.model.placeholder)
+        self.clear_button.setEnabled_(self.model.total > 0)
+        footer = self.model.footer
+        self.footer.setStringValue_(footer or "")
+        self.footer.setHidden_(footer is None)
+        on, off = (self._list_to_footer, self._list_to_bottom) if footer else (self._list_to_bottom, self._list_to_footer)
+        off.setActive_(False)  # first, so the two never hold at once
+        on.setActive_(True)
+
         self.table.reloadData()
         rows = self.model.rows
         entries = [i for i, row in enumerate(rows) if isinstance(row, Entry)]
@@ -301,7 +372,10 @@ class HistoryController(NSObject):
 
     @objc.python_method
     def selected_entry(self) -> Entry | None:
-        row = self.table.selectedRow()
+        return self._entry_at(self.table.selectedRow())
+
+    @objc.python_method
+    def _entry_at(self, row: int) -> Entry | None:
         rows = self.model.rows
         return rows[row] if 0 <= row < len(rows) and isinstance(rows[row], Entry) else None
 
@@ -311,16 +385,21 @@ class HistoryController(NSObject):
         self.content.setHidden_(entry is None)
         self.empty.setHidden_(entry is not None)
         if entry is None:
-            title, message = self.model.empty_state() or ("No Selection", "Choose a dictation to read it here.")
+            self._shown_id = None
+            title, message = self.model.detail_placeholder()
             icon = "magnifyingglass" if self.model.query.strip() else "waveform"
             self.empty.views()[0].setImage_(kit.symbol(icon, 34, AppKit.NSFontWeightLight))
             self.empty_title.setStringValue_(title)
             self.empty_message.setStringValue_(message)
             return
+        # The stamp can say "Today" or "Yesterday", so it's redrawn even when the dictation is the same
         self.stamp.setStringValue_(entry.stamp)
         self.details.setStringValue_(entry.details or "Dictation")
         name = kit.APP_SYMBOLS.get(entry.record.app_type or "", kit.DEFAULT_APP_SYMBOL)
         self.app_icon.setImage_(kit.symbol(name, 11))
+        if entry.record.id == self._shown_id:
+            return  # already showing: keep the reader's scroll position and selected words
+        self._shown_id = entry.record.id
         self._reset_copy_button()
 
         paragraph = AppKit.NSMutableParagraphStyle.alloc().init()
@@ -385,7 +464,7 @@ class HistoryController(NSObject):
         plain = not flags & ~(AppKit.NSEventModifierFlagFunction | AppKit.NSEventModifierFlagNumericPad)
         command = flags == AppKit.NSEventModifierFlagCommand
         in_search = self.search.currentEditor() is not None and responder == self.search.currentEditor()
-        key = (event.charactersIgnoringModifiers() or "").lower()
+        key = kit.shortcut_key(event) if command else ""
 
         if code == kit.KEY_ESCAPE and plain:
             if self.search.stringValue():
@@ -398,14 +477,20 @@ class HistoryController(NSObject):
             self.copySelected_(None)
             return None
         if in_search and code in (kit.KEY_DOWN, kit.KEY_UP) and plain:
+            self._sync_search()  # move through the results for what's typed, not the previous search
             self.move_selection(1 if code == kit.KEY_DOWN else -1)
             return None
-        if command and key == "c":
+        if command and code == kit.KEY_DELETE and not in_search:
+            # In the search field ⌘⌫ edits the text; a held key deletes one dictation, not a run of them
+            if not event.isARepeat():
+                self.deleteSelected_(None)
+            return None
+        if key == "c":
             if isinstance(responder, AppKit.NSTextView) and responder.selectedRange().length > 0:
                 return event  # copy the selected words, not the whole dictation
             self.copySelected_(None)
             return None
-        if command and key == "f":
+        if key == "f":
             self.window.makeFirstResponder_(self.search)
             return None
         typed = event.characters() or ""

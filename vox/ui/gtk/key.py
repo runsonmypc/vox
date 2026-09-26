@@ -13,7 +13,7 @@ from collections.abc import Callable
 
 from ...keystore import KeystoreError
 from ..key_model import CHECK_BY_DEFAULT, KEYS_URL, CheckResult, KeyModel, Outcome, check_key
-from .common import Adw, GLib, Gtk, error_dialog, label, run_app
+from .common import Adw, GLib, Gtk, confirm, error_dialog, label, run_app
 
 log = logging.getLogger(__name__)
 
@@ -35,26 +35,13 @@ def _in_background(work: Callable[[], object], done: Callable[[object], None]) -
     threading.Thread(target=run, daemon=True).start()
 
 
-def _confirm(parent: Gtk.Widget, title: str, message: str, button: str, destructive: bool,
-             then: Callable[[], None]) -> None:
-    dialog = Adw.AlertDialog(heading=title, body=message)
-    dialog.add_response("cancel", "Cancel")
-    dialog.add_response("confirm", button)
-    dialog.set_response_appearance(
-        "confirm", Adw.ResponseAppearance.DESTRUCTIVE if destructive else Adw.ResponseAppearance.SUGGESTED
-    )
-    dialog.set_default_response("cancel" if destructive else "confirm")
-    dialog.connect("response", lambda _dialog, response: then() if response == "confirm" else None)
-    dialog.present(parent)
-
-
 class KeyWindow(Adw.ApplicationWindow):
     def __init__(self, model: KeyModel, **kwargs) -> None:
         super().__init__(title="OpenAI API Key", default_width=520, **kwargs)
         self.model = model
         self.closed = False
         self.background = _in_background  # replaced in tests
-        self.confirm = _confirm
+        self.confirm = confirm
 
         cancel = Gtk.Button(label="Cancel")
         cancel.connect("clicked", lambda _button: self.finish())
