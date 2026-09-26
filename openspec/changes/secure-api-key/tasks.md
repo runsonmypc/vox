@@ -32,5 +32,5 @@
 ## 6. Verification
 
 - [x] 6.1 Run the full test suite on the Mac and the window, tray and integration tests on the PC under `dbus-run-session -- xvfb-run -a`; verify all pass
-- [ ] 6.2 With the user's go-ahead, run `./install.sh` on the Mac and confirm from the log that the key moved into the Keychain and `~/.config/vox/.env` is gone, without printing the key
-- [ ] 6.3 With the user's go-ahead, pull and install on the PC and confirm the same against GNOME Keyring
+- [x] 6.2 With the user's go-ahead, run `./install.sh` on the Mac and confirm from the log that the key moved into the Keychain and `~/.config/vox/.env` is gone, without printing the key
+- [x] 6.3 With the user's go-ahead, pull and install on the PC and confirm the same against GNOME Keyring
