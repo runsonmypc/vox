@@ -82,6 +82,34 @@ def test_mode_switch_preserves_legacy_model_for_old_provider(tmp_path, old_mode,
     assert data[section][key] == "old-model"
 
 
+def test_mode_switch_keeps_the_effective_model_over_a_legacy_provider_model(tmp_path):
+    """[transcription] model wins over [whisper] model, so switching modes must not bring the shadowed one back."""
+    path = tmp_path / "config.toml"
+    path.write_text('[whisper]\nmodel = "whisper-1"\n\n[transcription]\nmode = "batch"\nmodel = "gpt-4o-transcribe"\n')
+    assert load_config(path).whisper_model == "gpt-4o-transcribe"
+    update_transcription_mode(path, "streaming")
+    assert "gpt-4o-transcribe" in path.read_text()
+    update_transcription_mode(path, "batch")
+    assert load_config(path).whisper_model == "gpt-4o-transcribe"
+
+
+def test_mode_switch_keeps_the_effective_streaming_model(tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_text('[transcription]\nmode = "streaming"\nmodel = "live-new"\nstreaming_model = "live-old"\n')
+    assert load_config(path).streaming_model == "live-new"
+    update_transcription_mode(path, "batch")
+    update_transcription_mode(path, "streaming")
+    assert load_config(path).streaming_model == "live-new"
+
+
+def test_mode_switch_keeps_the_effective_whisper_cpp_model(tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_text('[whisper_cpp]\nmodel = "old.bin"\n\n[transcription]\nmode = "whisper_cpp"\nmodel = "new.bin"\n')
+    update_transcription_mode(path, "batch")
+    update_transcription_mode(path, "whisper_cpp")
+    assert load_config(path).whisper_cpp_model == "new.bin"
+
+
 def test_add_skips_duplicates_and_blanks(cfg):
     update_dictionary(cfg, add=["FastAPI"])
     assert update_dictionary(cfg, add=["fastapi", "  ", "", " Kubernetes "]) == ["FastAPI", "Kubernetes"]

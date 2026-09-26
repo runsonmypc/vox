@@ -334,16 +334,15 @@ def update_transcription_mode(path: Path, mode: str) -> None:
     transcription = doc["transcription"]
     old_mode = transcription.get("mode", doc.get("whisper", {}).get("mode", "batch"))
     if old_mode != mode and "model" in transcription:
+        # The generic model was the one in effect for the old provider, so it replaces that provider's own setting
         old_model = transcription.pop("model")
         if old_mode == "streaming":
-            if "streaming_model" not in transcription:
-                transcription["streaming_model"] = old_model
+            transcription["streaming_model"] = old_model
         elif old_mode in ("batch", "whisper_cpp"):
             section = "whisper" if old_mode == "batch" else "whisper_cpp"
             if section not in doc:
                 doc[section] = tomlkit.table()
-            if "model" not in doc[section]:
-                doc[section]["model"] = old_model
+            doc[section]["model"] = old_model
     transcription["mode"] = mode
     _write_document(path, doc)
 
