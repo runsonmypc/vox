@@ -39,6 +39,10 @@ class RecordingTray:
         self.stopped = False
         self.key_windows = 0
         self.key_changes = 0
+        self.mode_changes = 0
+        self.notices = []
+        self.limit_changes = 0
+        self.device_lists = []
 
     def attach(self, loop, queue, history, main_task):
         self.attached = (loop, queue, history, main_task)
@@ -58,13 +62,28 @@ class RecordingTray:
     def key_changed(self):
         self.key_changes += 1
 
+    def mode_changed(self):
+        self.mode_changes += 1
+
+    def set_notice(self, text):
+        self.notices.append(text)
+
+    def limit_changed(self):
+        self.limit_changes += 1
+
+    def devices_changed(self, devices):
+        self.device_lists.append(devices)
+
     def stop(self):
         self.stopped = True
 
 
 @contextmanager
-def daemon_env(transcript="hello world"):
-    """Patch the daemon's hardware and network dependencies; yield the mocks."""
+def daemon_env(transcript="hello world", screen_capture=None):
+    """Patch the daemon's hardware and network dependencies; yield the mocks.
+
+    The screen capture finishes at once unless ``screen_capture`` stands in for it.
+    """
     env = {
         "recorder": MagicMock(),
         "sounds": MagicMock(),
@@ -78,12 +97,18 @@ def daemon_env(transcript="hello world"):
         await asyncio.Event().wait()
 
     loop = asyncio.get_running_loop()
+
+    def captured(ctx):
+        future = loop.create_future()
+        future.set_result("")
+        return future
+
     with patch("vox.daemon.HotkeyListener"), \
          patch("vox.daemon.Recorder", return_value=env["recorder"]), \
          patch("vox.daemon.SoundPlayer", return_value=env["sounds"]), \
          patch("vox.daemon.WhisperTranscriber", return_value=env["batch"]), \
          patch("vox.daemon._config_reloader", side_effect=idle_reloader), \
-         patch("vox.daemon.start_screen_capture", side_effect=lambda ctx: loop.create_future()), \
+         patch("vox.daemon.start_screen_capture", side_effect=screen_capture or captured), \
          patch("vox.daemon.detect_active_window", return_value=AppContext("code", "VSCode", AppType.EDITOR)), \
          patch("vox.daemon.has_speech", return_value=True), \
          patch("vox.daemon.paste", env["paste"]), \
@@ -139,6 +164,20 @@ async def test_dictation_turn_propagates_states_and_persists_history():
 
         await stop_daemon(task)
     assert tray.stopped is True
+
+
+@pytest.mark.anyio
+async def test_a_screen_capture_that_never_finishes_still_pastes():
+    tray = RecordingTray()
+    loop = asyncio.get_running_loop()
+    with daemon_env("still pasted", screen_capture=lambda ctx: loop.create_future()) as env:
+        task = await start_daemon(tray)
+        _, queue, _, _ = tray.attached
+        await queue.put("toggle")
+        await queue.put("toggle")
+        await wait_for(lambda: tray.states == ["RECORDING", "PROCESSING", "IDLE"], timeout=5.0)
+        env["paste"].assert_called_once_with("still pasted", AppType.EDITOR)
+        await stop_daemon(task)
 
 
 @pytest.mark.anyio
@@ -321,7 +360,7 @@ async def test_menu_to_daemon_to_icon_round_trip():
 
     tray = TrayManager(Config(openai_api_key="test"), icon_factory=FakeIcon, dispatch=immediate)
     icon = tray._icon
-    with daemon_env("round trip") as env:
+    with daemon_env("round trip"):
         task = await start_daemon(tray)
 
         find(icon.menu, "Pause Dictation")(icon)
