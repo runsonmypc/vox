@@ -60,7 +60,7 @@ def _collect_text(obj, chunks: list[str], depth: int, atspi) -> None:
                 cc = atspi.Text.get_character_count(child)
                 if cc > 0:
                     text = atspi.Text.get_text(child, 0, min(cc, 500))
-                    cleaned = text.strip().replace("￼", "").replace("�", "").strip()
+                    cleaned = text.strip().replace("\ufffc", "").replace("\ufffd", "").strip()
                     if cleaned:
                         chunks.append(cleaned)
             _collect_text(child, chunks, depth + 1, atspi)

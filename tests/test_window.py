@@ -73,7 +73,7 @@ def test_linux_non_utf8_title_does_not_raise():
     tools = _x11_tools(b"caf\xe9 - xterm")
     with patch("vox.window.subprocess.run", tools.run):
         ctx = window._detect_active_window_linux(Config())
-    assert ctx.window_title == "caf� - xterm"
+    assert ctx.window_title == "caf\ufffd - xterm"
     assert ctx.wm_class == "kitty"
 
 
