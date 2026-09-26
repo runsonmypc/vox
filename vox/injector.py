@@ -130,14 +130,21 @@ def _paste_macos(text: str, app_type: AppType) -> None:
 
 def _snapshot_pasteboard(pb) -> list[dict] | None:
     """Every item with the data of every type it offers; None when it could not be read."""
+    started = time.monotonic()
     try:
-        return [
+        saved = [
             {t: data for t in item.types() if (data := item.dataForType_(t)) is not None}
             for item in pb.pasteboardItems() or ()
         ]
     except Exception:
         log.warning("Failed to read the clipboard; it will not be restored", exc_info=True)
         return None
+    # Reading every type makes the source app render the ones it provides lazily (PDF, TIFF...)
+    log.debug(
+        "Saved %d clipboard types in %.0f ms",
+        sum(len(types) for types in saved), (time.monotonic() - started) * 1000,
+    )
+    return saved
 
 
 def _write_transient(pb, text: str) -> int:
@@ -174,11 +181,26 @@ def _restore_pasteboard(pb, saved: list[dict] | None, written: int | None) -> No
                 item.setData_forType_(data, pasteboard_type)
             items.append(item)
         # An empty snapshot still clears, so the dictation does not linger on the clipboard
-        pb.clearContents()
-        if items:
-            pb.writeObjects_(items)
+        cleared = pb.clearContents()
+        if items and not pb.writeObjects_(items):
+            _restore_text_only(pb, saved, cleared)
     except Exception:
         log.warning("Failed to restore clipboard", exc_info=True)
+
+
+def _restore_text_only(pb, saved: list[dict], cleared: int) -> None:
+    """The pasteboard refused the full snapshot: put back at least its plain text."""
+    from AppKit import NSPasteboardTypeString
+
+    if pb.changeCount() != cleared:
+        log.debug("Clipboard changed during the restore; keeping the newer contents")
+        return
+    text = next((types[NSPasteboardTypeString] for types in saved if NSPasteboardTypeString in types), None)
+    pb.clearContents()
+    if text is not None and pb.setData_forType_(text, NSPasteboardTypeString):
+        log.warning("The clipboard refused its saved contents; restored only its text")
+    else:
+        log.warning("The clipboard refused its saved contents; it was left empty")
 
 
 def _paste_keycode() -> int:

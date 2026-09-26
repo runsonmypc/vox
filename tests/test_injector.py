@@ -155,6 +155,63 @@ def test_macos_copy_during_paste_is_not_overwritten(pasteboard):
     assert pasteboard.pb.stringForType_(AppKit.NSPasteboardTypeString) == "copied meanwhile"
 
 
+class RefusingPasteboard:
+    """The private pasteboard, except that writing the restored items back is refused."""
+
+    def __init__(self, pb, on_write=None) -> None:
+        self._pb = pb
+        self._on_write = on_write
+
+    def __getattr__(self, name):
+        return getattr(self._pb, name)
+
+    def writeObjects_(self, objects):
+        if self._on_write is not None:
+            self._on_write()
+        return False
+
+
+@darwin_only
+def test_macos_refused_restore_falls_back_to_the_text(pasteboard, caplog):
+    """If the full snapshot cannot be written back, the clipboard still gets its text, not nothing."""
+    _write_items(pasteboard.pb, {"public.utf8-plain-text": b"what I copied", "public.html": b"<b>what</b>"})
+
+    with patch.object(injector, "_general_pasteboard", return_value=RefusingPasteboard(pasteboard.pb)):
+        injector.paste("dictated", AppType.EDITOR)
+
+    assert _items(pasteboard.pb) == [{"public.utf8-plain-text": b"what I copied"}]
+    assert "restored only its text" in caplog.text
+
+
+@darwin_only
+def test_macos_snapshot_time_is_logged(pasteboard, caplog):
+    """Saving every type can be slow (the source app renders lazy types); -v shows how slow."""
+    _write_items(pasteboard.pb, {"public.utf8-plain-text": b"a", "public.html": b"<b>a</b>"})
+
+    with caplog.at_level("DEBUG", logger="vox.injector"):
+        injector.paste("dictated", AppType.EDITOR)
+
+    assert "Saved 2 clipboard types in" in caplog.text
+
+
+@darwin_only
+def test_macos_refused_restore_keeps_a_copy_made_meanwhile(pasteboard):
+    """A write refused because another app copied first must not overwrite that copy."""
+    import AppKit
+
+    _write_items(pasteboard.pb, {"public.utf8-plain-text": b"original"})
+
+    def copy_elsewhere():
+        pasteboard.pb.clearContents()
+        pasteboard.pb.setString_forType_("copied meanwhile", AppKit.NSPasteboardTypeString)
+
+    refusing = RefusingPasteboard(pasteboard.pb, on_write=copy_elsewhere)
+    with patch.object(injector, "_general_pasteboard", return_value=refusing):
+        injector.paste("dictated", AppType.EDITOR)
+
+    assert pasteboard.pb.stringForType_(AppKit.NSPasteboardTypeString) == "copied meanwhile"
+
+
 @darwin_only
 def test_macos_paste_failure_restores_and_raises(pasteboard):
     import AppKit
