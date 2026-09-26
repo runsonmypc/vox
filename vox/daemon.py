@@ -17,7 +17,7 @@ from .config import DEFAULT_CONFIG_PATH, Config, load_config, update_transcripti
 from .errors import ConfigError
 from .history import HistoryDB
 from .hotkey import HotkeyListener
-from .injector import inject_text, paste
+from .injector import paste
 from .keystore import KeystoreError, get_api_key
 from .sounds import SoundPlayer
 from .streaming import StreamingTranscriber
@@ -460,7 +460,7 @@ async def _process(
                     # Allow stream worker up to 1.5s to finish pushing final buffered chunks
                     try:
                         await asyncio.wait_for(stream_task, timeout=1.5)
-                    except asyncio.TimeoutError:
+                    except TimeoutError:
                         log.warning("Stream worker timed out pushing chunks")
 
                 text = await streaming_transcriber.finish(timeout=3.0)

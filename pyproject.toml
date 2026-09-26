@@ -40,3 +40,10 @@ include = ["vox*"]
 
 [project.scripts]
 vox = "vox.__main__:main"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 140
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "UP", "B", "S602", "S604", "RUF100"]

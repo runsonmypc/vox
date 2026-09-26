@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 import threading
-from typing import Callable
+from collections.abc import Callable
 
 from ...keystore import KeystoreError
 from ..key_model import CHECK_BY_DEFAULT, KEYS_URL, CheckResult, KeyModel, Outcome, check_key

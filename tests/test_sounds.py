@@ -1,6 +1,5 @@
 """Tests for audio feedback sounds and macOS alert sound mappings."""
 
-import sys
 from unittest.mock import MagicMock, patch
 
 from vox.config import Config

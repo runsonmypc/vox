@@ -16,7 +16,8 @@ import os
 import subprocess
 import sys
 import threading
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 import sounddevice as sd
 

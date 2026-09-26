@@ -2,7 +2,7 @@
 
 import sqlite3
 import sys
-from datetime import date, datetime, timedelta, timezone
+from datetime import UTC, date, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -25,7 +25,7 @@ NOON = datetime.now().astimezone().replace(hour=12, minute=0, second=0, microsec
 
 def add(db: HistoryDB, text: str, days: int = 0, hours: int = 0, app: str | None = "TERMINAL",
         duration: float | None = 4.2) -> None:
-    at = (NOON - timedelta(days=days, hours=hours)).astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    at = (NOON - timedelta(days=days, hours=hours)).astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S")
     with sqlite3.connect(db.path) as conn:
         conn.execute(
             "INSERT INTO history (created_at, text, app_type, duration_seconds) VALUES (?, ?, ?, ?)",

@@ -111,7 +111,7 @@ def _get_macos_window_title(app_name: str, pid: int | None = None) -> str:
     """Retrieve window title via Quartz (fast, ~20ms) with fallback to AppleScript and app name."""
     if pid is not None:
         try:
-            from Quartz import CGWindowListCopyWindowInfo, kCGWindowListOptionOnScreenOnly, kCGNullWindowID
+            from Quartz import CGWindowListCopyWindowInfo, kCGNullWindowID, kCGWindowListOptionOnScreenOnly
             windows = CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly, kCGNullWindowID)
             for w in windows:
                 if w.get("kCGWindowOwnerPID") == pid and w.get("kCGWindowName"):
@@ -256,8 +256,8 @@ def _read_vision_ocr() -> str:
         if res.returncode != 0 or not os.path.exists(tmp_path):
             return ""
 
-        from Foundation import NSURL, NSDictionary
         import Vision
+        from Foundation import NSURL, NSDictionary
 
         ns_url = NSURL.fileURLWithPath_(tmp_path)
         handler = Vision.VNImageRequestHandler.alloc().initWithURL_options_(ns_url, NSDictionary.dictionary())

@@ -11,7 +11,6 @@ import pytest
 from keyring.backends import fail
 
 from vox import keystore
-from vox.ui import key_model
 from vox.ui.key_model import CheckResult, KeyModel, Outcome, check_key
 
 KEY = "sk-test-dummy-0001"

@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
-from typing import Callable
+from datetime import UTC, date, datetime
 
 from ..history import HistoryDB, HistoryRecord
 
@@ -23,7 +23,7 @@ def default_copy(text: str) -> None:
 def local_datetime(created_at: str) -> datetime | None:
     """A UTC SQLite timestamp as local time, or None when it can't be parsed."""
     try:
-        utc = datetime.strptime(created_at, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+        utc = datetime.strptime(created_at, "%Y-%m-%d %H:%M:%S").replace(tzinfo=UTC)
     except (TypeError, ValueError):
         return None
     return utc.astimezone()

@@ -3,15 +3,14 @@
 from __future__ import annotations
 
 import logging
+import sys
+import time
 from pathlib import Path
 
 import numpy as np
 import sounddevice as sd
 
 from .config import Config
-
-import sys
-import time
 
 log = logging.getLogger(__name__)
 

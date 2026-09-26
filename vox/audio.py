@@ -5,13 +5,14 @@ from __future__ import annotations
 import asyncio
 import io
 import logging
+import warnings
 import wave
 from collections import deque
-from typing import AsyncGenerator
+from collections.abc import AsyncGenerator
 
 import numpy as np
 import sounddevice as sd
-import warnings
+
 with warnings.catch_warnings():
     warnings.simplefilter("ignore", category=UserWarning)
     import webrtcvad

@@ -12,7 +12,14 @@ from vox.config import Config
 from vox.history import HistoryDB
 from vox.ui.icons import IconState, make_icon
 from vox.ui.tray import (
-    HISTORY_WINDOW, KEY_WINDOW, RECENT_HEADER, SET_KEY, VOCAB_WINDOW, TrayManager, _recent_label, _selected_device,
+    HISTORY_WINDOW,
+    KEY_WINDOW,
+    RECENT_HEADER,
+    SET_KEY,
+    VOCAB_WINDOW,
+    TrayManager,
+    _recent_label,
+    _selected_device,
 )
 
 DEVICES = [

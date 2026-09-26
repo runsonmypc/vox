@@ -11,7 +11,8 @@ import time
 # Xlib is Linux-only; avoid failing on macOS where Xlib is not installed
 if sys.platform != "darwin":
     try:
-        from Xlib import XK, display as xdisplay
+        from Xlib import XK
+        from Xlib import display as xdisplay
         from Xlib.ext import xtest
     except ImportError:
         pass

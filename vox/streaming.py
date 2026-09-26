@@ -166,7 +166,7 @@ class StreamingTranscriber:
 
         try:
             await asyncio.wait_for(self._completed_event.wait(), timeout=timeout)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             log.warning("Timed out waiting for transcription completion; using accumulated deltas")
             if not self._final_transcript:
                 self._final_transcript = "".join(self._deltas)
