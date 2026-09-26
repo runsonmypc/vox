@@ -125,6 +125,11 @@ def test_check_key(error, outcome, words):
     assert KEY not in result.message
 
 
+def test_unchecked_result_asks_to_save_anyway():
+    result = CheckResult(Outcome.UNCHECKED, "Vox couldn’t reach OpenAI to check the key.")
+    assert result.save_anyway_question == "Vox couldn’t reach OpenAI to check the key. Save it anyway?"
+
+
 # -- Launch -------------------------------------------------------------------------
 
 

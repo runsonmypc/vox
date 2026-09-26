@@ -12,14 +12,28 @@ import threading
 from collections.abc import Callable
 
 from ...keystore import KeystoreError
-from ..key_model import CHECK_BY_DEFAULT, KEYS_URL, CheckResult, KeyModel, Outcome, check_key
+from ..key_model import (
+    CHECK_BY_DEFAULT,
+    CHECK_FAILED_TITLE,
+    CHECKING,
+    INTRO,
+    KEYS_URL,
+    REMOVE_BUTTON,
+    REMOVE_FAILED_TITLE,
+    REMOVE_MESSAGE,
+    REMOVE_TITLE,
+    SAVE_ANYWAY,
+    SAVE_FAILED_TITLE,
+    CheckResult,
+    KeyModel,
+    Outcome,
+    check_key,
+)
 from .common import Adw, GLib, Gtk, confirm, error_dialog, label, run_app
 
 log = logging.getLogger(__name__)
 
 APP_ID = "com.runsonmypc.vox.ApiKey"
-
-_INTRO = "Vox sends your dictation to OpenAI to transcribe it, using your own API key."
 
 
 def _in_background(work: Callable[[], object], done: Callable[[object], None]) -> None:
@@ -53,7 +67,7 @@ class KeyWindow(Adw.ApplicationWindow):
         header.pack_end(self.save_button)
 
         link = Gtk.LinkButton(uri=KEYS_URL, label="Get a Key", valign=Gtk.Align.CENTER)
-        key_group = Adw.PreferencesGroup(description=_INTRO, header_suffix=link)
+        key_group = Adw.PreferencesGroup(description=INTRO, header_suffix=link)
         self.entry = Adw.PasswordEntryRow(title="API key")
         self.entry.connect("entry-activated", lambda _row: self.save())
         self.check_row = Adw.SwitchRow(title="Check with OpenAI before saving", active=CHECK_BY_DEFAULT)
@@ -130,7 +144,7 @@ class KeyWindow(Adw.ApplicationWindow):
             self.store(key)
             return
         self.set_busy(True)
-        self.set_status("Checking with OpenAI…")
+        self.set_status(CHECKING)
         self.background(lambda: check_key(key), lambda result: self.checked(key, result))
 
     def checked(self, key: str, result: CheckResult) -> None:
@@ -141,28 +155,27 @@ class KeyWindow(Adw.ApplicationWindow):
             self.set_status(result.message, error=True)
         else:
             self.set_status("")
-            self.confirm(self, "Couldn’t Check the Key", f"{result.message} Save it anyway?",
-                         "Save Anyway", False, lambda: self.store(key))
+            self.confirm(self, CHECK_FAILED_TITLE, result.save_anyway_question,
+                         SAVE_ANYWAY, False, lambda: self.store(key))
 
     def store(self, key: str) -> None:
         try:
             self.model.save(key)
         except (KeystoreError, OSError) as e:
             log.warning("Couldn't save the API key: %s", e)
-            error_dialog(self, "Couldn’t Save the Key", str(e))
+            error_dialog(self, SAVE_FAILED_TITLE, str(e))
             return
         log.info("Saved the OpenAI API key")
         self.finish()
 
     def remove(self) -> None:
-        self.confirm(self, "Remove the Saved Key?", "Vox can’t transcribe with OpenAI until you save a key again.",
-                     "Remove", True, self.remove_key)
+        self.confirm(self, REMOVE_TITLE, REMOVE_MESSAGE, REMOVE_BUTTON, True, self.remove_key)
 
     def remove_key(self) -> None:
         try:
             self.model.remove()
         except (KeystoreError, OSError) as e:
-            error_dialog(self, "Couldn’t Remove the Key", str(e))
+            error_dialog(self, REMOVE_FAILED_TITLE, str(e))
             return
         log.info("Removed the OpenAI API key")
         self.finish()
