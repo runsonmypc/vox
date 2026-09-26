@@ -45,12 +45,18 @@ class HistoryDB:
         self.path = path or DEFAULT_HISTORY_PATH
         # Dictations are private: an owner-only file, whose mode SQLite also gives its journal files
         self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if self.path.parent == DEFAULT_HISTORY_PATH.parent:  # Vox's own data directory, made 0755 by older versions
+            try:
+                os.chmod(self.path.parent, 0o700)
+            except OSError as e:  # not the user's to change; the database file is still owner-only
+                log.warning("Couldn't make %s owner-only: %s", self.path.parent, e)
         os.close(os.open(self.path, os.O_RDWR | os.O_CREAT, 0o600))
         os.chmod(self.path, 0o600)  # tightens a database made before this
         self._lock = threading.Lock()
         self._conn = sqlite3.connect(self.path, check_same_thread=False)
         self._conn.create_function("casefold", 1, _casefold, deterministic=True)
-        # Overwrite deleted rows with zeros, so Delete and Clear History really erase the text
+        # Delete and Clear History overwrite the text with zeros in the database file. The rollback journal
+        # holds a copy only while the delete runs, and is then removed rather than overwritten.
         self._conn.execute("PRAGMA secure_delete = ON")
         with self._lock, self._conn:
             self._conn.executescript(_SCHEMA)

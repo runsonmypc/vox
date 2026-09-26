@@ -135,6 +135,44 @@ def test_existing_database_is_made_owner_only(tmp_path):
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
 
+def test_existing_vox_data_directory_is_made_owner_only(tmp_path, monkeypatch):
+    path = tmp_path / "share" / "vox" / "history.db"
+    monkeypatch.setattr("vox.history.DEFAULT_HISTORY_PATH", path)
+    path.parent.mkdir(parents=True)
+    for directory in (path.parent, path.parent.parent):
+        os.chmod(directory, 0o755)  # as older versions left them, whatever the umask
+    HistoryDB().close()
+    assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
+    assert stat.S_IMODE(path.parent.parent.stat().st_mode) == 0o755  # never ~/.local/share itself
+
+
+def test_a_directory_given_by_path_keeps_its_mode(tmp_path):
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    os.chmod(shared, 0o755)
+    HistoryDB(shared / "history.db").close()
+    assert stat.S_IMODE(shared.stat().st_mode) == 0o755
+
+
+def test_history_opens_when_its_directory_cannot_be_made_private(tmp_path, monkeypatch, caplog):
+    path = tmp_path / "vox" / "history.db"
+    monkeypatch.setattr("vox.history.DEFAULT_HISTORY_PATH", path)
+    chmod = os.chmod
+
+    def refuse_directory(target, mode):
+        if target == path.parent:
+            raise PermissionError(1, "Operation not permitted")
+        chmod(target, mode)
+
+    monkeypatch.setattr("vox.history.os.chmod", refuse_directory)
+    history = HistoryDB()
+    history.insert("still saved")
+    assert [r.text for r in history.search()] == ["still saved"]
+    history.close()
+    assert "Couldn't make" in caplog.text
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
 def test_delete_and_clear_remove_rows(db):
     first = db.insert("first")
     db.insert("second")
