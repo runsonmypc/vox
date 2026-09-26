@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.metadata
 import logging
 import os
 import sys
@@ -43,11 +44,19 @@ def _acquire_instance_lock(directory: Path) -> int | None:
     return fd
 
 
+def _version() -> str:
+    try:
+        return importlib.metadata.version("vox")
+    except importlib.metadata.PackageNotFoundError:  # run from a checkout that was never installed
+        return "unknown"
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="vox",
         description="Voice-to-text daemon for Linux and macOS",
     )
+    parser.add_argument("--version", action="version", version=f"%(prog)s {_version()}")
     parser.add_argument(
         "--config", "-c",
         type=Path,
@@ -140,7 +149,7 @@ def main() -> None:
             "Enable Accessibility in System Settings -> Privacy & Security -> Accessibility."
         )
 
-    log.info("Starting vox daemon...")
+    log.info("Starting vox %s daemon...", _version())
 
     try:
         from .daemon import run

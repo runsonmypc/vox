@@ -1,5 +1,6 @@
 """Tests for the vox command's startup checks."""
 
+import importlib.metadata
 import os
 import stat
 from unittest.mock import patch
@@ -74,6 +75,14 @@ def test_a_lock_that_cannot_be_made_is_an_error_not_another_instance(tmp_path, m
         parent.chmod(0o700)
     assert exit_info.value.code == cli.EXIT_CANNOT_START == 78
     load_config.assert_not_called()
+
+
+def test_version_flag_prints_the_package_version(monkeypatch, capsys):
+    monkeypatch.setattr("sys.argv", ["vox", "--version"])
+    with pytest.raises(SystemExit) as exit_info:
+        cli.main()
+    assert exit_info.value.code == 0
+    assert capsys.readouterr().out.strip() == f"vox {importlib.metadata.version('vox')}"
 
 
 def test_second_instance_exits_cleanly_before_config_and_permission_prompt(monkeypatch):
