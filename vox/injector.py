@@ -116,7 +116,7 @@ def _get_clipboard() -> str | None:
         return None
 
 
-def _set_clipboard(text: str) -> None:
+def set_clipboard(text: str) -> None:
     """Set clipboard contents to string."""
     if sys.platform == "darwin":
         try:
@@ -153,7 +153,7 @@ def _inject_text_macos(text: str, app_type: AppType) -> None:
     """Inject text on macOS using NSPasteboard and Cmd+V."""
     original_clipboard = _get_clipboard()
     try:
-        _set_clipboard(text)
+        set_clipboard(text)
         time.sleep(0.05)
         _simulate_paste_macos()
         log.debug("Injected %d chars via Cmd+V on macOS (app_type=%s)", len(text), app_type.value)
@@ -165,7 +165,7 @@ def _inject_text_macos(text: str, app_type: AppType) -> None:
     finally:
         if original_clipboard is not None:
             try:
-                _set_clipboard(original_clipboard)
+                set_clipboard(original_clipboard)
             except Exception:
                 log.warning("Failed to restore clipboard")
 

@@ -1,5 +1,6 @@
 [Unit]
 Description=Vox voice-to-text daemon
+PartOf=graphical-session.target
 After=graphical-session.target
 
 [Service]
@@ -7,7 +8,6 @@ Type=simple
 ExecStart=%h/.local/bin/vox
 Restart=on-failure
 RestartSec=3
-Environment=DISPLAY=:1
 
 [Install]
-WantedBy=default.target
+WantedBy=graphical-session.target

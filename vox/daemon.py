@@ -3,19 +3,27 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
+import threading
 import time
+import wave
 from enum import Enum
+from typing import TYPE_CHECKING
 
 from .attenuation import get_volume, set_volume
 from .audio import Recorder, has_speech
 from .config import Config, load_config
+from .history import HistoryDB
 from .hotkey import HotkeyListener
 from .injector import inject_text, paste
 from .sounds import SoundPlayer
 from .streaming import StreamingTranscriber
 from .transcribe import WhisperTranscriber
 from .window import AppContext, detect_active_window, start_screen_capture
+
+if TYPE_CHECKING:
+    from .ui.tray import TrayManager
 
 log = logging.getLogger(__name__)
 
@@ -27,11 +35,39 @@ class State(Enum):
 
 
 def run(config: Config) -> None:
-    """Entry point — run the asyncio event loop."""
-    asyncio.run(_main(config))
+    """Entry point — run the asyncio event loop.
+
+    With a tray icon, the tray owns the main thread (Cocoa and GTK want their
+    event loop there) and the event loop runs in a worker thread. Otherwise the
+    event loop runs on the main thread.
+    """
+    from .ui.tray import create_tray
+
+    tray = create_tray(config)
+    if tray is None:
+        asyncio.run(_main(config))
+        return
+
+    errors: list[BaseException] = []
+
+    def daemon() -> None:
+        try:
+            asyncio.run(_main(config, tray))
+        except BaseException as e:
+            errors.append(e)
+        finally:
+            tray.stop()
+
+    thread = threading.Thread(target=daemon, name="vox-daemon", daemon=True)
+    thread.start()
+    tray.run()
+    tray.request_quit()  # no-op if the daemon already exited
+    thread.join(timeout=5)
+    if errors:
+        raise errors[0]
 
 
-async def _main(config: Config) -> None:
+async def _main(config: Config, tray: TrayManager | None = None) -> None:
     loop = asyncio.get_running_loop()
     queue: asyncio.Queue[str] = asyncio.Queue()
 
@@ -40,10 +76,12 @@ async def _main(config: Config) -> None:
     batch_transcriber = WhisperTranscriber(config)
     sounds = SoundPlayer(config)
     hotkey = HotkeyListener(config, loop, queue)
+    history = _open_history()
 
     hotkey.start()
 
     state = State.IDLE
+    paused = False
     process_task: asyncio.Task | None = None
     stream_task: asyncio.Task | None = None
     streaming_transcriber: StreamingTranscriber | None = None
@@ -52,15 +90,40 @@ async def _main(config: Config) -> None:
     saved_volume: float | None = None
     log.info("Vox ready (%s mode). Press %s to toggle recording.", config.mode, config.hotkey)
 
+    def set_state(new_state: State) -> None:
+        nonlocal state
+        state = new_state
+        if tray is not None:
+            tray.set_state(new_state.value)
+
+    if tray is not None:
+        tray.attach(loop, queue, history, asyncio.current_task())
+
     reload_task = asyncio.create_task(_config_reloader(config, sounds, recorder))
 
     try:
         while True:
             event = await queue.get()
 
+            if event in ("pause", "resume"):
+                paused = event == "pause"
+                log.info("Dictation %s", "paused" if paused else "resumed")
+                if tray is not None:
+                    tray.set_paused(paused)
+                if paused and state == State.RECORDING:
+                    event = "cancel"  # discard the in-progress recording and release the mic
+                else:
+                    sounds.play(event)
+                    continue
+            elif paused and event in ("toggle", "cancel"):
+                log.info("Ignoring %s while paused", event)
+                if event == "toggle":
+                    sounds.play("busy")
+                continue
+
             if event == "toggle":
                 if state == State.IDLE:
-                    state = State.RECORDING
+                    set_state(State.RECORDING)
 
                     # 1. Start audio recording IMMEDIATELY with zero startup latency
                     try:
@@ -68,7 +131,7 @@ async def _main(config: Config) -> None:
                     except Exception as e:
                         log.error("Failed to start recording: %s", e)
                         sounds.play("error")
-                        state = State.IDLE
+                        set_state(State.IDLE)
                         continue
 
                     # 2. Play start audio feedback non-blocking
@@ -99,7 +162,7 @@ async def _main(config: Config) -> None:
                         set_volume(saved_volume)
                         saved_volume = None
 
-                    state = State.PROCESSING
+                    set_state(State.PROCESSING)
                     sounds.play("stop", blocking=False)
                     log.info("Processing...")
 
@@ -111,7 +174,7 @@ async def _main(config: Config) -> None:
                     except Exception as e:
                         log.error("Failed to stop recording: %s", e)
                         sounds.play("error")
-                        state = State.IDLE
+                        set_state(State.IDLE)
                         screen_capture_future = None
                         if stream_task is not None:
                             stream_task.cancel()
@@ -134,6 +197,8 @@ async def _main(config: Config) -> None:
                         queue=queue,
                         context=stop_context,
                         screen_capture_future=screen_capture_future,
+                        history=history,
+                        tray=tray,
                     ))
                     streaming_transcriber = None
                     stream_task = None
@@ -173,7 +238,7 @@ async def _main(config: Config) -> None:
 
                     recording_context = None
                     sounds.play("cancel")
-                    state = State.IDLE
+                    set_state(State.IDLE)
                     log.info("Recording cancelled, state reset to IDLE")
 
                 elif state == State.PROCESSING:
@@ -195,7 +260,7 @@ async def _main(config: Config) -> None:
 
                     recording_context = None
                     sounds.play("cancel")
-                    state = State.IDLE
+                    set_state(State.IDLE)
                     log.info("Processing cancelled, state reset to IDLE")
 
                 elif state == State.IDLE:
@@ -203,7 +268,7 @@ async def _main(config: Config) -> None:
 
             elif event == "process_done":
                 if state == State.PROCESSING:
-                    state = State.IDLE
+                    set_state(State.IDLE)
                     process_task = None
                     log.info("Processing complete, ready")
     except asyncio.CancelledError:
@@ -212,6 +277,18 @@ async def _main(config: Config) -> None:
         reload_task.cancel()
         hotkey.stop()
         recorder.close()
+        if history is not None:
+            history.close()
+        if tray is not None:
+            tray.stop()
+
+
+def _open_history() -> HistoryDB | None:
+    try:
+        return HistoryDB()
+    except Exception as e:
+        log.warning("Dictation history disabled: %s", e)
+        return None
 
 
 async def _stream_worker(
@@ -243,6 +320,8 @@ async def _process(
     queue: asyncio.Queue[str],
     context: AppContext,
     screen_capture_future: asyncio.Future | None,
+    history: HistoryDB | None = None,
+    tray: TrayManager | None = None,
 ) -> None:
     """Process recorded audio: finalize streaming or transcribe via batch, then inject."""
     try:
@@ -321,6 +400,11 @@ async def _process(
         # Single-shot paste injection via paste / inject_text
         paste(text, context.app_type)
 
+        if history is not None:
+            saved = await _record_history(history, text, context, wav_data, "streaming" if used_streaming else "batch")
+            if saved and tray is not None:
+                tray.history_changed()
+
         elapsed = time.monotonic() - t0
         log.info("Done in %.3fs (%s)", elapsed, "streaming" if used_streaming else "batch")
 
@@ -343,6 +427,35 @@ async def _process(
         queue.put_nowait("process_done")
 
 
+async def _record_history(
+    history: HistoryDB,
+    text: str,
+    context: AppContext,
+    wav_data: bytes,
+    transcription_mode: str,
+) -> bool:
+    """Persist an injected dictation. Failures are logged, never raised: the paste already happened."""
+    try:
+        return await asyncio.to_thread(
+            history.insert,
+            text,
+            app_type=context.app_type.value,
+            duration_seconds=_wav_duration(wav_data),
+            transcription_mode=transcription_mode,
+        ) is not None
+    except Exception as e:
+        log.warning("Failed to save dictation history: %s", e)
+        return False
+
+
+def _wav_duration(wav_data: bytes) -> float | None:
+    try:
+        with wave.open(io.BytesIO(wav_data), "rb") as wf:
+            return wf.getnframes() / wf.getframerate()
+    except Exception:
+        return None
+
+
 async def _config_reloader(config: Config, sounds: SoundPlayer, recorder: Recorder | None = None) -> None:
     """Poll config file mtime and reload hot-reloadable settings every 2s."""
     if config.config_path is None:
@@ -353,6 +466,7 @@ async def _config_reloader(config: Config, sounds: SoundPlayer, recorder: Record
         last_mtime = config.config_path.stat().st_mtime
     except OSError:
         pass
+    file_audio = (config.audio_device, config.sample_rate)
 
     while True:
         await asyncio.sleep(2)
@@ -377,11 +491,14 @@ async def _config_reloader(config: Config, sounds: SoundPlayer, recorder: Record
             config.mode = new_config.mode
             config.streaming_model = new_config.streaming_model
 
-            if recorder is not None and (new_config.audio_device != config.audio_device or new_config.sample_rate != config.sample_rate):
-                recorder.reconfigure(new_config)
-
-            config.audio_device = new_config.audio_device
-            config.sample_rate = new_config.sample_rate
+            # Apply audio settings only when the file changed them, so a device picked
+            # from the menu bar survives unrelated edits such as vocabulary changes.
+            new_file_audio = (new_config.audio_device, new_config.sample_rate)
+            if new_file_audio != file_audio:
+                file_audio = new_file_audio
+                config.audio_device, config.sample_rate = new_file_audio
+                if recorder is not None:
+                    recorder.reconfigure(config)
 
             sounds._enabled = new_config.sounds_enabled
 

@@ -2,10 +2,16 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
+import stat
+import tempfile
 import tomllib
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
+
+import tomlkit
 
 from .errors import ConfigError
 
@@ -190,3 +196,105 @@ def _apply_section(config: Config, data: dict, section: str, mapping: dict[str, 
     for toml_key, attr_name in mapping.items():
         if toml_key in data[section]:
             setattr(config, attr_name, data[section][toml_key])
+
+
+# Sections load_config() searches for `dictionary`, in precedence order (None = top level)
+_DICTIONARY_SECTIONS: tuple[str | None, ...] = (None, "transcription", "attenuation", "whisper")
+
+
+def update_dictionary(path: Path, *, add: Iterable[str] = (), remove: Iterable[str] = ()) -> list[str]:
+    """Add and remove custom dictionary words in config.toml, keeping comments and layout.
+
+    Edits `dictionary` wherever load_config() reads it from, creating a top-level
+    key if none exists. Words already present (case-insensitively) are not added
+    twice. Returns the resulting list.
+    """
+    doc = _read_document(path)
+    container = doc
+    for section in _DICTIONARY_SECTIONS:
+        candidate = doc if section is None else doc.get(section)
+        if candidate is not None and candidate.get("dictionary") is not None:
+            container = candidate
+            break
+    if container.get("dictionary") is None:
+        container["dictionary"] = tomlkit.array()
+    words = container["dictionary"]
+
+    removals = set(remove)
+    for i in reversed(range(len(words))):
+        if words[i] in removals:
+            del words[i]
+    seen = {str(w).lower() for w in words}
+    for word in add:
+        word = word.strip()
+        if word and word.lower() not in seen:
+            words.append(word)
+            seen.add(word.lower())
+
+    result = [str(w) for w in words]
+    _write_document(path, doc)
+    return result
+
+
+def update_snippet(path: Path, trigger: str, expansion: str | None) -> dict[str, str]:
+    """Set a snippet expansion in config.toml, or remove it when `expansion` is None.
+
+    A trigger that matches an existing one the way the daemon compares them
+    (ignoring case and trailing punctuation) replaces it. Returns the resulting
+    snippets.
+    """
+    trigger = trigger.strip()
+    if not trigger:
+        raise ValueError("Snippet trigger must not be empty")
+    if expansion is not None and not expansion.strip():
+        raise ValueError("Snippet expansion must not be empty")
+
+    doc = _read_document(path)
+    if "snippets" not in doc:
+        doc["snippets"] = tomlkit.table()
+    snippets = doc["snippets"]
+    for key in [k for k in snippets if _snippet_key(k) == _snippet_key(trigger)]:
+        del snippets[key]
+    if expansion is not None:
+        snippets[trigger] = expansion
+
+    result = {str(k): str(v) for k, v in snippets.items()}
+    _write_document(path, doc)
+    return result
+
+
+def _snippet_key(trigger: str) -> str:
+    return trigger.strip().rstrip(".?!,").lower()
+
+
+def _read_document(path: Path) -> tomlkit.TOMLDocument:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return tomlkit.document()
+    try:
+        return tomlkit.parse(text)
+    except Exception as e:
+        raise ConfigError(f"Failed to parse config file {path}: {e}") from e
+
+
+def _write_document(path: Path, doc: tomlkit.TOMLDocument) -> None:
+    """Write atomically (temp file + os.replace), following symlinks and keeping file permissions."""
+    text = tomlkit.dumps(doc)
+    tomllib.loads(text)  # never replace a valid config with an unparseable one
+
+    target = path.resolve()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=target.parent, prefix=f".{target.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
+        with contextlib.suppress(FileNotFoundError):
+            os.chmod(tmp, stat.S_IMODE(target.stat().st_mode))  # new files keep the 0600 from mkstemp
+        os.replace(tmp, target)
+    except BaseException:
+        with contextlib.suppress(FileNotFoundError):
+            os.unlink(tmp)
+        raise

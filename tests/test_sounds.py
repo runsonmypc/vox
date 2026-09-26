@@ -26,6 +26,8 @@ def test_sound_player_macos_alert_mapping():
             mock_sound_named.assert_any_call("Basso")
             mock_sound_named.assert_any_call("Funk")
             mock_sound_named.assert_any_call("Blow")
+            mock_sound_named.assert_any_call("Bottle")
+            mock_sound_named.assert_any_call("Glass")
 
 
 def test_sound_player_linux_fallback():
@@ -36,7 +38,7 @@ def test_sound_player_linux_fallback():
     with patch("sys.platform", "linux"):
         player = SoundPlayer(config)
         assert player._is_darwin is False
-        assert set(player._sounds.keys()) == {"start", "stop", "error", "busy", "cancel"}
+        assert set(player._sounds.keys()) == {"start", "stop", "error", "busy", "cancel", "pause", "resume"}
         for name, sound_arr in player._sounds.items():
             assert isinstance(sound_arr, np.ndarray)
             assert sound_arr.dtype == np.float32

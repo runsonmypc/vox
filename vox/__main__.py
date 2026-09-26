@@ -6,6 +6,24 @@ import argparse
 import logging
 import sys
 from pathlib import Path
+from typing import IO
+
+LOCK_PATH = Path("/tmp/vox-daemon.lock")
+
+
+def _acquire_instance_lock(path: Path = LOCK_PATH) -> IO[str] | None:
+    """Hold an advisory lock for the life of the process; None if another instance has it."""
+    import fcntl
+    try:
+        lock = open(path, "a")
+    except OSError:
+        return None
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        lock.close()
+        return None
+    return lock
 
 
 def main() -> None:
@@ -50,6 +68,12 @@ def main() -> None:
             sys.exit(1)
         return
 
+    # One instance at a time. Exit cleanly so launchd/systemd don't retry it, and before any permission prompt
+    lock = _acquire_instance_lock()
+    if lock is None:
+        log.info("Vox is already running.")
+        return
+
     from .config import load_config
     from .errors import ConfigError, DependencyError
 
@@ -78,16 +102,6 @@ def main() -> None:
             "Global hotkeys and text injection require Accessibility permissions.\n"
             "Enable Accessibility in System Settings -> Privacy & Security -> Accessibility."
         )
-
-    # Prevent multiple instances via advisory file lock
-    import fcntl
-    _lock_path = Path("/tmp/vox-daemon.lock")
-    try:
-        _lock_file = open(_lock_path, "a")
-        fcntl.flock(_lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except (BlockingIOError, OSError):
-        log.error("Another vox instance is already running.")
-        sys.exit(1)
 
     log.info("Starting vox daemon...")
 

@@ -5,7 +5,7 @@ Provides a lightweight, cross-platform system tray and desktop management interf
 ## ADDED Requirements
 
 ### Requirement: System Tray Status Indicator
-The system SHALL provide a cross-platform system tray icon on macOS and Linux that visually reflects the current daemon state.
+The system SHALL provide a system tray icon on macOS (menu bar) and Linux (AppIndicator / StatusNotifierItem) that visually reflects the current daemon state. Wherever no graphical session or tray support is available, the daemon SHALL run headless as before.
 
 #### Scenario: Idle state representation
 - **WHEN** the daemon is idle and ready for recording
@@ -14,6 +14,37 @@ The system SHALL provide a cross-platform system tray icon on macOS and Linux th
 #### Scenario: Recording state representation
 - **WHEN** recording is toggled on
 - **THEN** the system tray icon immediately updates to a distinct active recording visual indicator (such as a red dot or highlighted microphone)
+
+#### Scenario: Headless fallback
+- **WHEN** the daemon starts without a graphical session, or on Linux without PyGObject and AppIndicator support
+- **THEN** no tray icon is created, the daemon runs headless with unchanged dictation behavior, and an informational notice is logged
+
+#### Scenario: Linux desktop without a tray host
+- **WHEN** the daemon starts on a Linux desktop where no StatusNotifierItem host is running (such as GNOME without the AppIndicator extension)
+- **THEN** the tray icon is still registered, a notice explains how to enable a tray host, and the icon appears once a host starts
+
+### Requirement: Self-Contained Per-User Installation
+The system SHALL provide one install script for macOS and Linux that installs Vox and its tray support for the current user, without keeping the source checkout and without a compiler.
+
+#### Scenario: Fresh install
+- **WHEN** the user runs `./install.sh`
+- **THEN** Vox is installed into its own virtualenv with a `vox` command, missing system packages are installed, and once an OpenAI API key is configured Vox starts at login and a Vox launcher is added to the system's applications
+
+#### Scenario: Start after Quit
+- **WHEN** the user has quit Vox from the tray and opens the Vox launcher (the Applications folder or Spotlight on macOS, the applications list on Linux)
+- **THEN** Vox starts again through its login service with the same permissions, and opening the launcher while Vox is running does nothing
+
+#### Scenario: Already running
+- **WHEN** Vox is started while another instance is running
+- **THEN** it exits successfully before any permission prompt, so the service manager does not retry it
+
+#### Scenario: GNOME tray host
+- **WHEN** the installer runs on GNOME and no tray host is present
+- **THEN** it installs and enables the AppIndicator extension through GNOME's own confirmation dialog, without sudo or logging out
+
+#### Scenario: Update
+- **WHEN** the user runs `./install.sh` again from a newer checkout
+- **THEN** the virtualenv is rebuilt from that checkout, existing configuration and history are kept, and the running service is restarted
 
 ### Requirement: Audio Device Selection from Tray
 The system SHALL list available audio input devices in the tray context menu and allow the user to select an active device at runtime.

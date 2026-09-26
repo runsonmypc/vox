@@ -73,6 +73,24 @@ def _cancel_sound() -> np.ndarray:
     return np.concatenate([t1, gap, t2])
 
 
+def _pause_sound() -> np.ndarray:
+    """Low falling pair: dictation paused."""
+    sr = 44100
+    t1 = _generate_tone(660, 0.07, sr, 0.22)
+    gap = np.zeros(int(sr * 0.03), dtype=np.float32)
+    t2 = _generate_tone(440, 0.1, sr, 0.22)
+    return np.concatenate([t1, gap, t2])
+
+
+def _resume_sound() -> np.ndarray:
+    """Low rising pair: dictation resumed."""
+    sr = 44100
+    t1 = _generate_tone(440, 0.07, sr, 0.22)
+    gap = np.zeros(int(sr * 0.03), dtype=np.float32)
+    t2 = _generate_tone(660, 0.1, sr, 0.22)
+    return np.concatenate([t1, gap, t2])
+
+
 class SoundPlayer:
     """Plays audio feedback sounds."""
 
@@ -91,6 +109,8 @@ class SoundPlayer:
                         "error": "Basso",
                         "busy": "Funk",
                         "cancel": "Blow",
+                        "pause": "Bottle",
+                        "resume": "Glass",
                     }
                     for name, system_name in system_defaults.items():
                         wav_path = _SOUNDS_DIR / f"{name}.wav"
@@ -112,6 +132,8 @@ class SoundPlayer:
                     "error": _error_sound(),
                     "busy": _busy_sound(),
                     "cancel": _cancel_sound(),
+                    "pause": _pause_sound(),
+                    "resume": _resume_sound(),
                 }
 
     def play(self, name: str, blocking: bool = False) -> None:

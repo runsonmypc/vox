@@ -568,3 +568,122 @@ async def test_streaming_bypasses_vad_gate():
         mock_streaming.finish.assert_awaited_once()
         mock_batch.transcribe.assert_not_called()
         mock_paste.assert_called_once_with("streamed text", AppType.TERMINAL)
+
+
+@pytest.mark.anyio
+async def test_process_records_injected_text_in_history(tmp_path):
+    """A successful paste is persisted with app type, audio duration, and the mode actually used."""
+    from vox.history import HistoryDB
+
+    history = HistoryDB(tmp_path / "history.db")
+    config = Config(mode="batch", snippets={"my email": "alex@example.com"})
+    context = AppContext(wm_class="slack", window_title="Slack", app_type=AppType.CHAT)
+    mock_batch = MagicMock()
+    mock_batch.transcribe = AsyncMock(return_value="my email.")
+
+    with patch("vox.daemon.has_speech", return_value=True), patch("vox.daemon.paste"):
+        await _process(
+            wav_data=_make_dummy_wav(0.5),
+            config=config,
+            batch_transcriber=mock_batch,
+            streaming_transcriber=None,
+            stream_task=None,
+            sounds=MagicMock(),
+            queue=asyncio.Queue(),
+            context=context,
+            screen_capture_future=None,
+            history=history,
+        )
+
+    [rec] = history.search()
+    assert rec.text == "alex@example.com"  # stores what was injected, after snippet expansion
+    assert rec.app_type == "CHAT"
+    assert rec.duration_seconds == pytest.approx(0.5)
+    assert rec.transcription_mode == "batch"
+    history.close()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("transcript", ["", "   "])
+async def test_process_skips_history_for_empty_transcript(tmp_path, transcript):
+    from vox.history import HistoryDB
+
+    history = HistoryDB(tmp_path / "history.db")
+    mock_batch = MagicMock()
+    mock_batch.transcribe = AsyncMock(return_value=transcript)
+
+    with patch("vox.daemon.has_speech", return_value=True), patch("vox.daemon.paste") as mock_paste:
+        await _process(
+            wav_data=_make_dummy_wav(0.5),
+            config=Config(mode="batch"),
+            batch_transcriber=mock_batch,
+            streaming_transcriber=None,
+            stream_task=None,
+            sounds=MagicMock(),
+            queue=asyncio.Queue(),
+            context=AppContext(wm_class="code", window_title="VSCode", app_type=AppType.EDITOR),
+            screen_capture_future=None,
+            history=history,
+        )
+
+    mock_paste.assert_not_called()
+    assert history.search() == []
+    history.close()
+
+
+@pytest.mark.anyio
+async def test_process_skips_history_when_paste_fails(tmp_path):
+    from vox.errors import InjectionError
+    from vox.history import HistoryDB
+
+    history = HistoryDB(tmp_path / "history.db")
+    mock_batch = MagicMock()
+    mock_batch.transcribe = AsyncMock(return_value="hello")
+    sounds = MagicMock()
+
+    with patch("vox.daemon.has_speech", return_value=True), \
+         patch("vox.daemon.paste", side_effect=InjectionError("no focus")):
+        await _process(
+            wav_data=_make_dummy_wav(0.5),
+            config=Config(mode="batch"),
+            batch_transcriber=mock_batch,
+            streaming_transcriber=None,
+            stream_task=None,
+            sounds=sounds,
+            queue=asyncio.Queue(),
+            context=AppContext(wm_class="code", window_title="VSCode", app_type=AppType.EDITOR),
+            screen_capture_future=None,
+            history=history,
+        )
+
+    sounds.play.assert_called_with("error")
+    assert history.search() == []
+    history.close()
+
+
+@pytest.mark.anyio
+async def test_history_write_failure_does_not_play_error(tmp_path):
+    """The paste already happened, so a broken history DB must not surface as a dictation error."""
+    history = MagicMock()
+    history.insert.side_effect = RuntimeError("disk full")
+    mock_batch = MagicMock()
+    mock_batch.transcribe = AsyncMock(return_value="hello")
+    sounds = MagicMock()
+
+    with patch("vox.daemon.has_speech", return_value=True), patch("vox.daemon.paste") as mock_paste:
+        await _process(
+            wav_data=_make_dummy_wav(0.5),
+            config=Config(mode="batch"),
+            batch_transcriber=mock_batch,
+            streaming_transcriber=None,
+            stream_task=None,
+            sounds=sounds,
+            queue=asyncio.Queue(),
+            context=AppContext(wm_class="code", window_title="VSCode", app_type=AppType.EDITOR),
+            screen_capture_future=None,
+            history=history,
+        )
+
+    mock_paste.assert_called_once()
+    history.insert.assert_called_once()
+    sounds.play.assert_not_called()
