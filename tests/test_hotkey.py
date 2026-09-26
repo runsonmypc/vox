@@ -7,6 +7,7 @@ import pytest
 from pynput import keyboard
 
 from vox.config import Config
+from vox.errors import DependencyError
 from vox.hotkey import HotkeyListener
 
 
@@ -243,3 +244,78 @@ async def test_hotkey_quick_tap_responsive():
     assert queue.qsize() == 1
     assert await queue.get() == "toggle"
 
+
+
+def _tap(listener, clock, key):
+    listener._on_press(key)
+    clock.advance(0.1)
+    listener._on_release(key)
+    clock.advance(1.0)  # well outside the double-tap window
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("configured", "key"),
+    [
+        ("right_shift", keyboard.Key.shift_r),
+        ("Right Shift", keyboard.Key.shift_r),
+        ("Right_Shift", keyboard.Key.shift_r),
+        (" right_ctrl ", keyboard.Key.ctrl_r),
+        ("alt_r", keyboard.Key.alt_r),
+        ("left_shift", keyboard.Key.shift_l),
+        ("shift_l", keyboard.Key.shift_l),
+        ("left_ctrl", keyboard.Key.ctrl_l),
+        ("left_alt", keyboard.Key.alt_l),
+        ("f13", keyboard.Key.f13),
+    ],
+)
+async def test_hotkey_spellings_match_the_key_pynput_reports(configured, key):
+    clock = ControlledClock()
+    queue: asyncio.Queue[str] = asyncio.Queue()
+    listener = HotkeyListener(Config(hotkey=configured), asyncio.get_running_loop(), queue)
+
+    with patch("time.monotonic", side_effect=clock.time):
+        _tap(listener, clock, key)
+
+    await asyncio.sleep(0)
+    assert queue.qsize() == 1
+    assert await queue.get() == "toggle"
+
+
+@pytest.mark.anyio
+async def test_left_shift_hotkey_ignores_the_right_shift():
+    clock = ControlledClock()
+    queue: asyncio.Queue[str] = asyncio.Queue()
+    listener = HotkeyListener(Config(hotkey="left_shift"), asyncio.get_running_loop(), queue)
+
+    with patch("time.monotonic", side_effect=clock.time):
+        _tap(listener, clock, keyboard.Key.shift_r)
+
+    await asyncio.sleep(0)
+    assert queue.empty()
+
+
+@pytest.mark.anyio
+async def test_hotkey_fallback_combo_accepts_left_modifier_names():
+    clock = ControlledClock()
+    queue: asyncio.Queue[str] = asyncio.Queue()
+    config = Config(hotkey="right_shift", hotkey_fallback="Left_Ctrl+Space")
+    listener = HotkeyListener(config, asyncio.get_running_loop(), queue)
+
+    with patch("time.monotonic", side_effect=clock.time):
+        listener._on_press(keyboard.Key.ctrl_l)
+        listener._on_press(keyboard.Key.space)
+        listener._on_release(keyboard.Key.space)
+        listener._on_release(keyboard.Key.ctrl_l)
+
+    await asyncio.sleep(0)
+    assert await queue.get() == "toggle"
+
+
+@pytest.mark.anyio
+async def test_missing_keyboard_backend_is_a_clear_dependency_error():
+    with patch("vox.hotkey.keyboard", None), \
+         patch("vox.hotkey._IMPORT_ERROR", "failed to acquire X connection: Bad display name", create=True):
+        with pytest.raises(DependencyError, match="X11 display") as excinfo:
+            HotkeyListener(Config(), asyncio.get_running_loop(), asyncio.Queue())
+    assert "Bad display name" in str(excinfo.value)
