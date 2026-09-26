@@ -241,17 +241,20 @@ def _fake_layout(monkeypatch, mapping: dict[int, str]):
     monkeypatch.setitem(sys.modules, "pynput._util.darwin", darwin_util)
 
 
+@darwin_only  # importing pynput needs an X display on Linux
 def test_paste_keycode_follows_dvorak(monkeypatch):
     _fake_layout(monkeypatch, {9: "k", 47: "v"})
     assert injector._paste_keycode() == 47
 
 
+@darwin_only
 def test_paste_keycode_falls_back_to_ansi_v_without_latin_v(monkeypatch):
     """A Cyrillic layout has no "v": paste with the physical V key, never keycode 0 (Cmd+A)."""
     _fake_layout(monkeypatch, {0: "ф", 9: "м"})
     assert injector._paste_keycode() == 9
 
 
+@darwin_only
 def test_paste_keycode_falls_back_when_lookup_fails(monkeypatch):
     def broken():
         raise OSError("no input source")
