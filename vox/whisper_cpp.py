@@ -4,15 +4,14 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import io
 import logging
 import shutil
 import tempfile
+import time
 import wave
 from pathlib import Path
 
-import numpy as np
-
+from .audio import pcm16_wav, read_wav, to_16k_mono
 from .config import Config
 from .errors import ConfigError, TranscriptionError
 from .transcribe import build_prompt, is_prompt_hallucination
@@ -53,30 +52,10 @@ def _resolve_model(config: Config) -> Path:
 def _write_input(wav_bytes: bytes, path: Path) -> None:
     """Write a 16 kHz mono PCM16 WAV accepted by whisper-cli."""
     try:
-        with wave.open(io.BytesIO(wav_bytes), "rb") as source:
-            rate = source.getframerate()
-            channels = source.getnchannels()
-            if source.getsampwidth() != 2 or channels < 1 or rate < 1:
-                raise TranscriptionError("whisper.cpp requires 16-bit PCM WAV input")
-            samples = np.frombuffer(source.readframes(source.getnframes()), dtype="<i2")
-    except (EOFError, wave.Error) as exc:
+        samples, rate, channels = read_wav(wav_bytes)
+    except (EOFError, ValueError, wave.Error) as exc:
         raise TranscriptionError(f"Invalid WAV input for whisper.cpp: {exc}") from exc
-
-    if channels > 1:
-        samples = samples.reshape(-1, channels).astype(np.float32).mean(axis=1)
-    if rate != 16000 and len(samples):
-        target_len = round(len(samples) * 16000 / rate)
-        samples = np.interp(
-            np.arange(target_len) * rate / 16000,
-            np.arange(len(samples)),
-            samples,
-        )
-
-    with wave.open(str(path), "wb") as output:
-        output.setnchannels(1)
-        output.setsampwidth(2)
-        output.setframerate(16000)
-        output.writeframes(np.asarray(samples, dtype="<i2").tobytes())
+    path.write_bytes(pcm16_wav(to_16k_mono(samples, rate, channels), 16000))
 
 
 class WhisperCppTranscriber:
@@ -106,6 +85,7 @@ class WhisperCppTranscriber:
             if prompt:
                 command.extend(["--prompt", prompt])
 
+            started = time.monotonic()
             try:
                 process = await asyncio.create_subprocess_exec(
                     *command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
@@ -121,16 +101,22 @@ class WhisperCppTranscriber:
                 await process.communicate()
                 raise
 
+            log_output = stderr.decode("utf-8", errors="replace")
             if process.returncode != 0:
-                detail = stderr.decode("utf-8", errors="replace").strip()[-1000:]
-                raise TranscriptionError(f"whisper.cpp exited with status {process.returncode}: {detail}")
+                raise TranscriptionError(f"whisper.cpp exited with status {process.returncode}: {log_output.strip()[-1000:]}")
+            log.debug("whisper.cpp finished in %.2fs", time.monotonic() - started)
+            for line in log_output.splitlines():
+                if line.startswith("whisper_print_timings"):  # model load, encode and decode times
+                    log.debug("%s", line.strip())
             try:
                 text = output_base.with_suffix(".txt").read_text(encoding="utf-8").strip()
             except OSError as exc:
                 raise TranscriptionError(f"whisper.cpp did not write a transcript: {exc}") from exc
 
         if prompt and is_prompt_hallucination(text, prompt):
-            log.warning("Detected whisper.cpp prompt hallucination, dropping transcript")
+            log.warning("Dropped a whisper.cpp transcript that only echoed the prompt")
+            log.debug("Dropped echo: %s", text)
             return ""
-        log.info("Transcript: %s", text)
+        log.info("Transcript: %d chars", len(text))
+        log.debug("Transcript: %s", text)
         return text
