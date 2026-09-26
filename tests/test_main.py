@@ -1,5 +1,6 @@
 """Tests for the vox command's startup checks."""
 
+import os
 from unittest.mock import patch
 
 import pytest
@@ -116,3 +117,13 @@ def test_unreadable_keychain_is_remembered_rather_than_treated_as_no_key(memory_
     start(config, monkeypatch).assert_called_once_with(config)
     assert config.openai_api_key == ""
     assert config.api_key_error == "Failed to unlock the collection!"
+
+
+def test_environment_key_is_used_but_hidden_from_processes_vox_starts(monkeypatch):
+    monkeypatch.setattr(keystore, "_env_key", "")
+    with patch.dict(os.environ, {"OPENAI_API_KEY": KEY}):
+        config = Config()
+        start(config, monkeypatch)
+        assert config.openai_api_key == KEY
+        assert "OPENAI_API_KEY" not in os.environ
+        assert os.environ[keystore.OVERRIDE_FLAG] == "1"

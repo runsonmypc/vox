@@ -84,7 +84,8 @@ def main() -> None:
         sys.exit(1)
 
     # Without a key Vox still starts: the menu asks for one, and a service exiting here would only be restarted
-    from .keystore import KeystoreError, get_api_key, migrate_plaintext
+    from .keystore import KeystoreError, get_api_key, hide_env_override, migrate_plaintext
+    hide_env_override()  # before Vox starts any process, so none inherits the key
     migrate_plaintext(config.config_path)
     try:
         config.openai_api_key = get_api_key()

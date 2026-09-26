@@ -1,7 +1,11 @@
 """Tests for the API key store. Every test runs on conftest's in-memory keyring and uses dummy keys."""
 
 import logging
+import os
 import stat
+import subprocess
+import sys
+from unittest.mock import patch
 
 import keyring
 import pytest
@@ -281,3 +285,46 @@ def test_new_fallback_directory_is_owner_only(no_keychain, tmp_path, monkeypatch
     monkeypatch.setattr(keystore, "FALLBACK_PATH", tmp_path / "vox" / ".env")
     keystore.set_api_key(KEY)
     assert stat.S_IMODE(keystore.FALLBACK_PATH.parent.stat().st_mode) == 0o700
+
+
+# -- The environment override -------------------------------------------------------
+
+
+@pytest.fixture
+def environ(monkeypatch):
+    """Undo whatever hide_env_override does to os.environ and its cache."""
+    monkeypatch.setattr(keystore, "_env_key", "")
+    with patch.dict(os.environ):
+        yield os.environ
+
+
+def test_hidden_environment_key_still_overrides_but_is_not_inherited(environ):
+    keystore.set_api_key(KEY)
+    environ["OPENAI_API_KEY"] = f" {OTHER} "
+    keystore.hide_env_override()
+    assert "OPENAI_API_KEY" not in environ
+    assert keystore.get_api_key() == OTHER
+    assert keystore.env_override_in_effect()
+    child = subprocess.run(
+        [sys.executable, "-c", "import os; print(os.environ.get('OPENAI_API_KEY', 'absent'))"],
+        capture_output=True, text=True, check=True,
+    )
+    assert child.stdout.strip() == "absent"
+
+
+def test_a_window_process_knows_an_override_is_in_effect_without_the_key(environ):
+    environ["OPENAI_API_KEY"] = OTHER
+    keystore.hide_env_override()
+    child_env = dict(environ)
+    keystore._env_key = ""  # what a process Vox starts sees: the flag, not the key
+    with patch.dict(os.environ, child_env, clear=True):
+        assert keystore.env_override() == ""
+        assert keystore.env_override_in_effect()
+
+
+def test_no_environment_key_means_no_override(environ):
+    environ.pop("OPENAI_API_KEY", None)
+    environ.pop(keystore.OVERRIDE_FLAG, None)
+    keystore.hide_env_override()
+    assert keystore.OVERRIDE_FLAG not in environ
+    assert not keystore.env_override_in_effect()

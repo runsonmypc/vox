@@ -5,7 +5,8 @@ encrypts the key at rest and unlocks it at login. Only when Linux has no
 keyring at all does the key go to an owner-only plain-text file instead. An
 ``OPENAI_API_KEY`` environment variable overrides whatever is stored.
 
-The key never goes into ``os.environ``, so processes Vox starts don't inherit it.
+The key never goes into ``os.environ``, and ``hide_env_override`` takes a key the
+user put there out of it, so processes Vox starts don't inherit it.
 """
 
 from __future__ import annotations
@@ -27,7 +28,11 @@ log = logging.getLogger(__name__)
 SERVICE = "vox"
 USERNAME = "openai_api_key"
 ENV_VAR = "OPENAI_API_KEY"
+# Tells the windows Vox starts that the environment overrides the saved key, without handing them the key
+OVERRIDE_FLAG = "VOX_OPENAI_API_KEY_FROM_ENV"
 FALLBACK_PATH = DEFAULT_CONFIG_PATH.parent / ".env"
+
+_env_key = ""  # an OPENAI_API_KEY taken out of os.environ by hide_env_override
 
 
 class KeystoreError(Exception):
@@ -36,7 +41,21 @@ class KeystoreError(Exception):
 
 def env_override() -> str:
     """The key set in Vox's environment, which wins over the stored one, or ""."""
-    return os.environ.get(ENV_VAR, "").strip()
+    return _env_key or os.environ.get(ENV_VAR, "").strip()
+
+
+def hide_env_override() -> None:
+    """Move OPENAI_API_KEY out of os.environ, so no process Vox starts inherits it. Call before starting any."""
+    global _env_key
+    key = os.environ.pop(ENV_VAR, "").strip()
+    if key:
+        _env_key = key
+        os.environ[OVERRIDE_FLAG] = "1"
+
+
+def env_override_in_effect() -> bool:
+    """Whether OPENAI_API_KEY overrides the saved key, also in a window process Vox started without the key."""
+    return bool(env_override()) or os.environ.get(OVERRIDE_FLAG) == "1"
 
 
 def has_keychain() -> bool:
