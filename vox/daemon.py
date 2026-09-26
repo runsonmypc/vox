@@ -18,6 +18,7 @@ from .errors import ConfigError
 from .history import HistoryDB
 from .hotkey import HotkeyListener
 from .injector import inject_text, paste
+from .keystore import KeystoreError, get_api_key
 from .sounds import SoundPlayer
 from .streaming import StreamingTranscriber
 from .transcribe import WhisperTranscriber
@@ -46,6 +47,14 @@ def run(config: Config) -> None:
     from .ui.tray import create_tray
 
     tray = create_tray(config)
+    if tray is None and config.uses_openai and not config.openai_api_key:
+        # Nowhere to ask for a key; headless Vox is started by hand, not by a service that would retry
+        reason = f" ({config.api_key_error})" if config.api_key_error else ""
+        log.error(
+            "No OpenAI API key%s. Start Vox from the desktop and choose Set API Key… from its menu, "
+            "or set OPENAI_API_KEY.", reason,
+        )
+        raise SystemExit(1)
     if tray is None:
         asyncio.run(_main(config))
         return
@@ -100,8 +109,24 @@ async def _main(config: Config, tray: TrayManager | None = None) -> None:
         if tray is not None:
             tray.set_state(new_state.value)
 
+    async def reload_api_key() -> None:
+        """Re-read the key off the event loop, since a locked keyring may be waiting on an unlock prompt."""
+        try:
+            config.openai_api_key = await loop.run_in_executor(None, get_api_key)
+            config.api_key_error = None
+        except KeystoreError as e:
+            config.api_key_error = str(e)  # keep any key already in hand
+            log.warning("Couldn't read the OpenAI API key from the keychain: %s", e)
+        if tray is not None:
+            tray.key_changed()
+
+    def key_missing() -> bool:
+        return config.uses_openai and not config.openai_api_key
+
     if tray is not None:
         tray.attach(loop, queue, history, asyncio.current_task())
+        if key_missing() and config.api_key_error is None:
+            tray.open_key_window()
 
     reload_task = asyncio.create_task(_config_reloader(config, sounds, recorder))
 
@@ -133,6 +158,11 @@ async def _main(config: Config, tray: TrayManager | None = None) -> None:
                     tray.mode_changed()
                 continue
 
+            if event == "api_key":  # the key window closed
+                await reload_api_key()
+                log.info("OpenAI API key %s", "set" if config.openai_api_key else "not set")
+                continue
+
             if event in ("pause", "resume"):
                 paused = event == "pause"
                 log.info("Dictation %s", "paused" if paused else "resumed")
@@ -150,6 +180,17 @@ async def _main(config: Config, tray: TrayManager | None = None) -> None:
                 continue
 
             if event == "toggle":
+                if state == State.IDLE and key_missing():
+                    await reload_api_key()  # it may have been saved, or the keyring unlocked, since
+                if state == State.IDLE and key_missing():
+                    sounds.play("error")
+                    if config.api_key_error is not None:
+                        log.warning("Not recording: the keychain couldn't be read (%s)", config.api_key_error)
+                    else:
+                        log.warning("Not recording: no OpenAI API key. Choose Set API Key… from the Vox menu.")
+                        if tray is not None:
+                            tray.open_key_window()
+                    continue
                 if state == State.IDLE:
                     set_state(State.RECORDING)
 
@@ -543,7 +584,6 @@ async def _config_reloader(config: Config, sounds: SoundPlayer, recorder: Record
             config.attenuation_level = new_config.attenuation_level
             config.mode = new_config.mode
             config.streaming_model = new_config.streaming_model
-            config.openai_api_key = new_config.openai_api_key
             config.whisper_model = new_config.whisper_model
             config.whisper_cpp_binary = new_config.whisper_cpp_binary
             config.whisper_cpp_model = new_config.whisper_cpp_model

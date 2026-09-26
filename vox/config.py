@@ -1,4 +1,4 @@
-"""TOML configuration loading with defaults and env var fallback."""
+"""TOML configuration loading with defaults. The OpenAI API key is not in here: see ``vox.keystore``."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ DEFAULT_CONFIG_PATH = Path.home() / ".config" / "vox" / "config.toml"
 
 @dataclass
 class Config:
-    # API keys
+    # Filled from vox.keystore at startup, never from config.toml
     openai_api_key: str = ""
     # Hotkey
     hotkey: str = "right_shift"
@@ -40,7 +40,7 @@ class Config:
     whisper_cpp_model: str = ""
 
     # Whisper
-    whisper_model: str = "gpt-4o-mini-transcribe-2025-12-15"
+    whisper_model: str = "gpt-transcribe"
     whisper_language: str | None = None
     whisper_prompt: str = ""
 
@@ -72,19 +72,22 @@ class Config:
         self.mode = value
 
     @property
+    def uses_openai(self) -> bool:
+        """Whether the transcription mode sends audio to OpenAI, and so needs an API key."""
+        return self.mode in ("batch", "streaming")
+
+    @property
     def config_path(self) -> Path | None:
         return self._config_path
 
     def __post_init__(self) -> None:
         self._config_path: Path | None = None
-
-
-_dotenv_loaded = False
+        # Why the keychain couldn't be read, if it couldn't; a key may exist there, so don't ask for a new one
+        self.api_key_error: str | None = None
 
 
 def load_config(path: Path | None = None) -> Config:
-    """Load config from TOML file with env var fallback for API keys."""
-    global _dotenv_loaded
+    """Load config from a TOML file, with defaults for anything it leaves out."""
     config = Config()
 
     config_path = path or DEFAULT_CONFIG_PATH
@@ -97,9 +100,6 @@ def load_config(path: Path | None = None) -> Config:
         except Exception as e:
             raise ConfigError(f"Failed to parse config file {config_path}: {e}") from e
 
-        _apply_section(config, data, "api", {
-            "openai_api_key": "openai_api_key",
-        })
         _apply_section(config, data, "hotkey", {
             "key": "hotkey",
             "fallback": "hotkey_fallback",
@@ -167,34 +167,7 @@ def load_config(path: Path | None = None) -> Config:
             "level": "attenuation_level",
         })
 
-    # Load .env file once from project root and config dir
-    if not _dotenv_loaded:
-        _load_dotenv(Path(__file__).resolve().parent.parent)  # repo root
-        _load_dotenv(config_path.parent)
-        _dotenv_loaded = True
-
-    # Env var fallback for API keys
-    if not config.openai_api_key:
-        config.openai_api_key = os.environ.get("OPENAI_API_KEY", "")
-
     return config
-
-
-def _load_dotenv(directory: Path) -> None:
-    """Load KEY=VALUE pairs from .env file into os.environ (won't overwrite)."""
-    env_file = directory / ".env"
-    if not env_file.is_file():
-        return
-    with open(env_file) as f:
-        for line in f:
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, _, value = line.partition("=")
-            key = key.strip()
-            value = value.strip().strip("\"'")
-            if key and key not in os.environ:
-                os.environ[key] = value
 
 
 def _apply_section(config: Config, data: dict, section: str, mapping: dict[str, str]) -> None:
@@ -292,6 +265,30 @@ def update_transcription_mode(path: Path, mode: str) -> None:
             if "model" not in doc[section]:
                 doc[section]["model"] = old_model
     transcription["mode"] = mode
+    _write_document(path, doc)
+
+
+def read_api_key_setting(path: Path) -> str:
+    """The key in a legacy ``[api] openai_api_key`` setting, or "". Vox no longer reads keys from here."""
+    try:
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return ""
+    except tomllib.TOMLDecodeError as e:
+        raise ConfigError(f"Failed to parse config file {path}: {e}") from e
+    value = data.get("api", {}).get("openai_api_key", "")
+    return value.strip() if isinstance(value, str) else ""
+
+
+def remove_api_key_setting(path: Path) -> None:
+    """Delete ``[api] openai_api_key``, keeping the rest of the file; drop ``[api]`` only if nothing else is in it."""
+    doc = _read_document(path)
+    api = doc.get("api")
+    if api is None or "openai_api_key" not in api:
+        return
+    del api["openai_api_key"]
+    if not api.as_string().strip():
+        del doc["api"]
     _write_document(path, doc)
 
 

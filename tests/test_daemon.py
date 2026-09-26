@@ -286,7 +286,7 @@ async def fake_reloader(*args, **kwargs):
 @pytest.mark.anyio
 async def test_daemon_cancel_during_recording():
     """Verify cancel during RECORDING stops audio, discards frames, cancels streaming/screen, restores volume, plays cancel sound, and resets to IDLE."""
-    config = Config(mode="streaming", sounds_enabled=True, attenuation_enabled=True, attenuation_level=0.5)
+    config = Config(mode="streaming", openai_api_key="test", sounds_enabled=True, attenuation_enabled=True, attenuation_level=0.5)
     config._config_path = None
 
     queue_holder = {}
@@ -369,7 +369,7 @@ async def test_daemon_cancel_during_recording():
 @pytest.mark.anyio
 async def test_daemon_cancel_during_processing():
     """Verify cancel during PROCESSING cancels process task, suppresses paste, plays cancel sound, and resets to IDLE."""
-    config = Config(mode="batch", sounds_enabled=True, attenuation_enabled=True, attenuation_level=0.5)
+    config = Config(mode="batch", openai_api_key="test", sounds_enabled=True, attenuation_enabled=True, attenuation_level=0.5)
     config._config_path = None
 
     queue_holder = {}
@@ -497,7 +497,7 @@ async def test_process_cancellation_suppresses_paste_and_cleans_resources():
 @pytest.mark.anyio
 async def test_daemon_cancel_ignored_in_idle():
     """Verify cancel event received while in IDLE state is safely ignored without playing cancel sound."""
-    config = Config()
+    config = Config(openai_api_key="test")
     config._config_path = None
 
     queue_holder = {}

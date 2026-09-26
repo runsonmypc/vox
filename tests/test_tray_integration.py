@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import numpy as np
 import pytest
 
+from vox import keystore
 from vox.config import Config, load_config
 from vox.history import HistoryDB
 from vox.window import AppContext, AppType
@@ -36,6 +37,8 @@ class RecordingTray:
         self.history_changes = 0
         self.attached = None
         self.stopped = False
+        self.key_windows = 0
+        self.key_changes = 0
 
     def attach(self, loop, queue, history, main_task):
         self.attached = (loop, queue, history, main_task)
@@ -48,6 +51,12 @@ class RecordingTray:
 
     def history_changed(self):
         self.history_changes += 1
+
+    def open_key_window(self):
+        self.key_windows += 1
+
+    def key_changed(self):
+        self.key_changes += 1
 
     def stop(self):
         self.stopped = True
@@ -93,7 +102,7 @@ async def wait_for(predicate, timeout=2.0):
 async def start_daemon(tray, config=None):
     from vox.daemon import _main
 
-    config = config or Config(mode="batch", attenuation_enabled=False)
+    config = config or Config(mode="batch", openai_api_key="test", attenuation_enabled=False)
     task = asyncio.create_task(_main(config, tray))
     await wait_for(lambda: tray.attached is not None if isinstance(tray, RecordingTray) else tray._queue is not None)
     return task
@@ -144,6 +153,105 @@ async def test_empty_transcript_is_not_persisted_or_announced():
         env["paste"].assert_not_called()
         assert history.search() == []
         assert tray.history_changes == 0
+        await stop_daemon(task)
+
+
+# -- API key ------------------------------------------------------------------------
+
+KEY = "sk-test-dummy-0001"
+
+
+def keyless(mode="batch"):
+    return Config(mode=mode, attenuation_enabled=False)
+
+
+@pytest.mark.anyio
+async def test_without_a_key_the_window_opens_and_the_hotkey_does_not_record():
+    tray = RecordingTray()
+    with daemon_env() as env:
+        task = await start_daemon(tray, keyless())
+        _, queue, _, _ = tray.attached
+        assert tray.key_windows == 1
+        await queue.put("toggle")
+        await wait_for(lambda: tray.key_windows == 2)
+        env["recorder"].start.assert_not_called()
+        env["sounds"].play.assert_any_call("error")
+        assert tray.states == []
+        await stop_daemon(task)
+
+
+@pytest.mark.anyio
+async def test_saved_key_takes_effect_without_a_restart():
+    tray, config = RecordingTray(), keyless()
+    with daemon_env():
+        task = await start_daemon(tray, config)
+        _, queue, _, _ = tray.attached
+        keystore.set_api_key(KEY)
+        await queue.put("api_key")
+        await wait_for(lambda: config.openai_api_key == KEY and tray.key_changes == 1)
+        await queue.put("toggle")
+        await wait_for(lambda: tray.states == ["RECORDING"])
+        await stop_daemon(task)
+
+
+@pytest.mark.anyio
+async def test_removed_key_stops_dictation():
+    tray, config = RecordingTray(), keyless()
+    config.openai_api_key = KEY
+    with daemon_env() as env:
+        task = await start_daemon(tray, config)
+        _, queue, _, _ = tray.attached
+        assert tray.key_windows == 0
+        await queue.put("api_key")  # the window removed it: nothing is saved
+        await wait_for(lambda: config.openai_api_key == "")
+        await queue.put("toggle")
+        await wait_for(lambda: tray.key_windows == 1)
+        env["recorder"].start.assert_not_called()
+        await stop_daemon(task)
+
+
+@pytest.mark.anyio
+async def test_hotkey_picks_up_a_key_saved_since_start():
+    tray, config = RecordingTray(), keyless()
+    with daemon_env():
+        task = await start_daemon(tray, config)
+        _, queue, _, _ = tray.attached
+        keystore.set_api_key(KEY)
+        await queue.put("toggle")
+        await wait_for(lambda: tray.states == ["RECORDING"])
+        assert config.openai_api_key == KEY
+        await stop_daemon(task)
+
+
+@pytest.mark.anyio
+async def test_unreadable_keychain_never_asks_for_a_new_key(memory_keyring, monkeypatch):
+    def refuse(*_args):
+        raise RuntimeError("Failed to unlock the collection!")
+
+    monkeypatch.setattr(memory_keyring, "get_password", refuse)
+    tray, config = RecordingTray(), keyless()
+    config.api_key_error = "Failed to unlock the collection!"
+    with daemon_env() as env:
+        task = await start_daemon(tray, config)
+        _, queue, _, _ = tray.attached
+        await queue.put("toggle")
+        await wait_for(lambda: tray.key_changes == 1)  # the hotkey tried the keychain again
+        await wait_for(lambda: ("error",) in [c.args for c in env["sounds"].play.call_args_list])
+        assert tray.key_windows == 0
+        assert config.api_key_error == "Failed to unlock the collection!"
+        env["recorder"].start.assert_not_called()
+        await stop_daemon(task)
+
+
+@pytest.mark.anyio
+async def test_local_transcription_needs_no_key():
+    tray = RecordingTray()
+    with daemon_env(), patch("vox.daemon.WhisperCppTranscriber", MagicMock()):
+        task = await start_daemon(tray, keyless("whisper_cpp"))
+        _, queue, _, _ = tray.attached
+        assert tray.key_windows == 0
+        await queue.put("toggle")
+        await wait_for(lambda: tray.states == ["RECORDING"])
         await stop_daemon(task)
 
 
@@ -211,7 +319,7 @@ async def test_menu_to_daemon_to_icon_round_trip():
     from tests.test_tray import FakeIcon, find, immediate
     from vox.ui.tray import TrayManager
 
-    tray = TrayManager(Config(), icon_factory=FakeIcon, dispatch=immediate)
+    tray = TrayManager(Config(openai_api_key="test"), icon_factory=FakeIcon, dispatch=immediate)
     icon = tray._icon
     with daemon_env("round trip") as env:
         task = await start_daemon(tray)
@@ -426,8 +534,33 @@ def test_run_without_tray_keeps_event_loop_on_main_thread():
         seen["tray"] = tray
 
     with patch("vox.ui.tray.create_tray", return_value=None), patch.object(daemon, "_main", fake_main):
-        daemon.run(Config())
+        daemon.run(Config(openai_api_key="test"))
     assert seen == {"thread": threading.main_thread(), "tray": None}
+
+
+def test_run_headless_without_a_key_exits_with_an_error(caplog):
+    from vox import daemon
+
+    main = MagicMock()
+    with patch("vox.ui.tray.create_tray", return_value=None), patch.object(daemon, "_main", main), \
+            pytest.raises(SystemExit) as exit_info:
+        daemon.run(Config())
+    assert exit_info.value.code == 1
+    main.assert_not_called()
+    assert "Set API Key" in caplog.text
+
+
+def test_run_headless_without_a_key_is_fine_for_local_transcription():
+    from vox import daemon
+
+    seen = {}
+
+    async def fake_main(config, tray=None):
+        seen["ran"] = True
+
+    with patch("vox.ui.tray.create_tray", return_value=None), patch.object(daemon, "_main", fake_main):
+        daemon.run(Config(mode="whisper_cpp"))
+    assert seen == {"ran": True}
 
 
 def test_run_with_tray_moves_event_loop_off_main_thread():

@@ -4,8 +4,12 @@ from unittest.mock import patch
 
 import pytest
 
+import vox.daemon  # noqa: F401  imported now, so patch("vox.daemon.run") can't import it with a mocked WhisperCppTranscriber
 from vox import __main__ as cli
+from vox import keystore
 from vox.config import Config
+
+KEY = "sk-test-dummy-0001"
 
 
 def test_instance_lock_is_exclusive_until_released(tmp_path):
@@ -62,3 +66,53 @@ def test_whisper_cpp_reports_missing_model_before_starting(monkeypatch, tmp_path
         cli.main()
     assert exit_info.value.code == 1
     run.assert_not_called()
+
+
+def start(config, monkeypatch):
+    """Run the vox command up to the daemon with ``config``, returning the mocked daemon.run."""
+    monkeypatch.setattr("sys.argv", ["vox"])
+    with (
+        patch.object(cli, "_acquire_instance_lock", return_value=object()),
+        patch("vox.config.load_config", return_value=config),
+        patch("vox.injector.check_dependencies"),
+        patch("vox.injector.check_accessibility_permission", return_value=True),
+        patch("vox.daemon.run") as run,
+    ):
+        cli.main()
+    return run
+
+
+def test_starts_without_a_key_instead_of_exiting(monkeypatch):
+    """Exiting would make launchd/systemd restart Vox every few seconds; the menu asks for the key instead."""
+    config = Config(mode="batch")
+    run = start(config, monkeypatch)
+    run.assert_called_once_with(config)
+    assert config.openai_api_key == ""
+    assert config.api_key_error is None
+
+
+def test_key_comes_from_the_keychain(memory_keyring, monkeypatch):
+    keystore.set_api_key(KEY)
+    config = Config()
+    start(config, monkeypatch)
+    assert config.openai_api_key == KEY
+
+
+def test_plain_text_key_moves_into_the_keychain_before_it_is_read(memory_keyring, monkeypatch):
+    keystore.FALLBACK_PATH.write_text(f"OPENAI_API_KEY={KEY}\n")
+    config = Config()
+    start(config, monkeypatch)
+    assert config.openai_api_key == KEY
+    assert memory_keyring.get_password(keystore.SERVICE, keystore.USERNAME) == KEY
+    assert not keystore.FALLBACK_PATH.exists()
+
+
+def test_unreadable_keychain_is_remembered_rather_than_treated_as_no_key(memory_keyring, monkeypatch):
+    def refuse(*_args):
+        raise RuntimeError("Failed to unlock the collection!")
+
+    monkeypatch.setattr(memory_keyring, "get_password", refuse)
+    config = Config()
+    start(config, monkeypatch).assert_called_once_with(config)
+    assert config.openai_api_key == ""
+    assert config.api_key_error == "Failed to unlock the collection!"

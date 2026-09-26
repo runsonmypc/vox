@@ -11,7 +11,6 @@ set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VENV="$HOME/.local/share/vox/venv"
 BIN="$HOME/.local/bin/vox"
-CONFIG_DIR="$HOME/.config/vox"
 SERVICE=1
 case "${1:-}" in
 "") ;;
@@ -70,21 +69,6 @@ linux_tray_host() {
     # GNOME's D-Bus helper can drop the reply while its dialog waits, so watch for the tray host instead
     for _ in $(seq 120); do has_tray_host && return; sleep 1; done
     say "No tray icon until 'AppIndicator and KStatusNotifierItem Support' is enabled (extensions.gnome.org); Vox still works"
-}
-
-# The service can't see shell variables or this checkout's .env, so keep the key in ~/.config/vox/.env
-setup_key() {
-    local env_file="$CONFIG_DIR/.env" line=""
-    grep -qsE '^[[:space:]]*OPENAI_API_KEY[[:space:]]*=[[:space:]]*[^[:space:]]' "$env_file" && return
-    grep -qsE '^[[:space:]]*openai_api_key[[:space:]]*=[[:space:]]*"[^"]' "$CONFIG_DIR/config.toml" && return
-    if [ -n "${OPENAI_API_KEY:-}" ]; then
-        line="OPENAI_API_KEY=$OPENAI_API_KEY"
-    else
-        line=$(grep -sE '^[[:space:]]*OPENAI_API_KEY[[:space:]]*=' "$REPO/.env" | tail -n 1) || true
-    fi
-    [ -n "$line" ] || return 1
-    (umask 077 && mkdir -p "$CONFIG_DIR" && printf '%s\n' "$line" >> "$env_file")
-    say "Saved your OpenAI API key to $env_file"
 }
 
 app_icon() {
@@ -212,9 +196,7 @@ esac
 mkdir -p "$(dirname "$BIN")"
 ln -sfn "$VENV/bin/vox" "$BIN"
 
-if ! "$VENV/bin/python" -c 'from vox.config import load_config; import sys; sys.exit(load_config().mode != "whisper_cpp")' && ! setup_key; then
-    say "Add your key to $CONFIG_DIR/.env as OPENAI_API_KEY=sk-..., then run ./install.sh again"
-    exit 0
-fi
+# Vox asks for the OpenAI API key itself and keeps it in the system keychain, so the installer never handles it
 if [ "$SERVICE" -eq 1 ]; then start_service; fi
+say "Vox asks for your OpenAI API key when it needs one; change it later with Set API Key… in its menu"
 say "Done. Run 'vox --help' for options."

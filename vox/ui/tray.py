@@ -1,4 +1,4 @@
-"""Tray icon (macOS menu bar, Linux AppIndicator): status, input device picker, pause toggle, recent dictations.
+"""Tray icon (macOS menu bar, Linux AppIndicator): status, input device picker, pause toggle, recent dictations, API key.
 
 Cocoa and GTK both want the tray on the main thread, so the tray owns the main
 thread while the asyncio daemon runs in its own thread. Menu callbacks run on
@@ -15,6 +15,7 @@ import logging
 import os
 import subprocess
 import sys
+import threading
 from typing import Any, Callable
 
 import sounddevice as sd
@@ -40,6 +41,8 @@ RECENT_HEADER = "Click a recent dictation to copy it"
 
 HISTORY_WINDOW = "vox.ui.history_window"
 VOCAB_WINDOW = "vox.ui.vocab_window"
+KEY_WINDOW = "vox.ui.key_window"
+SET_KEY = "Set API Key…"
 
 
 def create_tray(config: Config) -> TrayManager | None:
@@ -254,7 +257,7 @@ class TrayManager:
         self._icon = icon_factory(
             "vox",
             self._images[IconState.IDLE],
-            self._title(IconState.IDLE),
+            self._status_line(),
             pystray.Menu(self._menu_items),
         )
 
@@ -294,7 +297,14 @@ class TrayManager:
         self._dispatch(self._refresh_recent)
 
     def mode_changed(self) -> None:
-        self._dispatch(self._icon.update_menu)
+        self._dispatch(self._render)  # the status line depends on whether the mode needs a key
+
+    def key_changed(self) -> None:
+        """The daemon re-read the API key."""
+        self._dispatch(self._render)
+
+    def open_key_window(self) -> None:
+        self._dispatch(self._open_key, None, None)
 
     def stop(self) -> None:
         self._dispatch(self._icon.stop)
@@ -316,11 +326,22 @@ class TrayManager:
     def _title(state: IconState) -> str:
         return f"Vox · {_STATUS_TEXT[state]}"
 
+    def _key_problem(self) -> str | None:
+        """Why dictation can't reach OpenAI, if the mode needs it and there is no key."""
+        if not self._config.uses_openai or self._config.openai_api_key:
+            return None
+        return "Can’t read the keyring" if self._config.api_key_error else "API key needed"
+
+    def _status_line(self) -> str:
+        shown = self._shown
+        problem = self._key_problem() if shown in (IconState.IDLE, IconState.PAUSED) else None
+        return f"Vox · {problem}" if problem else self._title(shown)
+
     def _render(self) -> None:
         shown = self._shown
         self._icon.template = is_template(shown)
         self._icon.icon = self._images[shown]
-        self._icon.title = self._title(shown)
+        self._icon.title = self._status_line()
         self._icon.update_menu()
 
     def _apply_state(self, state: IconState) -> None:
@@ -346,7 +367,10 @@ class TrayManager:
     def _menu_items(self):
         # Sections: status, dictation controls, recent transcripts, windows, quit
         Item, Menu = self._pystray.MenuItem, self._pystray.Menu
-        yield Item(self._title(self._shown), None, enabled=False)
+        key_problem = self._key_problem()
+        yield Item(self._status_line(), None, enabled=False)
+        if key_problem:
+            yield Item(SET_KEY, self._open_key)
         yield Menu.SEPARATOR
         yield Item("Pause Dictation", self._toggle_pause, checked=lambda _: self._paused)
         yield Item("Input Device", Menu(self._device_items))
@@ -358,6 +382,8 @@ class TrayManager:
         yield Menu.SEPARATOR
         yield Item("Search History…", self._open_history, enabled=self._history is not None)
         yield Item("Vocabulary & Snippets…", self._open_vocab)
+        if not key_problem:
+            yield Item(SET_KEY, self._open_key)
         yield Menu.SEPARATOR
         yield Item("Quit Vox", self._quit)
 
@@ -446,13 +472,17 @@ class TrayManager:
         path = self._config.config_path or DEFAULT_CONFIG_PATH
         self._open_window(VOCAB_WINDOW, "--config", str(path))
 
+    def _open_key(self, icon, item) -> None:
+        # The window writes the keychain itself; once it closes, the daemon re-reads the key
+        self._open_window(KEY_WINDOW, on_exit=lambda: self._send("api_key"))
+
     def _quit(self, icon, item) -> None:
         log.info("Quit requested from menu bar")
         self.request_quit()
 
     # -- Plumbing ----------------------------------------------------------
 
-    def _open_window(self, module: str, *args: str) -> None:
+    def _open_window(self, module: str, *args: str, on_exit: Callable[[], None] | None = None) -> None:
         command = [sys.executable, "-m", module, *args]
         proc = self._windows.get(module)
         if proc is not None and proc.poll() is None:
@@ -464,6 +494,8 @@ class TrayManager:
         except Exception as e:
             log.warning("Failed to open %s: %s", module, e)
             return
+        if on_exit is not None:
+            threading.Thread(target=_call_after_exit, args=(proc, on_exit), name=f"{module}-exit", daemon=True).start()
         self._focus(proc, None)
 
     def _close_windows(self) -> None:
@@ -484,6 +516,11 @@ class TrayManager:
             self._loop.call_soon_threadsafe(fn, *args)
         except RuntimeError:
             log.debug("Daemon loop is closed; ignoring menu action")
+
+
+def _call_after_exit(proc: subprocess.Popen, fn: Callable[[], None]) -> None:
+    proc.wait()
+    fn()
 
 
 def _recent_label(text: str) -> str:

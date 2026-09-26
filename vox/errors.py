@@ -14,7 +14,7 @@ class AudioError(VoxError):
 
 
 class TranscriptionError(VoxError):
-    """Whisper API error."""
+    """Transcription provider error."""
 
 
 class StreamingError(TranscriptionError):

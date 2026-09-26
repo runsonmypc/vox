@@ -83,9 +83,16 @@ def main() -> None:
         log.error("%s", e)
         sys.exit(1)
 
-    if config.mode != "whisper_cpp" and not config.openai_api_key:
-        log.error("OPENAI_API_KEY not set. Set it in config file or environment.")
-        sys.exit(1)
+    # Without a key Vox still starts: the menu asks for one, and a service exiting here would only be restarted
+    from .keystore import KeystoreError, get_api_key, migrate_plaintext
+    migrate_plaintext(config.config_path)
+    try:
+        config.openai_api_key = get_api_key()
+    except KeystoreError as e:
+        config.api_key_error = str(e)
+        log.warning("Couldn't read the OpenAI API key from the keychain: %s", e)
+    if config.uses_openai and not config.openai_api_key and config.api_key_error is None:
+        log.warning("No OpenAI API key yet. Choose Set API Key… from the Vox menu.")
     if config.mode == "whisper_cpp":
         from .whisper_cpp import WhisperCppTranscriber
         try:

@@ -11,7 +11,9 @@ pytest.importorskip("pystray")
 from vox.config import Config
 from vox.history import HistoryDB
 from vox.ui.icons import IconState, make_icon
-from vox.ui.tray import HISTORY_WINDOW, RECENT_HEADER, VOCAB_WINDOW, TrayManager, _recent_label, _selected_device
+from vox.ui.tray import (
+    HISTORY_WINDOW, KEY_WINDOW, RECENT_HEADER, SET_KEY, VOCAB_WINDOW, TrayManager, _recent_label, _selected_device,
+)
 
 DEVICES = [
     {"name": "MacBook Pro Microphone", "max_input_channels": 1},
@@ -47,7 +49,7 @@ def immediate(fn, *args):
 
 def make_tray(config=None, **kwargs):
     kwargs.setdefault("focus", MagicMock())  # keep window tests away from the real window server
-    tray = TrayManager(config or Config(), icon_factory=FakeIcon, dispatch=immediate, **kwargs)
+    tray = TrayManager(config or Config(openai_api_key="test"), icon_factory=FakeIcon, dispatch=immediate, **kwargs)
     return tray, tray._icon
 
 
@@ -90,7 +92,7 @@ def test_set_state_updates_icon_title_and_menu(state, title, template):
 def test_state_updates_go_through_dispatch():
     """Daemon-thread calls must be marshalled, never applied directly."""
     queued = []
-    tray = TrayManager(Config(), icon_factory=FakeIcon, dispatch=lambda fn, *a: queued.append((fn, a)))
+    tray = TrayManager(Config(openai_api_key="test"), icon_factory=FakeIcon, dispatch=lambda fn, *a: queued.append((fn, a)))
     icon = tray._icon
     tray.set_state("RECORDING")
     assert icon.title == "Vox · Idle"  # nothing applied yet
@@ -283,7 +285,7 @@ async def test_recent_dictations_are_their_own_menu_section(tmp_path):
         ["Vox · Idle"],
         ["Pause Dictation", "Input Device", "Transcription"],
         [RECENT_HEADER, "“three”", "“two”", "“one”"],
-        ["Search History…", "Vocabulary & Snippets…"],
+        ["Search History…", "Vocabulary & Snippets…", "Set API Key…"],
         ["Quit Vox"],
     ]
     history.close()
@@ -441,3 +443,77 @@ def test_linux_icon_tolerates_missing_notification_server():
 
     icon = _linux_icon_class(SimpleNamespace(Icon=Backend))("vox", None, "Vox", None)
     icon._finalize()  # must not raise, or Quit would exit non-zero and systemd would restart vox
+
+
+# -- API key ----------------------------------------------------------------------
+
+
+def test_missing_key_is_the_status_and_the_first_item():
+    _, icon = make_tray(Config(mode="batch"))
+    assert icon.title == "Vox · API key needed"
+    assert [item.text for item in icon.menu][:2] == ["Vox · API key needed", SET_KEY]
+    assert [item.text for item in icon.menu].count(SET_KEY) == 1
+
+
+def test_unreadable_keyring_is_not_reported_as_a_missing_key():
+    config = Config(mode="batch")
+    config.api_key_error = "Failed to unlock the collection!"
+    _, icon = make_tray(config)
+    assert icon.title == "Vox · Can’t read the keyring"
+
+
+def test_with_a_key_the_item_sits_with_the_other_windows():
+    _, icon = make_tray()
+    texts = [item.text for item in icon.menu]
+    assert texts[0] == "Vox · Idle"
+    assert texts.index(SET_KEY) == texts.index("Vocabulary & Snippets…") + 1
+
+
+def test_local_transcription_needs_no_key():
+    _, icon = make_tray(Config(mode="whisper_cpp"))
+    assert icon.title == "Vox · Idle"
+
+
+def test_status_follows_the_key_and_the_mode():
+    config = Config(mode="batch")
+    tray, icon = make_tray(config)
+    config.openai_api_key = "test"
+    tray.key_changed()
+    assert icon.title == "Vox · Idle"
+    config.openai_api_key = ""
+    config.mode = "whisper_cpp"
+    tray.mode_changed()
+    assert icon.title == "Vox · Idle"
+    config.mode = "streaming"
+    tray.mode_changed()
+    assert icon.title == "Vox · API key needed"
+
+
+def test_recording_shows_the_state_not_the_key():
+    tray, icon = make_tray(Config(mode="batch"))
+    tray.set_state("RECORDING")
+    assert icon.title == "Vox · Recording…"
+
+
+def test_key_window_closing_tells_the_daemon_to_reread_the_key():
+    proc = _fake_proc()
+    launcher = MagicMock(return_value=proc)
+    tray, icon = make_tray(Config(mode="batch"), launcher=launcher)
+    loop, queue = MagicMock(), MagicMock()
+    tray.attach(loop, queue, None, MagicMock())
+    with patch("vox.ui.tray.threading.Thread") as thread:
+        find(icon.menu, SET_KEY)(icon)
+    launcher.assert_called_once_with([sys.executable, "-m", KEY_WINDOW])
+    kwargs = thread.call_args.kwargs
+    target, args = kwargs["target"], kwargs["args"]
+    target(*args)  # what the thread runs: wait for the window, then tell the daemon
+    proc.wait.assert_called_once_with()
+    loop.call_soon_threadsafe.assert_called_once_with(queue.put_nowait, "api_key")
+
+
+def test_daemon_can_open_the_key_window():
+    launcher = MagicMock(return_value=_fake_proc())
+    tray, _ = make_tray(Config(mode="batch"), launcher=launcher)
+    with patch("vox.ui.tray.threading.Thread"):
+        tray.open_key_window()
+    launcher.assert_called_once_with([sys.executable, "-m", KEY_WINDOW])
