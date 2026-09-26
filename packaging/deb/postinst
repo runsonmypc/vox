@@ -1,0 +1,25 @@
+#!/bin/sh
+# Start Vox at login for every user, and restart it for users running an older version
+set -e
+
+# Run `systemctl --user "$@"` in the service manager of every logged-in user
+each_user_manager() {
+    for dir in /run/user/*; do
+        uid=${dir##*/}
+        case "$uid" in '' | *[!0-9]*) continue ;; esac
+        systemctl is-active --quiet "user@$uid.service" || continue
+        user=$(getent passwd "$uid" | cut -d: -f1)
+        [ -n "$user" ] || continue
+        runuser -u "$user" -- env XDG_RUNTIME_DIR="$dir" systemctl --user "$@" || true
+    done
+}
+
+if [ "$1" = configure ] && command -v systemctl >/dev/null 2>&1; then
+    systemctl --global enable vox.service
+    if [ -d /run/systemd/system ]; then
+        each_user_manager daemon-reload
+        if [ -n "$2" ]; then  # an upgrade from version $2
+            each_user_manager try-restart vox.service
+        fi
+    fi
+fi

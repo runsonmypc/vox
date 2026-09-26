@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Vox
+Comment=Start voice dictation
+Exec=systemctl --user start vox.service
+Icon=vox
+Terminal=false
+StartupNotify=false
+Categories=Utility;
