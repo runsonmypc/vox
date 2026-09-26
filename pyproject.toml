@@ -24,6 +24,17 @@ dependencies = [
     "pyobjc-framework-ApplicationServices; sys_platform == 'darwin'",
 ]
 
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "anyio>=4",
+    "ruff>=0.13",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+
 [tool.setuptools.packages.find]
 include = ["vox*"]
 
