@@ -1,4 +1,4 @@
-"""Tray icon (macOS menu bar, Linux AppIndicator): status, input device picker, pause toggle, recent dictations, API key.
+"""Tray icon (macOS menu bar, Linux AppIndicator): status, dictation settings, recent dictations and the windows.
 
 Cocoa and GTK both want the tray on the main thread, so the tray owns the main
 thread while the asyncio daemon runs in its own thread. Menu callbacks run on
