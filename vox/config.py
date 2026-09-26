@@ -31,7 +31,7 @@ class Config:
     audio_device: int | str | None = None
     sample_rate: int = 48000
     channels: int = 1
-    max_recording_seconds: int = 300
+    max_recording_seconds: int = 900
 
     # Transcription
     mode: str = "batch"
@@ -55,6 +55,9 @@ class Config:
 
     # Window class overrides (wm_class -> app_type)
     window_classes: dict[str, str] = field(default_factory=dict)
+
+    # Screen context: send window-title and focused-window words to the transcriber as vocabulary hints
+    context_screen: bool = True
 
     # Sounds
     sounds_enabled: bool = True
@@ -84,6 +87,8 @@ class Config:
         self._config_path: Path | None = None
         # Why the keychain couldn't be read, if it couldn't; a key may exist there, so don't ask for a new one
         self.api_key_error: str | None = None
+        # Why the configured transcription mode can't run (e.g. a missing whisper.cpp model), set at startup
+        self.mode_error: str | None = None
 
 
 def load_config(path: Path | None = None) -> Config:
@@ -159,6 +164,9 @@ def load_config(path: Path | None = None) -> Config:
         if "window_classes" in data:
             config.window_classes = dict(data["window_classes"])
 
+        _apply_section(config, data, "context", {
+            "screen": "context_screen",
+        })
         _apply_section(config, data, "sounds", {
             "enabled": "sounds_enabled",
         })
@@ -265,6 +273,20 @@ def update_transcription_mode(path: Path, mode: str) -> None:
             if "model" not in doc[section]:
                 doc[section]["model"] = old_model
     transcription["mode"] = mode
+    _write_document(path, doc)
+
+
+RECORDING_LIMIT_CHOICES: tuple[int, ...] = (300, 600, 900, 1800, 3600)
+
+
+def update_max_recording_seconds(path: Path, seconds: int) -> None:
+    """Persist the recording limit in ``[audio] max_recording_seconds``, keeping comments and layout."""
+    if isinstance(seconds, bool) or not isinstance(seconds, int) or seconds <= 0:
+        raise ValueError(f"Invalid recording limit: {seconds!r}")
+    doc = _read_document(path)
+    if "audio" not in doc:
+        doc["audio"] = tomlkit.table()
+    doc["audio"]["max_recording_seconds"] = seconds
     _write_document(path, doc)
 
 

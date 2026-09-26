@@ -38,7 +38,7 @@ class HistoryRecord:
 
 
 class HistoryDB:
-    """Append-only dictation log. Safe to share across threads."""
+    """Dictation log. Safe to share across threads."""
 
     def __init__(self, path: Path | None = None) -> None:
         self.path = path or DEFAULT_HISTORY_PATH
@@ -81,6 +81,16 @@ class HistoryDB:
         with self._lock:
             rows = self._conn.execute(sql, params).fetchall()
         return [HistoryRecord(*row) for row in rows]
+
+    def delete(self, entry_id: int) -> None:
+        """Remove one dictation."""
+        with self._lock, self._conn:
+            self._conn.execute("DELETE FROM history WHERE id = ?", (entry_id,))
+
+    def clear(self) -> None:
+        """Remove every dictation."""
+        with self._lock, self._conn:
+            self._conn.execute("DELETE FROM history")
 
     def stats(self) -> tuple[int, int | None]:
         """Number of dictations and the newest row id, a cheap way to notice new ones."""

@@ -245,6 +245,8 @@ class TrayManager:
         # Main thread only
         self._state = IconState.IDLE
         self._paused = False
+        self._notice: str | None = None
+        self._devices: list[tuple[int, str]] | None = None  # daemon snapshot; None until the first one arrives
         self._recent: list[HistoryRecord] = []
         self._windows: dict[str, subprocess.Popen] = {}
         self._images = {state: make_icon(state, light=light) for state in IconState}
@@ -304,6 +306,17 @@ class TrayManager:
         """The daemon re-read the API key."""
         self._dispatch(self._render)
 
+    def set_notice(self, text: str | None) -> None:
+        """Show a persistent problem (e.g. Wayland, a silent microphone) in the status line; None clears it."""
+        self._dispatch(self._apply_notice, text)
+
+    def limit_changed(self) -> None:
+        self._dispatch(self._render)
+
+    def devices_changed(self, devices: list[tuple[int, str]]) -> None:
+        """A fresh input-device snapshot from the daemon thread; the menu renders from it."""
+        self._dispatch(self._apply_devices, devices)
+
     def open_key_window(self) -> None:
         self._dispatch(self._open_key, None, None)
 
@@ -347,6 +360,14 @@ class TrayManager:
 
     def _apply_state(self, state: IconState) -> None:
         self._state = state
+        self._render()
+
+    def _apply_notice(self, text: str | None) -> None:
+        self._notice = text
+        self._render()
+
+    def _apply_devices(self, devices: list[tuple[int, str]]) -> None:
+        self._devices = devices
         self._render()
 
     def _apply_paused(self, paused: bool) -> None:
