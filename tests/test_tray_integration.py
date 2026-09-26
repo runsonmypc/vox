@@ -217,10 +217,10 @@ async def test_menu_to_daemon_to_icon_round_trip():
         task = await start_daemon(tray)
 
         find(icon.menu, "Pause Dictation")(icon)
-        await wait_for(lambda: icon.title == "Vox — Paused")
+        await wait_for(lambda: icon.title == "Vox · Paused")
 
         find(icon.menu, "Pause Dictation")(icon)
-        await wait_for(lambda: icon.title == "Vox — Idle")
+        await wait_for(lambda: icon.title == "Vox · Idle")
 
         titles = []
         tray_render = tray._render
@@ -231,9 +231,9 @@ async def test_menu_to_daemon_to_icon_round_trip():
 
         tray._render = spy
         await tray._queue.put("toggle")
-        await wait_for(lambda: titles == ["Vox — Recording…"])
+        await wait_for(lambda: titles == ["Vox · Recording…"])
         await tray._queue.put("toggle")
-        await wait_for(lambda: titles == ["Vox — Recording…", "Vox — Processing…", "Vox — Idle"])
+        await wait_for(lambda: titles == ["Vox · Recording…", "Vox · Processing…", "Vox · Idle"])
         assert "“round trip”" in [item.text for item in icon.menu]  # recent list refreshed
 
         find(icon.menu, "Quit Vox")(icon)
@@ -283,12 +283,12 @@ async def test_transcription_menu_switches_provider_and_persists_choice(tmp_path
         assert load_config(config_path).whisper_cpp_model == str(model)
 
         await tray._queue.put("toggle")
-        await wait_for(lambda: icon.title == "Vox — Recording…")
+        await wait_for(lambda: icon.title == "Vox · Recording…")
         await tray._queue.put("mode:batch")  # a queued switch cannot interrupt a recording
         await asyncio.sleep(0)
         assert config.mode == "whisper_cpp"
         await tray._queue.put("toggle")
-        await wait_for(lambda: icon.title == "Vox — Idle")
+        await wait_for(lambda: icon.title == "Vox · Idle")
         assert tray._history.recent(1)[0].transcription_mode == "whisper_cpp"
 
         find(menu, "OpenAI (batch)")(icon)
@@ -298,9 +298,9 @@ async def test_transcription_menu_switches_provider_and_persists_choice(tmp_path
         assert load_config(config_path).whisper_cpp_model == str(model)
 
         await tray._queue.put("toggle")
-        await wait_for(lambda: icon.title == "Vox — Recording…")
+        await wait_for(lambda: icon.title == "Vox · Recording…")
         await tray._queue.put("toggle")
-        await wait_for(lambda: icon.title == "Vox — Idle")
+        await wait_for(lambda: icon.title == "Vox · Idle")
         assert [(rec.text, rec.transcription_mode) for rec in tray._history.recent(2)] == [
             ("API text", "batch"), ("local text", "whisper_cpp"),
         ]

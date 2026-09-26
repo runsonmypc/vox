@@ -36,7 +36,7 @@ _STATUS_TEXT = {
 _RECENT_COUNT = 3
 _RECENT_LABEL_CHARS = 48
 
-RECENT_HEADER = "Recent Dictations — click to copy"
+RECENT_HEADER = "Click a recent dictation to copy it"
 
 HISTORY_WINDOW = "vox.ui.history_window"
 VOCAB_WINDOW = "vox.ui.vocab_window"
@@ -314,7 +314,7 @@ class TrayManager:
 
     @staticmethod
     def _title(state: IconState) -> str:
-        return f"Vox — {_STATUS_TEXT[state]}"
+        return f"Vox · {_STATUS_TEXT[state]}"
 
     def _render(self) -> None:
         shown = self._shown

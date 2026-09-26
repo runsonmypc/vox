@@ -68,14 +68,14 @@ async def settle():
 def test_initial_icon_is_idle_template():
     _, icon = make_tray()
     assert icon.icon.tobytes() == make_icon(IconState.IDLE).tobytes()
-    assert icon.title == "Vox — Idle"
-    assert items(icon.menu)[0].text == "Vox — Idle"
+    assert icon.title == "Vox · Idle"
+    assert items(icon.menu)[0].text == "Vox · Idle"
     assert items(icon.menu)[0].enabled is False
 
 
 @pytest.mark.parametrize(
     "state, title, template",
-    [("RECORDING", "Vox — Recording…", False), ("PROCESSING", "Vox — Processing…", False), ("IDLE", "Vox — Idle", True)],
+    [("RECORDING", "Vox · Recording…", False), ("PROCESSING", "Vox · Processing…", False), ("IDLE", "Vox · Idle", True)],
 )
 def test_set_state_updates_icon_title_and_menu(state, title, template):
     tray, icon = make_tray()
@@ -93,26 +93,26 @@ def test_state_updates_go_through_dispatch():
     tray = TrayManager(Config(), icon_factory=FakeIcon, dispatch=lambda fn, *a: queued.append((fn, a)))
     icon = tray._icon
     tray.set_state("RECORDING")
-    assert icon.title == "Vox — Idle"  # nothing applied yet
+    assert icon.title == "Vox · Idle"  # nothing applied yet
     for fn, args in queued:
         fn(*args)
-    assert icon.title == "Vox — Recording…"
+    assert icon.title == "Vox · Recording…"
 
 
 def test_paused_shows_paused_icon_only_when_idle():
     tray, icon = make_tray()
     tray.set_paused(True)
-    assert icon.title == "Vox — Paused"
+    assert icon.title == "Vox · Paused"
     assert icon.icon.tobytes() == make_icon(IconState.PAUSED).tobytes()
     assert find(icon.menu, "Pause Dictation").checked is True
 
     tray.set_state("PROCESSING")  # e.g. paused while a transcription finishes
-    assert icon.title == "Vox — Processing…"
+    assert icon.title == "Vox · Processing…"
     tray.set_state("IDLE")
-    assert icon.title == "Vox — Paused"
+    assert icon.title == "Vox · Paused"
 
     tray.set_paused(False)
-    assert icon.title == "Vox — Idle"
+    assert icon.title == "Vox · Idle"
     assert find(icon.menu, "Pause Dictation").checked is False
 
 
@@ -280,7 +280,7 @@ async def test_recent_dictations_are_their_own_menu_section(tmp_path):
     tray, icon = make_tray()
     tray.attach(asyncio.get_running_loop(), asyncio.Queue(), history, MagicMock())
     assert _sections(icon.menu) == [
-        ["Vox — Idle"],
+        ["Vox · Idle"],
         ["Pause Dictation", "Input Device", "Transcription"],
         [RECENT_HEADER, "“three”", "“two”", "“one”"],
         ["Search History…", "Vocabulary & Snippets…"],
