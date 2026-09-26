@@ -403,12 +403,15 @@ def _read_document(path: Path) -> tomlkit.TOMLDocument:
 
 
 def _write_document(path: Path, doc: tomlkit.TOMLDocument) -> None:
-    """Write atomically (temp file + os.replace), following symlinks and keeping file permissions."""
+    """Write atomically (temp file + os.replace), following symlinks and keeping file permissions.
+
+    A new file is owner-only (0600), in an owner-only directory if that is new too: snippets can be personal.
+    """
     text = tomlkit.dumps(doc)
     tomllib.loads(text)  # never replace a valid config with an unparseable one
 
     target = path.resolve()
-    target.parent.mkdir(parents=True, exist_ok=True)
+    target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=target.parent, prefix=f".{target.name}.", suffix=".tmp")
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:

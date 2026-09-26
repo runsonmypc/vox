@@ -10,7 +10,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from vox.config import load_config, update_dictionary, update_snippet, update_transcription_mode
+from vox.config import (
+    RECORDING_LIMIT_CHOICES,
+    load_config,
+    update_dictionary,
+    update_max_recording_seconds,
+    update_snippet,
+    update_transcription_mode,
+)
 from vox.errors import ConfigError
 
 EXAMPLE = """\
@@ -178,6 +185,36 @@ def test_creates_missing_file_and_dirs_with_private_mode(tmp_path):
     update_dictionary(path, add=["Vox"])
     assert load_config(path).dictionary == ["Vox"]
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def test_new_config_directory_is_owner_only(tmp_path):
+    path = tmp_path / "vox" / "config.toml"
+    update_snippet(path, "x", "y")
+    assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def test_recording_limit_is_saved_in_the_audio_section(cfg):
+    update_max_recording_seconds(cfg, 1800)
+    assert load_config(cfg).max_recording_seconds == 1800
+    assert "sample_rate = 16000  # keep this comment" in cfg.read_text()
+    update_max_recording_seconds(cfg, RECORDING_LIMIT_CHOICES[0])
+    assert load_config(cfg).max_recording_seconds == RECORDING_LIMIT_CHOICES[0]
+
+
+def test_recording_limit_creates_a_private_file(tmp_path):
+    path = tmp_path / "new" / "config.toml"
+    update_max_recording_seconds(path, 600)
+    assert load_config(path).max_recording_seconds == 600
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+@pytest.mark.parametrize("seconds", [0, -60, True, 90.0, "600"])
+def test_recording_limit_rejects_invalid_values(cfg, seconds):
+    before = cfg.read_text()
+    with pytest.raises(ValueError):
+        update_max_recording_seconds(cfg, seconds)
+    assert cfg.read_text() == before
 
 
 def test_preserves_file_permissions(cfg):
