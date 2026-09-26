@@ -52,6 +52,7 @@ class KeyController(NSObject):
         self.background = _in_background  # replaced in tests
         self.confirm = kit.confirm
         self._build()
+        model.reload()
         self.render()
         return self
 

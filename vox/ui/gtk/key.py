@@ -88,6 +88,7 @@ class KeyWindow(Adw.ApplicationWindow):
                                          action=Gtk.CallbackAction.new(lambda *_: self.finish() or True)))
         self.add_controller(escape)
         self.connect("close-request", lambda _window: setattr(self, "closed", True) or False)
+        model.reload()
         self.render()
         self.set_focus(self.entry)
 
