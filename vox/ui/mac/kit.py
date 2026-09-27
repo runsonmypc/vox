@@ -349,7 +349,7 @@ def application() -> AppKit.NSApplication:
 def _main_menu() -> AppKit.NSMenu:
     bar = AppKit.NSMenu.alloc().init()
     for title, items in (
-        ("Vox", [("Close Window", "performClose:", "w"), ("Quit Vox", "terminate:", "q")]),
+        ("Vox Transfer", [("Close Window", "performClose:", "w"), ("Quit Vox Transfer", "terminate:", "q")]),
         ("Edit", [
             ("Undo", "undo:", "z"), ("Redo", "redo:", "Z"), None,
             ("Cut", "cut:", "x"), ("Copy", "copy:", "c"), ("Paste", "paste:", "v"), ("Select All", "selectAll:", "a"),

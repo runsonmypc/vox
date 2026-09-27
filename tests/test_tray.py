@@ -76,14 +76,14 @@ async def settle():
 def test_initial_icon_is_idle_template():
     _, icon = make_tray()
     assert icon.icon.tobytes() == make_icon(IconState.IDLE).tobytes()
-    assert icon.title == "Vox · Idle"
-    assert items(icon.menu)[0].text == "Vox · Idle"
+    assert icon.title == "Vox Transfer · Idle"
+    assert items(icon.menu)[0].text == "Vox Transfer · Idle"
     assert items(icon.menu)[0].enabled is False
 
 
 @pytest.mark.parametrize(
     "state, title, template",
-    [("RECORDING", "Vox · Recording…", False), ("PROCESSING", "Vox · Processing…", False), ("IDLE", "Vox · Idle", True)],
+    [("RECORDING", "Vox Transfer · Recording…", False), ("PROCESSING", "Vox Transfer · Processing…", False), ("IDLE", "Vox Transfer · Idle", True)],
 )
 def test_set_state_updates_icon_title_and_menu(state, title, template):
     tray, icon = make_tray()
@@ -101,26 +101,26 @@ def test_state_updates_go_through_dispatch():
     tray = TrayManager(Config(openai_api_key="test"), icon_factory=FakeIcon, dispatch=lambda fn, *a: queued.append((fn, a)))
     icon = tray._icon
     tray.set_state("RECORDING")
-    assert icon.title == "Vox · Idle"  # nothing applied yet
+    assert icon.title == "Vox Transfer · Idle"  # nothing applied yet
     for fn, args in queued:
         fn(*args)
-    assert icon.title == "Vox · Recording…"
+    assert icon.title == "Vox Transfer · Recording…"
 
 
 def test_paused_shows_paused_icon_only_when_idle():
     tray, icon = make_tray()
     tray.set_paused(True)
-    assert icon.title == "Vox · Paused"
+    assert icon.title == "Vox Transfer · Paused"
     assert icon.icon.tobytes() == make_icon(IconState.PAUSED).tobytes()
     assert find(icon.menu, "Pause Dictation").checked is True
 
     tray.set_state("PROCESSING")  # e.g. paused while a transcription finishes
-    assert icon.title == "Vox · Processing…"
+    assert icon.title == "Vox Transfer · Processing…"
     tray.set_state("IDLE")
-    assert icon.title == "Vox · Paused"
+    assert icon.title == "Vox Transfer · Paused"
 
     tray.set_paused(False)
-    assert icon.title == "Vox · Idle"
+    assert icon.title == "Vox Transfer · Idle"
     assert find(icon.menu, "Pause Dictation").checked is False
 
 
@@ -353,11 +353,11 @@ async def test_recent_dictations_are_their_own_menu_section(tmp_path):
     tray, icon = make_tray()
     tray.attach(asyncio.get_running_loop(), asyncio.Queue(), history, MagicMock())
     assert _sections(icon.menu) == [
-        ["Vox · Idle"],
+        ["Vox Transfer · Idle"],
         ["Pause Dictation", "Input Device", "Transcription", "Recording Limit"],
         [RECENT_HEADER, "“three”", "“two”", "“one”"],
         ["Search History…", "Vocabulary & Snippets…", "Set API Key…"],
-        ["Quit Vox"],
+        ["Quit Vox Transfer"],
     ]
     history.close()
 
@@ -409,7 +409,7 @@ async def test_quit_cancels_daemon_main_task():
     tray, icon = make_tray()
     main_task = MagicMock()
     tray.attach(asyncio.get_running_loop(), asyncio.Queue(), None, main_task)
-    find(icon.menu, "Quit Vox")(icon)
+    find(icon.menu, "Quit Vox Transfer")(icon)
     await settle()
     main_task.cancel.assert_called_once()
     assert icon.stopped is False  # the daemon stops the tray on its way out
@@ -417,7 +417,7 @@ async def test_quit_cancels_daemon_main_task():
 
 def test_quit_before_attach_stops_tray():
     tray, icon = make_tray()
-    find(icon.menu, "Quit Vox")(icon)
+    find(icon.menu, "Quit Vox Transfer")(icon)
     assert icon.stopped is True
 
 
@@ -540,7 +540,7 @@ def test_linux_icon_tolerates_missing_notification_server():
         def _finalize(self):
             raise RuntimeError("org.freedesktop.Notifications was not provided by any .service files")
 
-    icon = _linux_icon_class(SimpleNamespace(Icon=Backend))("vox", None, "Vox", None)
+    icon = _linux_icon_class(SimpleNamespace(Icon=Backend))("vox", None, "Vox Transfer", None)
     icon._finalize()  # must not raise, or Quit would exit non-zero and systemd would restart vox
 
 
@@ -549,8 +549,8 @@ def test_linux_icon_tolerates_missing_notification_server():
 
 def test_missing_key_is_the_status_and_the_first_item():
     _, icon = make_tray(Config(mode="batch"))
-    assert icon.title == "Vox · API key needed"
-    assert [item.text for item in icon.menu][:2] == ["Vox · API key needed", SET_KEY]
+    assert icon.title == "Vox Transfer · API key needed"
+    assert [item.text for item in icon.menu][:2] == ["Vox Transfer · API key needed", SET_KEY]
     assert [item.text for item in icon.menu].count(SET_KEY) == 1
 
 
@@ -558,19 +558,19 @@ def test_unreadable_keyring_is_not_reported_as_a_missing_key():
     config = Config(mode="batch")
     config.api_key_error = "Failed to unlock the collection!"
     _, icon = make_tray(config)
-    assert icon.title == "Vox · Can’t read the keyring"
+    assert icon.title == "Vox Transfer · Can’t read the keyring"
 
 
 def test_with_a_key_the_item_sits_with_the_other_windows():
     _, icon = make_tray()
     texts = [item.text for item in icon.menu]
-    assert texts[0] == "Vox · Idle"
+    assert texts[0] == "Vox Transfer · Idle"
     assert texts.index(SET_KEY) == texts.index("Vocabulary & Snippets…") + 1
 
 
 def test_local_transcription_needs_no_key():
     _, icon = make_tray(Config(mode="whisper_cpp"))
-    assert icon.title == "Vox · Idle"
+    assert icon.title == "Vox Transfer · Idle"
 
 
 def test_status_follows_the_key_and_the_mode():
@@ -578,20 +578,20 @@ def test_status_follows_the_key_and_the_mode():
     tray, icon = make_tray(config)
     config.openai_api_key = "test"
     tray.key_changed()
-    assert icon.title == "Vox · Idle"
+    assert icon.title == "Vox Transfer · Idle"
     config.openai_api_key = ""
     config.mode = "whisper_cpp"
     tray.mode_changed()
-    assert icon.title == "Vox · Idle"
+    assert icon.title == "Vox Transfer · Idle"
     config.mode = "streaming"
     tray.mode_changed()
-    assert icon.title == "Vox · API key needed"
+    assert icon.title == "Vox Transfer · API key needed"
 
 
 def test_recording_shows_the_state_not_the_key():
     tray, icon = make_tray(Config(mode="batch"))
     tray.set_state("RECORDING")
-    assert icon.title == "Vox · Recording…"
+    assert icon.title == "Vox Transfer · Recording…"
 
 
 def test_key_window_closing_tells_the_daemon_to_reread_the_key():
@@ -629,39 +629,39 @@ def test_status_line_reports_the_most_urgent_problem_while_idle():
     tray.set_notice("Microphone is silent: check its permission")
     # config.toml first: until it loads, the mode, and whether it needs a key, is only the default's.
     # The parser's message is in the log.
-    assert icon.title == f"Vox · {CONFIG_ERROR}"
+    assert icon.title == f"Vox Transfer · {CONFIG_ERROR}"
     assert items(icon.menu)[0].text == icon.title
 
     config.config_error = None  # the reloader read the fixed file and told the tray
     tray.mode_changed()
-    assert icon.title == "Vox · API key needed"  # then the key
+    assert icon.title == "Vox Transfer · API key needed"  # then the key
 
     config.openai_api_key = "test"
     tray.key_changed()
-    assert icon.title == "Vox · whisper.cpp model not found: /models/ggml-base.bin"  # then the mode
+    assert icon.title == "Vox Transfer · whisper.cpp model not found: /models/ggml-base.bin"  # then the mode
     assert items(icon.menu)[0].text == icon.title
 
     config.mode_error = None
     tray.mode_changed()
-    assert icon.title == "Vox · Microphone is silent: check its permission"  # then the notice
+    assert icon.title == "Vox Transfer · Microphone is silent: check its permission"  # then the notice
 
     tray.set_state("RECORDING")
-    assert icon.title == "Vox · Recording…"
+    assert icon.title == "Vox Transfer · Recording…"
     tray.set_state("IDLE")
     tray.set_notice(None)
-    assert icon.title == "Vox · Idle"
+    assert icon.title == "Vox Transfer · Idle"
 
 
 def test_a_settings_file_error_shows_while_paused_but_not_while_processing():
     config = Config(openai_api_key="test")
     config.config_error = "Invalid config.toml"
     tray, icon = make_tray(config)
-    assert icon.title == f"Vox · {CONFIG_ERROR}"
+    assert icon.title == f"Vox Transfer · {CONFIG_ERROR}"
     tray.set_paused(True)
-    assert icon.title == f"Vox · {CONFIG_ERROR}"
+    assert icon.title == f"Vox Transfer · {CONFIG_ERROR}"
     tray.set_paused(False)
     tray.set_state("PROCESSING")
-    assert icon.title == "Vox · Processing…"
+    assert icon.title == "Vox Transfer · Processing…"
 
 
 def test_a_long_problem_is_shortened_to_one_line():
@@ -669,7 +669,7 @@ def test_a_long_problem_is_shortened_to_one_line():
     config.mode_error = "whisper.cpp model not found:\n" + "/very/long/path" * 10
     _, icon = make_tray(config)
     assert "\n" not in icon.title
-    assert len(icon.title) <= len("Vox · ") + 72 and icon.title.endswith("…")
+    assert len(icon.title) <= len("Vox Transfer · ") + 72 and icon.title.endswith("…")
 
 
 # -- Window processes ---------------------------------------------------------------

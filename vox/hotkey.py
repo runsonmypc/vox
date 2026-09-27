@@ -54,7 +54,7 @@ class HotkeyListener:
     def __init__(self, config: Config, loop: asyncio.AbstractEventLoop, queue: asyncio.Queue) -> None:
         if keyboard is None:
             raise DependencyError(
-                f"Global hotkeys are unavailable ({_IMPORT_ERROR}). Vox needs an X11 display; "
+                f"Global hotkeys are unavailable ({_IMPORT_ERROR}). Vox Transfer needs an X11 display; "
                 "on a Wayland-only session, log in with an Xorg session instead."
             )
         self._loop = loop

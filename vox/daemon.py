@@ -101,7 +101,7 @@ def run(config: Config) -> None:
         # Nowhere to ask for a key; headless Vox is started by hand, not by a service that would retry
         reason = f" ({config.api_key_error})" if config.api_key_error else ""
         log.error(
-            "No OpenAI API key%s. Start Vox from the desktop and choose Set API Key… from its menu, "
+            "No OpenAI API key%s. Start Vox Transfer from the desktop and choose Set API Key… from its menu, "
             "or set OPENAI_API_KEY.", reason,
         )
         raise SystemExit(1)
@@ -109,7 +109,7 @@ def run(config: Config) -> None:
     notice = _platform_notice()
     if notice == WAYLAND_NOTICE:
         log.warning(
-            "This is a Wayland session. Vox's hotkey, window detection and paste use X11, so they only "
+            "This is a Wayland session. Vox Transfer's hotkey, window detection and paste use X11, so they only "
             "reach X11 (XWayland) apps; native Wayland windows ignore them. For full support, log in "
             "with an Xorg session (e.g. 'GNOME on Xorg')."
         )
@@ -166,7 +166,7 @@ def _quit_tray_on_sigterm(tray: TrayManager) -> None:
 
             GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGTERM, on_sigterm)
     except Exception:
-        log.warning("Couldn't handle SIGTERM: stopping Vox that way won't restore a lowered volume", exc_info=True)
+        log.warning("Couldn't handle SIGTERM: stopping Vox Transfer that way won't restore a lowered volume", exc_info=True)
 
 
 def _platform_notice() -> str | None:
@@ -277,7 +277,7 @@ class _Daemon:
     async def run(self) -> None:
         config, tray = self.config, self.tray
         self.hotkey.start()
-        log.info("Vox ready (%s mode). Press %s to toggle recording.", config.mode, config.hotkey)
+        log.info("Vox Transfer ready (%s mode). Press %s to toggle recording.", config.mode, config.hotkey)
         if tray is not None:
             tray.attach(self.loop, self.queue, self.history, asyncio.current_task())
             if self._key_missing() and config.api_key_error is None and config.config_error is None:
@@ -428,7 +428,7 @@ class _Daemon:
 
         if await asyncio.to_thread(is_digital_silence, wav_data):  # reads every sample: off the loop
             log.warning(
-                "The microphone delivered only silence (every sample zero), which usually means Vox may not use it. "
+                "The microphone delivered only silence (every sample zero), which usually means Vox Transfer may not use it. "
                 "On macOS, allow it in System Settings > Privacy & Security > Microphone."
             )
             self._update_notice(mic_silent=True)
@@ -576,7 +576,7 @@ class _Daemon:
             if config.api_key_error is not None:
                 log.warning("Not recording: the keychain couldn't be read (%s)", config.api_key_error)
             else:
-                log.warning("Not recording: no OpenAI API key. Choose Set API Key… from the Vox menu.")
+                log.warning("Not recording: no OpenAI API key. Choose Set API Key… from the Vox Transfer menu.")
                 if self.tray is not None:
                     self.tray.open_key_window()
             return False
@@ -1017,12 +1017,12 @@ async def _config_reloader(config: Config, recorder: Recorder, tray: TrayManager
             if config.config_error is not None:
                 config.config_error = None
                 if stamp is None:
-                    log.info("%s is gone: Vox is using the default settings and records again", path)
+                    log.info("%s is gone: Vox Transfer is using the default settings and records again", path)
                 else:
-                    log.info("%s loads again: Vox is using its settings and records again", path)
+                    log.info("%s loads again: Vox Transfer is using its settings and records again", path)
                 hotkey = (new_config.hotkey, new_config.hotkey_fallback, new_config.double_tap_timeout_ms)
                 if hotkey != (config.hotkey, config.hotkey_fallback, config.double_tap_timeout_ms):
-                    log.warning("The hotkey settings in %s take effect when Vox restarts", path)
+                    log.warning("The hotkey settings in %s take effect when Vox Transfer restarts", path)
             else:
                 log.info("Config reloaded from %s", path)
             if tray is not None:

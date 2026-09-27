@@ -1134,7 +1134,7 @@ async def test_a_settings_file_that_loads_again_is_applied_and_lets_vox_record(t
     assert (config.mode, config.attenuation_level) == ("streaming", 0.3)
     tray.mode_changed.assert_called_once()  # the status line drops "Settings file has an error"
     assert config.hotkey == "right_shift"  # the listener started with the default, until a restart
-    assert "hotkey settings in" in caplog.text and "take effect when Vox restarts" in caplog.text
+    assert "hotkey settings in" in caplog.text and "take effect when Vox Transfer restarts" in caplog.text
 
 
 @pytest.mark.anyio
@@ -1149,7 +1149,7 @@ async def test_a_broken_settings_file_that_is_deleted_lets_vox_record_on_the_def
 
     assert config.mode == "batch"
     tray.mode_changed.assert_called_once()
-    assert "is gone: Vox is using the default settings" in caplog.text
+    assert "is gone: Vox Transfer is using the default settings" in caplog.text
 
 
 @pytest.mark.anyio

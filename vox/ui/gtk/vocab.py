@@ -141,7 +141,7 @@ class VocabWindow(Adw.ApplicationWindow):
         self.banner.set_revealed(broken)
         for widget in (self.word_entry, self.new_button, self.words_list, self.snippets_list):
             widget.set_sensitive(not broken)
-        footer = f"Saved to {self.model.shown_path}. Vox picks up changes within a few seconds."
+        footer = f"Saved to {self.model.shown_path}. Vox Transfer picks up changes within a few seconds."
         self.words_footer.set_label(footer)
         self.snippets_footer.set_label(footer)
 
@@ -233,7 +233,7 @@ class SnippetEditor(Adw.Dialog):
         frame = Gtk.ScrolledWindow(child=self.expansion, min_content_height=140, hscrollbar_policy=Gtk.PolicyType.NEVER)
         frame.add_css_class("card")
         frame.add_css_class("snippet-box")
-        expansion_group = Adw.PreferencesGroup(title="Vox types")
+        expansion_group = Adw.PreferencesGroup(title="Vox Transfer types")
         expansion_group.add(frame)
 
         self.warning = label("", "caption", "warning", wrap=True)

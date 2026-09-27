@@ -90,7 +90,7 @@ def _read_wav(path: Path) -> tuple[np.ndarray, int]:
     """A 16-bit PCM WAV file as float32 frames for sounddevice, and its sample rate."""
     with wave.open(str(path), "rb") as wf:
         if wf.getsampwidth() != 2:
-            raise ValueError(f"{8 * wf.getsampwidth()}-bit audio; Vox plays 16-bit PCM")
+            raise ValueError(f"{8 * wf.getsampwidth()}-bit audio; Vox Transfer plays 16-bit PCM")
         rate, channels = wf.getframerate(), wf.getnchannels()
         pcm = wf.readframes(wf.getnframes())
     frames = np.frombuffer(pcm, dtype="<i2").reshape(-1, channels)

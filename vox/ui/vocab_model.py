@@ -13,9 +13,9 @@ from ..config import load_config, snippet_key, update_dictionary, update_snippet
 from ..errors import ConfigError
 
 # What both windows say, so macOS and Linux never drift apart
-WORDS_INTRO = "Names, jargon and acronyms Vox should always spell exactly as written."
-SNIPPETS_INTRO = "Say a trigger phrase on its own and Vox types the expansion instead."
-NO_WORDS = ("No Words Yet", "Add names and terms Vox tends to get wrong.")
+WORDS_INTRO = "Names, jargon and acronyms Vox Transfer should always spell exactly as written."
+SNIPPETS_INTRO = "Say a trigger phrase on its own and Vox Transfer types the expansion instead."
+NO_WORDS = ("No Words Yet", "Add names and terms Vox Transfer tends to get wrong.")
 NO_SNIPPETS = ("No Snippets Yet", "Type an address, a sign-off or a link just by saying a short phrase.")
 LOAD_FAILED_TITLE = "Couldn’t Read Your Settings"
 SAVE_FAILED_TITLE = "Couldn’t Save"

@@ -365,7 +365,7 @@ class TrayManager:
 
     @staticmethod
     def _title(state: IconState) -> str:
-        return f"Vox · {_STATUS_TEXT[state]}"
+        return f"Vox Transfer · {_STATUS_TEXT[state]}"
 
     def _key_problem(self) -> str | None:
         """Why dictation can't reach OpenAI, if the mode needs it and there is no key."""
@@ -386,7 +386,7 @@ class TrayManager:
     def _status_line(self) -> str:
         shown = self._shown
         problem = self._problem() if shown in (IconState.IDLE, IconState.PAUSED) else None
-        return f"Vox · {problem}" if problem else self._title(shown)
+        return f"Vox Transfer · {problem}" if problem else self._title(shown)
 
     def _render(self) -> None:
         shown = self._shown
@@ -445,7 +445,7 @@ class TrayManager:
         if not key_problem:
             yield Item(SET_KEY, self._open_key)
         yield Menu.SEPARATOR
-        yield Item("Quit Vox", self._quit)
+        yield Item("Quit Vox Transfer", self._quit)
 
     def _device_items(self):
         # Only the daemon's snapshot: querying PortAudio here would block the UI thread and see a stale device list

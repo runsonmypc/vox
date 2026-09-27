@@ -19,7 +19,7 @@ from .vocab_model import VocabModel
 
 
 def main(argv: list[str] | None = None) -> None:
-    parser = argparse.ArgumentParser(prog="vox-vocab", description="Edit Vox vocabulary and snippets")
+    parser = argparse.ArgumentParser(prog="vox-vocab", description="Edit Vox Transfer vocabulary and snippets")
     parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG_PATH, help="Path to config.toml")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")

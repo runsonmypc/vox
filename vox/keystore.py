@@ -132,8 +132,8 @@ def migrate_plaintext(config_path: Path | None = None) -> None:
             # Nothing to move a config.toml key into, so at least say it goes unused
             if _plaintext_key(config_path, read_api_key_setting):
                 log.warning(
-                    "Vox doesn't read openai_api_key from %s, and it stays there in plain text. Save the key "
-                    "with Set API Key… from the Vox menu, then delete the setting.", _shown(config_path),
+                    "Vox Transfer doesn't read openai_api_key from %s, and it stays there in plain text. Save the key "
+                    "with Set API Key… from the Vox Transfer menu, then delete the setting.", _shown(config_path),
                 )
             return
         # Each source on its own, so a config.toml that doesn't parse still lets the .env key move
@@ -152,7 +152,7 @@ def migrate_plaintext(config_path: Path | None = None) -> None:
             if not stored:
                 keyring.set_password(SERVICE, USERNAME, key)
                 if (keyring.get_password(SERVICE, USERNAME) or "").strip() != key:
-                    log.error("The keychain didn't return the key Vox saved; leaving %s as it is", _shown(path))
+                    log.error("The keychain didn't return the key Vox Transfer saved; leaving %s as it is", _shown(path))
                     return
                 stored = key
                 log.info("Moved the OpenAI API key from %s into %s", _shown(path), storage_name())
@@ -161,7 +161,7 @@ def migrate_plaintext(config_path: Path | None = None) -> None:
                 log.info("Deleted the plain-text OpenAI API key from %s", _shown(path.resolve()))
             else:
                 log.warning(
-                    "%s holds a different OpenAI API key from the one in %s. Vox uses the saved one; "
+                    "%s holds a different OpenAI API key from the one in %s. Vox Transfer uses the saved one; "
                     "delete the file's copy, or save it from Set API Key…",
                     _shown(path), storage_name(),
                 )
@@ -217,8 +217,8 @@ def _env_key_to_move(path: Path) -> str:
     values = set(_env_values(path))
     if len(values) > 1:
         log.warning(
-            "%s holds more than one OpenAI API key, so Vox moved none of them. Save the right one with "
-            "Set API Key… from the Vox menu, then delete the file's copies.", _shown(path),
+            "%s holds more than one OpenAI API key, so Vox Transfer moved none of them. Save the right one with "
+            "Set API Key… from the Vox Transfer menu, then delete the file's copies.", _shown(path),
         )
         return ""
     return values.pop() if values else ""

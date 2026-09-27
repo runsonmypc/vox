@@ -16,13 +16,13 @@ from .. import keystore
 KEYS_URL = "https://platform.openai.com/api-keys"
 
 # What both windows say, so macOS and Linux never drift apart
-INTRO = "Vox sends your dictation to OpenAI to transcribe it, using your own API key."
+INTRO = "Vox Transfer sends your dictation to OpenAI to transcribe it, using your own API key."
 CHECKING = "Checking with OpenAI…"
 CHECK_FAILED_TITLE = "Couldn’t Check the Key"
 SAVE_ANYWAY = "Save Anyway"
 SAVE_FAILED_TITLE = "Couldn’t Save the Key"
 REMOVE_TITLE = "Remove the Saved Key?"
-REMOVE_MESSAGE = "Vox can’t transcribe with OpenAI until you save a key again."
+REMOVE_MESSAGE = "Vox Transfer can’t transcribe with OpenAI until you save a key again."
 REMOVE_BUTTON = "Remove"
 REMOVE_FAILED_TITLE = "Couldn’t Remove the Key"
 
@@ -76,9 +76,9 @@ class KeyModel:
     def storage_text(self) -> str:
         name = keystore.storage_name()
         if name is not None:
-            return f"Vox keeps your key in {name}, which encrypts it."
+            return f"Vox Transfer keeps your key in {name}, which encrypts it."
         return (
-            "No keyring is running, so Vox keeps your key without encryption in "
+            "No keyring is running, so Vox Transfer keeps your key without encryption in "
             f"{_shown(keystore.FALLBACK_PATH)}, readable only by you."
         )
 
@@ -93,7 +93,7 @@ class KeyModel:
     @property
     def override_text(self) -> str | None:
         if keystore.env_override():
-            return "OPENAI_API_KEY is set in Vox’s environment, so Vox uses it instead of the saved key."
+            return "OPENAI_API_KEY is set in Vox Transfer’s environment, so Vox Transfer uses it instead of the saved key."
         return None
 
     @staticmethod
@@ -127,15 +127,15 @@ def check_key(key: str, timeout: float = 15.0) -> CheckResult:
     except openai.AuthenticationError:
         return CheckResult(Outcome.REJECTED, "OpenAI didn’t accept this key. Check that you copied all of it.")
     except openai.PermissionDeniedError:
-        return CheckResult(Outcome.UNCHECKED, "This key isn’t allowed to list models, so Vox couldn’t check it.")
+        return CheckResult(Outcome.UNCHECKED, "This key isn’t allowed to list models, so Vox Transfer couldn’t check it.")
     except openai.APIConnectionError:  # includes timeouts
-        return CheckResult(Outcome.UNCHECKED, "Vox couldn’t reach OpenAI to check the key.")
+        return CheckResult(Outcome.UNCHECKED, "Vox Transfer couldn’t reach OpenAI to check the key.")
     except openai.APIStatusError as e:
         return CheckResult(Outcome.UNCHECKED, f"OpenAI couldn’t check the key right now (error {e.status_code}).")
     except UnicodeEncodeError:  # httpx can't put the key in a header, so no request can ever succeed
         return CheckResult(Outcome.REJECTED, BAD_CHARACTER)
     except Exception as e:
-        return CheckResult(Outcome.UNCHECKED, f"Vox couldn’t check the key: {e}")
+        return CheckResult(Outcome.UNCHECKED, f"Vox Transfer couldn’t check the key: {e}")
     return CheckResult(Outcome.ACCEPTED)
 
 
