@@ -14,6 +14,11 @@
 <dict>
     <key>Label</key>
     <string>com.runsonmypc.vox</string>
+    <!-- Login Items in System Settings shows the agent as the launcher app, Vox Transfer -->
+    <key>AssociatedBundleIdentifiers</key>
+    <array>
+        <string>com.runsonmypc.vox.launcher</string>
+    </array>
     <key>ProgramArguments</key>
     <array>
         <string>@VOX_BIN@</string>

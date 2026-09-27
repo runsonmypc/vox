@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# Install, update or remove Vox for the current user on macOS or Linux.
+# Install, update or remove Vox Transfer for the current user on macOS or Linux.
 #
-#   ./install.sh               install or update, start Vox at login, and add a Vox launcher
+#   ./install.sh               install or update, start Vox Transfer at login, and add a Vox Transfer launcher
 #   ./install.sh --no-service  install or update only
-#   ./install.sh --uninstall   remove Vox, keeping its settings and dictation history
+#   ./install.sh --uninstall   remove Vox Transfer, keeping its settings and dictation history
 #
 # Run from a source tree, it installs that tree. Run on its own (for example
 # `curl -fsSL https://github.com/runsonmypc/vox/releases/latest/download/install.sh | bash`),
 # it downloads the latest release, checks it against the release's SHA256SUMS and installs it.
 #
-# Vox gets its own virtualenv in ~/.local/share/vox/venv and a ~/.local/bin/vox link, so the
+# Vox Transfer gets its own virtualenv in ~/.local/share/vox/venv and a ~/.local/bin/vox link, so the
 # source tree can be deleted afterwards. Re-run to update.
 set -euo pipefail
 
@@ -19,6 +19,9 @@ VENV="$HOME/.local/share/vox/venv"
 VENV_OLD="$VENV.old"
 BIN="$HOME/.local/bin/vox"
 APPLICATIONS=/Applications
+# The macOS launcher, and the name it had before the app became Vox Transfer
+LAUNCHER="Vox Transfer.app"
+OLD_LAUNCHER=Vox.app
 MAC_LOGS="$HOME/Library/Logs/Vox"
 # Where launchd wrote Vox's logs before 1.0, readable by every account
 LEGACY_LOGS=(/tmp/vox.stdout.log /tmp/vox.stderr.log)
@@ -34,9 +37,9 @@ usage() {
     cat <<'EOF'
 Usage: install.sh [--no-service | --uninstall]
 
-  (no option)    install or update Vox, start it at login, and add a Vox launcher
-  --no-service   install or update Vox only
-  --uninstall    remove Vox, keeping its settings and dictation history
+  (no option)    install or update Vox Transfer, start it at login, and add a Vox Transfer launcher
+  --no-service   install or update Vox Transfer only
+  --uninstall    remove Vox Transfer, keeping its settings and dictation history
 EOF
 }
 
@@ -66,19 +69,19 @@ verify_checksum() {
 # Download the latest release, verify it, and run its install.sh with the same options
 bootstrap() {
     local url tag version archive
-    command -v curl >/dev/null || die "install.sh needs curl to download Vox"
+    command -v curl >/dev/null || die "install.sh needs curl to download Vox Transfer"
     url=$(curl -fsSLI -o /dev/null -w '%{url_effective}' "$REPO_URL/releases/latest") ||
         die "could not reach $REPO_URL"
     tag=${url##*/}
     case "$tag" in
     v[0-9]*) ;;
-    *) die "could not find the latest Vox release at $REPO_URL/releases" ;;
+    *) die "could not find the latest Vox Transfer release at $REPO_URL/releases" ;;
     esac
     version=${tag#v}
     archive="vox-$version.tar.gz"
     BOOTSTRAP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/vox-install.XXXXXX")
     trap 'rm -rf "$BOOTSTRAP_DIR"' EXIT
-    say "Downloading Vox $version"
+    say "Downloading Vox Transfer $version"
     curl -fsSL -o "$BOOTSTRAP_DIR/$archive" "$REPO_URL/releases/download/$tag/$archive"
     curl -fsSL -o "$BOOTSTRAP_DIR/SHA256SUMS" "$REPO_URL/releases/download/$tag/SHA256SUMS"
     verify_checksum "$BOOTSTRAP_DIR" "$archive"
@@ -101,7 +104,7 @@ restore_old_venv() {
     rm -rf "$VENV"
     if [ -e "$VENV_OLD" ]; then
         mv "$VENV_OLD" "$VENV"
-        warn "the update failed, so the previous Vox stays installed"
+        warn "the update failed, so the previous Vox Transfer stays installed"
     fi
     exit "$status"
 }
@@ -128,7 +131,7 @@ smoke_test() {
     Linux) modules="$modules,gi" ;;
     esac
     # -P and cd /: run from the source tree, python -c would import its vox/ instead of the venv's
-    (cd / && "$VENV/bin/python" -P -c "import $modules") || die "the new Vox environment does not work"
+    (cd / && "$VENV/bin/python" -P -c "import $modules") || die "the new Vox Transfer environment does not work"
     "$VENV/bin/vox" --help >/dev/null || die "the new vox command does not run"
 }
 
@@ -177,7 +180,7 @@ except ValueError:
     gi.require_version("AppIndicator3", "0.1")' 2>/dev/null || missing+=(gir1.2-ayatanaappindicator3-0.1)
     [ ${#missing[@]} -eq 0 ] && return
     if ! command -v apt-get >/dev/null; then
-        printf 'error: Vox needs these, which this installer can only install with apt:\n' >&2
+        printf 'error: Vox Transfer needs these, which this installer can only install with apt:\n' >&2
         for pkg in "${missing[@]}"; do
             printf '  %s (Debian/Ubuntu: %s)\n' "$(describe_package "$pkg")" "$pkg" >&2
         done
@@ -203,12 +206,12 @@ linux_venv() {
 
 linux_install() {
     local repo=$1 py=/usr/bin/python3  # the system Python: python3-gi (the tray's GTK binding) only installs there
-    [ -x "$py" ] || die "Vox needs the system Python 3 (/usr/bin/python3)"
+    [ -x "$py" ] || die "Vox Transfer needs the system Python 3 (/usr/bin/python3)"
     # Some dependencies publish wheels only for these versions; others would need a compiler
     "$py" -c 'import sys; sys.exit(not (3, 12) <= sys.version_info[:2] <= (3, 13))' ||
-        die "Vox needs Python 3.12 or 3.13 as /usr/bin/python3; this system has $("$py" -V 2>&1)"
+        die "Vox Transfer needs Python 3.12 or 3.13 as /usr/bin/python3; this system has $("$py" -V 2>&1)"
     linux_deps "$py"
-    say "Installing Vox into $VENV"
+    say "Installing Vox Transfer into $VENV"
     replace_venv linux_venv "$repo" "$py"
     linux_tray_host
 }
@@ -235,7 +238,7 @@ linux_tray_host() {
     fi
     # GNOME's D-Bus helper can drop the reply while its dialog waits, so watch for the tray host instead
     for _ in $(seq 120); do has_tray_host && return; sleep 1; done
-    say "No tray icon until 'AppIndicator and KStatusNotifierItem Support' is enabled (extensions.gnome.org); Vox still works"
+    say "No tray icon until 'AppIndicator and KStatusNotifierItem Support' is enabled (extensions.gnome.org); Vox Transfer still works"
 }
 
 app_icon() {
@@ -248,7 +251,7 @@ desktop_entry() {
     cat <<EOF
 [Desktop Entry]
 Type=Application
-Name=Vox
+Name=Vox Transfer
 Comment=$1
 Exec=systemctl --user start vox.service
 Icon=$2
@@ -276,14 +279,14 @@ linux_service() {
     systemctl --user enable --quiet vox.service
     systemctl --user restart vox.service
     linux_launchers
-    say "Vox is running (logs: journalctl --user -u vox -f)"
-    say "After Quit, start it again from Vox in your applications"
+    say "Vox Transfer is running (logs: journalctl --user -u vox -f)"
+    say "After Quit, start it again from Vox Transfer in your applications"
 }
 
 wayland_warning() {
     [ "$(uname -s)" = Linux ] || return 0
     [ "${XDG_SESSION_TYPE:-}" = wayland ] || [ -n "${WAYLAND_DISPLAY:-}" ] || return 0
-    warn "this is a Wayland session: Vox's hotkey and paste only work in X11 (XWayland) apps." \
+    warn "this is a Wayland session: Vox Transfer's hotkey and paste only work in X11 (XWayland) apps." \
         "For everything else, log in with an X11 session such as 'Ubuntu on Xorg'."
 }
 
@@ -302,23 +305,23 @@ mac_venv() {
 
 mac_install() {
     local repo=$1 old_python new_python version
-    command -v uv >/dev/null || die "Vox installs with uv on macOS: brew install uv (or see https://docs.astral.sh/uv/)"
+    command -v uv >/dev/null || die "Vox Transfer installs with uv on macOS: brew install uv (or see https://docs.astral.sh/uv/)"
     uv python find --managed-python 3.12 >/dev/null 2>&1 || uv python install 3.12
     version=$("$(uv python find --managed-python 3.12)" -c 'import platform; print(platform.python_version())')
     recover_old_venv
     old_python=$(venv_python "$VENV")
-    say "Installing Vox into $VENV"
+    say "Installing Vox Transfer into $VENV"
     replace_venv mac_venv "$repo" "$version"
     new_python=$(venv_python "$VENV")
     if [ -n "$old_python" ] && [ "$old_python" != "$new_python" ]; then
-        warn "Vox now runs on a different Python ($new_python)." \
+        warn "Vox Transfer now runs on a different Python ($new_python)." \
             "macOS will ask again for Microphone, Accessibility and Input Monitoring (and Screen Recording for screen hints);" \
             "remove the old python3.12 entries in System Settings > Privacy & Security."
     fi
 }
 
-# A launcher this user's install.sh wrote. The default APFS volume ignores case, so another
-# vendor's VOX.app is the same path as Vox.app: match the bundle id, and only in files the user owns
+# A launcher this user's install.sh wrote. The default APFS volume ignores case, so another vendor's
+# VOX.app is the same path as the old Vox.app: match the bundle id, and only in files the user owns
 is_our_launcher() {
     [ -O "$1/Contents/Info.plist" ] && grep -qs "$LABEL.launcher" "$1/Contents/Info.plist"
 }
@@ -329,22 +332,33 @@ is_our_launcher() {
 launcher_path() {
     local dir
     for dir in "$APPLICATIONS" "$HOME/Applications"; do
-        if [ -e "$dir/Vox.app" ] || [ -L "$dir/Vox.app" ]; then
-            is_our_launcher "$dir/Vox.app" || continue
+        if [ -e "$dir/$LAUNCHER" ] || [ -L "$dir/$LAUNCHER" ]; then
+            is_our_launcher "$dir/$LAUNCHER" || continue
         elif [ "$dir" = "$APPLICATIONS" ] && [ ! -w "$dir" ]; then
             continue
         fi
-        printf '%s\n' "$dir/Vox.app"
+        printf '%s\n' "$dir/$LAUNCHER"
         return 0
     done
     return 1
 }
 
+# Delete this user's own launchers with these names, in either place; never another app
+remove_launchers() {
+    local name app
+    for name in "$@"; do
+        for app in "$APPLICATIONS/$name" "$HOME/Applications/$name"; do
+            # One launcher that can't be deleted must not keep the rest of Vox installed
+            if is_our_launcher "$app"; then rm -rf "$app" || warn "could not remove $app"; fi
+        done
+    done
+}
+
 mac_launcher() {
     local app
     if ! app=$(launcher_path); then
-        warn "another app is already named Vox, so no Vox launcher was added." \
-            "After Quit, start Vox again with: launchctl kickstart gui/$(id -u)/$LABEL"
+        warn "another app is already named Vox Transfer, so no Vox Transfer launcher was added." \
+            "After Quit, start Vox Transfer again with: launchctl kickstart gui/$(id -u)/$LABEL"
         return 0
     fi
     mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
@@ -359,8 +373,10 @@ mac_launcher() {
     <string>Vox</string>
     <key>CFBundleIdentifier</key>
     <string>com.runsonmypc.vox.launcher</string>
+    <key>CFBundleDisplayName</key>
+    <string>Vox Transfer</string>
     <key>CFBundleName</key>
-    <string>Vox</string>
+    <string>Vox Transfer</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>LSUIElement</key>
@@ -380,7 +396,9 @@ EOF
     chmod +x "$app/Contents/MacOS/Vox"
     app_icon "$app/Contents/Resources/Vox.icns"
     touch "$app"  # so Finder shows a changed icon
-    say "After Quit, start it again from Vox in Applications or Spotlight"
+    # An install from before the rename added Vox.app; this launcher replaces it
+    remove_launchers "$OLD_LAUNCHER"
+    say "After Quit, start it again from Vox Transfer in Applications or Spotlight"
 }
 
 # Write the LaunchAgent from its template; launchd expands neither ~ nor $HOME, so paths are absolute
@@ -435,8 +453,8 @@ mac_service() {
         if launchctl bootstrap "gui/$(id -u)" "$plist"; then started=1; break; fi
         sleep 1
     done
-    [ "$started" -eq 1 ] || die "could not start the Vox LaunchAgent"
-    say "Vox is running (logs: $MAC_LOGS/vox.log)"
+    [ "$started" -eq 1 ] || die "could not start the Vox Transfer LaunchAgent"
+    say "Vox Transfer is running (logs: $MAC_LOGS/vox.log)"
     mac_launcher
     say "macOS asks once for Microphone, Accessibility and Input Monitoring access, and for Screen Recording while screen hints are on"
 }
@@ -471,14 +489,13 @@ install_vox() {
         Darwin) mac_service "$repo" ;;
         esac
     fi
-    say "Vox asks for your OpenAI API key when it needs one; change it later with Set API Key… in its menu"
+    say "Vox Transfer asks for your OpenAI API key when it needs one; change it later with Set API Key… in its menu"
     wayland_warning
     path_warning
     say "Done. Run '$BIN --help' for options."
 }
 
 uninstall_vox() {
-    local app
     case "$(uname -s)" in
     Linux)
         if command -v systemctl >/dev/null; then
@@ -494,27 +511,24 @@ uninstall_vox() {
     Darwin)
         launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
         rm -f "$HOME/Library/LaunchAgents/$LABEL.plist"
-        for app in "$APPLICATIONS/Vox.app" "$HOME/Applications/Vox.app"; do
-            # One launcher that can't be deleted must not keep the rest of Vox installed
-            if is_our_launcher "$app"; then rm -rf "$app" || warn "could not remove $app"; fi
-        done
+        remove_launchers "$LAUNCHER" "$OLD_LAUNCHER"
         ;;
     esac
     rm -rf "$VENV" "$VENV_OLD"
     if [ -L "$BIN" ]; then rm -f "$BIN"; fi
-    say "Vox is uninstalled"
+    say "Vox Transfer is uninstalled"
     say "Kept your settings in ~/.config/vox and your dictation history in ~/.local/share/vox; delete those folders to remove them"
     case "$(uname -s)" in
     Linux)
         say "Your OpenAI API key stays in your login keyring; remove it with: secret-tool clear service vox username openai_api_key"
         if dpkg-query -W -f='${Status}' vox 2>/dev/null | grep -q 'ok installed'; then
-            say "The Vox .deb package is still installed; remove it with: sudo apt remove vox"
+            say "The Vox Transfer .deb package is still installed; remove it with: sudo apt remove vox"
         fi
         ;;
     Darwin)
         say "Kept the logs in ~/Library/Logs/Vox"
         say "Your OpenAI API key stays in your login keychain (item \"vox\"); remove it with Keychain Access"
-        say "Remove Vox's python3.12 entries in System Settings > Privacy & Security if you no longer need them"
+        say "Remove Vox Transfer's python3.12 entries in System Settings > Privacy & Security if you no longer need them"
         ;;
     esac
 }
