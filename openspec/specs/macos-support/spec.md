@@ -121,6 +121,10 @@ The project SHALL provide a macOS LaunchAgent property list template that `insta
 - **WHEN** `install.sh` installs the LaunchAgent
 - **THEN** the agent runs `~/.local/bin/vox` by its absolute path, with a PATH that includes `~/.local/bin`, `/opt/homebrew/bin` and `/usr/local/bin`, and a umask of 077
 
+#### Scenario: Shown as Vox Transfer in Login Items
+- **WHEN** `install.sh` installs the LaunchAgent
+- **THEN** the agent names the launcher's bundle id, `com.runsonmypc.vox.launcher`, in `AssociatedBundleIdentifiers`, so System Settings lists it under Login Items as the launcher app, Vox Transfer, while its label stays `com.runsonmypc.vox`
+
 #### Scenario: Private log file
 - **WHEN** the LaunchAgent runs Vox
 - **THEN** its output goes to `~/Library/Logs/Vox/vox.log` (directory 0700, file 0600), and the installer deletes the old `/tmp/vox.stdout.log` and `/tmp/vox.stderr.log` files the user owns

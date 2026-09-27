@@ -26,7 +26,7 @@ The system SHALL provide a system tray icon on macOS (menu bar) and Linux (AppIn
 
 #### Scenario: Problem in the status line
 - **WHEN** Vox is idle or paused and something stops dictation
-- **THEN** the first menu line reads "Vox · <problem>", showing only the most urgent one: "Settings file has an error", then "API key needed" or "Can’t read the keyring", then the reason the transcription mode cannot run (for example a missing whisper.cpp model), then a notice such as "Wayland: hotkey and paste only work in X11 apps", "Microphone is silent: check its permission", "Accessibility access needed" or "Last dictation only partly transcribed: see History"
+- **THEN** the first menu line reads "Vox Transfer · <problem>", showing only the most urgent one: "Settings file has an error", then "API key needed" or "Can’t read the keyring", then the reason the transcription mode cannot run (for example a missing whisper.cpp model), then a notice such as "Wayland: hotkey and paste only work in X11 apps", "Microphone is silent: check its permission", "Accessibility access needed" or "Last dictation only partly transcribed: see History"
 - **AND** a long problem is flattened to one line of at most 72 characters
 
 #### Scenario: State shown while busy

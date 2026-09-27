@@ -1,9 +1,17 @@
-# release-packaging Specification
+## ADDED Requirements
 
-## Purpose
-Defines how Vox is installed, updated, removed and released on macOS and Linux: the per-user installer and its release bootstrap, the Debian package, the hash-locked dependency set, the Linux login service, and the free CI and release workflows that build and check all of it.
+### Requirement: Product Name
+The system SHALL present itself to users as Vox Transfer: in its tray or menu bar menu, its windows, dialogs and messages, its log lines, `vox --help` and `vox --version`, its launchers, the Linux service's description, the Debian package's description, the release title and its documentation. The names that scripts, installs and permission grants depend on SHALL stay `vox`: the command and `/usr/bin/vox`, the Python package, `~/.config/vox`, `~/Library/Logs/Vox`, `~/.local/share/vox`, `/opt/vox`, `vox.service`, the launchd label and its plist, the bundle identifiers (`com.runsonmypc.vox…`), the `.desktop` file names, the `vox` Debian package and the release file names, the keychain item `vox`, environment variables, and the GitHub repository `runsonmypc/vox`.
 
-## Requirements
+#### Scenario: Names users see
+- **WHEN** the user opens the menu, a window of the app, the applications list or Spotlight, reads the log, runs `vox --help`, or looks at the package or the release
+- **THEN** the app is called Vox Transfer: the menu's first line begins "Vox Transfer ·", its last item is "Quit Vox Transfer", the launchers' `Name=` and the macOS launcher's bundle name are "Vox Transfer", the systemd unit's `Description=` is "Vox Transfer voice dictation", the `.deb` description begins "Vox Transfer", and the GitHub release is titled "Vox Transfer X.Y.Z"
+
+#### Scenario: Names that stay vox
+- **WHEN** an existing install is updated
+- **THEN** the command, settings, history, logs, login service, keychain item and package keep the paths and names they had, so nothing moves and no permission or key is lost
+
+## MODIFIED Requirements
 
 ### Requirement: Self-Contained Per-User Installation
 The system SHALL provide one install script for macOS and Linux that installs Vox and its tray support for the current user, without keeping the source checkout and without a compiler. The installer SHALL NOT ask for, copy, or store the OpenAI API key, SHALL refuse to run as root, and on macOS SHALL never write into or delete an app bundle it did not create.
@@ -68,21 +76,6 @@ The system SHALL provide one install script for macOS and Linux that installs Vo
 - **WHEN** the installer runs in a Linux Wayland session
 - **THEN** it warns that the hotkey and paste only work in X11 (XWayland) apps
 
-### Requirement: Install from a Release
-When `install.sh` runs outside a source tree, as with `curl -fsSL https://github.com/runsonmypc/vox/releases/latest/download/install.sh | bash`, the system SHALL download the latest release's tarball, verify it against that release's `SHA256SUMS`, and run the tarball's own installer with the same options. The script SHALL do nothing until it has been read completely.
-
-#### Scenario: Latest release installed
-- **WHEN** the script runs from a pipe or as a lone download
-- **THEN** it resolves the latest `vX.Y.Z` release, downloads `vox-X.Y.Z.tar.gz` and `SHA256SUMS`, checks the hash, unpacks the tarball into a temporary directory that is removed afterwards, and runs `install.sh` from it with the options it was given
-
-#### Scenario: Damaged download
-- **WHEN** the tarball's hash does not match its `SHA256SUMS` entry, or the entry is missing
-- **THEN** the installer stops with an error and installs nothing
-
-#### Scenario: No release published
-- **WHEN** the repository has no published release
-- **THEN** the installer stops with an error saying it could not find one
-
 ### Requirement: Uninstall
 The system SHALL remove a per-user install with `install.sh --uninstall`, keeping the user's settings, history, logs and API key, and saying where they are.
 
@@ -94,72 +87,12 @@ The system SHALL remove a per-user install with `install.sh --uninstall`, keepin
 - **WHEN** the user runs `install.sh --uninstall` on macOS
 - **THEN** the LaunchAgent is booted out and deleted, only the launchers this user's installer created are removed (`Vox Transfer.app`, or `Vox.app` from before the rename, in `/Applications` or `~/Applications`), the virtualenv and the `vox` link are removed, and settings, history, `~/Library/Logs/Vox` and the Keychain item are kept; a launcher that cannot be deleted is reported and does not stop the rest of the uninstall
 
-### Requirement: Debian Package
-The system SHALL publish a `vox_<version>_<arch>.deb` for Ubuntu 24.04 and its derivatives, for amd64 and arm64, that installs Vox into `/opt/vox` with `/usr/bin/vox`, depends on the system packages Vox needs (including `x11-utils` for `xprop`, as `install.sh` requires), and starts Vox at login for every user.
-
-#### Scenario: First install
-- **WHEN** an administrator installs the package
-- **THEN** the systemd user unit is enabled globally (`systemctl --global enable`), so Vox starts at the next login of every user, and an application launcher and an XDG autostart entry are installed
-
-#### Scenario: Upgrade
-- **WHEN** the package is upgraded or reinstalled
-- **THEN** whether Vox starts at login stays as it was, including an administrator's `systemctl --global disable`, and running user instances are restarted if active
-
-#### Scenario: Removal
-- **WHEN** the package is removed
-- **THEN** Vox is stopped for logged-in users, it no longer starts at login, `/opt/vox` is deleted, and each user's settings and history stay in their home folders
-
-#### Scenario: Reinstall after removal
-- **WHEN** a removed package that started Vox at login is installed again
-- **THEN** it starts Vox at login again, and a purge forgets that setting and deletes the autostart entry
-
-### Requirement: Hash-Locked Dependencies
-Every install path SHALL install exactly the dependency versions in `requirements.lock`, generated from `uv.lock`, verified by hash, and then build Vox itself with the locked build backend and no dependency resolution. Every locked package SHALL have a wheel for each supported platform, so installing never needs a compiler.
-
-#### Scenario: Installing dependencies
-- **WHEN** `install.sh` or the `.deb` build installs Vox's dependencies
-- **THEN** it installs `requirements.lock` with hash checking and without resolving further dependencies, then installs Vox without build isolation using the locked setuptools
-
-#### Scenario: Lock out of date
-- **WHEN** `requirements.lock` does not match `uv.lock`, or a locked package lacks a wheel for Linux x86_64 or aarch64 (glibc 2.39) or macOS on Python 3.12 or 3.13
-- **THEN** the lock check fails in CI
-
-#### Scenario: Packages that need a compiler
-- **WHEN** a transitive dependency ships no wheels and Vox never imports it (evdev, for pynput's unused uinput backend)
-- **THEN** it is left out of `requirements.lock`
-
-### Requirement: Linux Login Service
-On Linux, the system SHALL run Vox as a systemd user service tied to the graphical session. The service SHALL restart Vox after a crash but not after a permanent startup failure, and files Vox creates SHALL be readable only by the user.
-
-#### Scenario: Crash
-- **WHEN** Vox exits with a failure status other than 78
-- **THEN** systemd restarts it after 3 seconds
-
-#### Scenario: Permanent startup failure
-- **WHEN** Vox exits with status 78 (a missing system dependency or an unusable lock directory)
-- **THEN** systemd does not restart it, and the user starts it again from the launcher or with `systemctl --user start vox` once the problem is fixed
-
-#### Scenario: Private files
-- **WHEN** the service runs Vox
-- **THEN** it runs with umask 0077
-
 ### Requirement: Version Reporting
 The system SHALL report its installed version.
 
 #### Scenario: Version flag
 - **WHEN** the user runs `vox --version`
 - **THEN** it prints `Vox Transfer` and the installed package version, or `unknown` when run from a checkout that was never installed
-
-### Requirement: Continuous Integration
-The project SHALL check every push to `main` and every pull request with GitHub Actions on standard GitHub-hosted runners only, which are free for public repositories, and never on larger or paid runners.
-
-#### Scenario: Checks on a pull request
-- **WHEN** a pull request is opened or updated
-- **THEN** CI runs ruff, the lock check, a syntax check and shellcheck of every shell script (with maintainer scripts checked as POSIX sh), the Linux tests under Xvfb with the GTK 4 window tests in their own process and required rather than skipped, the macOS tests, `install.sh` in a clean Ubuntu 24.04 container without a compiler, and an amd64 `.deb` build installed, upgraded and removed in a clean container, whose smoke test checks that `xdotool`, `xclip` and `xprop` are present and imports the packaged Vox from `/opt/vox` (with `python -P` from `/`), never the checkout it runs from
-
-#### Scenario: Supply chain
-- **WHEN** a workflow uses a third-party action
-- **THEN** it is pinned to a full commit SHA, checkouts do not keep credentials, workflows default to read-only permissions, and uv is pinned to the version that wrote `uv.lock`
 
 ### Requirement: Release Workflow
 The project SHALL publish a release when a `vX.Y.Z` tag is pushed. It SHALL publish only after the checks pass, and SHALL publish the release tarball, the Debian packages, `install.sh` and their checksums.
@@ -179,14 +112,3 @@ The project SHALL publish a release when a `vX.Y.Z` tag is pushed. It SHALL publ
 #### Scenario: Write access
 - **WHEN** the release workflow runs
 - **THEN** only the job that creates the release can write to the repository
-
-### Requirement: Product Name
-The system SHALL present itself to users as Vox Transfer: in its tray or menu bar menu, its windows, dialogs and messages, its log lines, `vox --help` and `vox --version`, its launchers, the Linux service's description, the Debian package's description, the release title and its documentation. The names that scripts, installs and permission grants depend on SHALL stay `vox`: the command and `/usr/bin/vox`, the Python package, `~/.config/vox`, `~/Library/Logs/Vox`, `~/.local/share/vox`, `/opt/vox`, `vox.service`, the launchd label and its plist, the bundle identifiers (`com.runsonmypc.vox…`), the `.desktop` file names, the `vox` Debian package and the release file names, the keychain item `vox`, environment variables, and the GitHub repository `runsonmypc/vox`.
-
-#### Scenario: Names users see
-- **WHEN** the user opens the menu, a window of the app, the applications list or Spotlight, reads the log, runs `vox --help`, or looks at the package or the release
-- **THEN** the app is called Vox Transfer: the menu's first line begins "Vox Transfer ·", its last item is "Quit Vox Transfer", the launchers' `Name=` and the macOS launcher's bundle name are "Vox Transfer", the systemd unit's `Description=` is "Vox Transfer voice dictation", the `.deb` description begins "Vox Transfer", and the GitHub release is titled "Vox Transfer X.Y.Z"
-
-#### Scenario: Names that stay vox
-- **WHEN** an existing install is updated
-- **THEN** the command, settings, history, logs, login service, keychain item and package keep the paths and names they had, so nothing moves and no permission or key is lost
