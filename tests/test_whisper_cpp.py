@@ -205,3 +205,18 @@ async def test_local_cli_rejects_invalid_audio_before_running(tmp_path):
     with pytest.raises(TranscriptionError, match="Invalid WAV input"):
         await WhisperCppTranscriber(config).transcribe(b"not audio")
     assert not (tmp_path / "bin" / "argv.txt").exists()
+
+
+@pytest.mark.anyio
+async def test_a_transcript_that_is_not_valid_utf8_is_kept(tmp_path):
+    # whisper.cpp tokens are bytes, so a segment line can end inside a character: here "日" is split
+    char = "日".encode()
+    output = b"Hello " + char[:2] + b"\n" + char[2:] + b" world"
+    script = f"""import sys
+from pathlib import Path
+a = sys.argv
+Path(a[a.index("-of") + 1] + ".txt").write_bytes({output!r})
+"""
+    text = await WhisperCppTranscriber(_config(tmp_path, script)).transcribe(_wav())
+    assert text.startswith("Hello ") and text.endswith(" world")
+    assert "�" in text

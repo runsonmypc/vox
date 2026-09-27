@@ -114,7 +114,9 @@ class WhisperCppTranscriber:
                 if line.startswith("whisper_print_timings"):  # model load, encode and decode times
                     log.debug("%s", line.strip())
             try:
-                text = output_base.with_suffix(".txt").read_text(encoding="utf-8").strip()
+                # A segment line can end inside a multi-byte character (tokens are bytes); keep the
+                # transcript with a replacement character rather than lose it
+                text = output_base.with_suffix(".txt").read_text(encoding="utf-8", errors="replace").strip()
             except OSError as exc:
                 raise TranscriptionError(f"whisper.cpp did not write a transcript: {exc}") from exc
 
