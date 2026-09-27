@@ -12,7 +12,7 @@ umask 022  # the package's files are world-readable, as dpkg expects
 
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 
-[ $# -ge 2 ] && [ $# -le 3 ] || die "usage: build-deb.sh VERSION ARCH [WHEEL]"
+if [ $# -lt 2 ] || [ $# -gt 3 ]; then die "usage: build-deb.sh VERSION ARCH [WHEEL]"; fi
 version=$1 arch=$2 wheel=${3:-}
 repo=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 here="$repo/packaging/deb"
