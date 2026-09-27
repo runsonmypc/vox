@@ -6,6 +6,7 @@ import asyncio
 import io
 import logging
 import os
+import signal
 import sys
 import threading
 import time
@@ -129,12 +130,43 @@ def run(config: Config) -> None:
             tray.stop()
 
     thread = threading.Thread(target=daemon, name="vox-daemon", daemon=True)
+    _quit_tray_on_sigterm(tray)
     thread.start()
-    tray.run()
+    try:
+        tray.run()
+    finally:
+        # The GUI loop that handled SIGTERM has ended: from here on it ends Vox at once
+        signal.signal(signal.SIGTERM, signal.SIG_DFL)
     tray.request_quit()  # no-op if the daemon already exited
     thread.join(timeout=5)
     if errors:
         raise errors[0]
+
+
+def _quit_tray_on_sigterm(tray: TrayManager) -> None:
+    """Make SIGTERM (a service stop, a logout, an upgrade) quit the way Quit does, so a lowered volume is restored.
+
+    The tray's GUI loop owns the main thread, so the handler runs in it: through a GLib signal source
+    on Linux, and a Mach port on macOS (as pystray does for SIGINT). A second SIGTERM ends Vox at once.
+    """
+
+    def on_sigterm(*_: object) -> bool:
+        signal.signal(signal.SIGTERM, signal.SIG_DFL)
+        log.info("Quitting on SIGTERM")
+        tray.request_quit()
+        return False  # GLib: remove the source
+
+    try:
+        if sys.platform == "darwin":
+            from PyObjCTools import MachSignals
+
+            MachSignals.signal(signal.SIGTERM, on_sigterm)
+        else:
+            from gi.repository import GLib
+
+            GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGTERM, on_sigterm)
+    except Exception:
+        log.warning("Couldn't handle SIGTERM: stopping Vox that way won't restore a lowered volume", exc_info=True)
 
 
 def _platform_notice() -> str | None:
@@ -176,7 +208,24 @@ class _Session:
 
 
 async def _main(config: Config, tray: TrayManager | None = None) -> None:
-    await _Daemon(config, tray).run()
+    daemon = _Daemon(config, tray)
+    if tray is not None:  # run() has the tray's GUI loop handle SIGTERM
+        await daemon.run()
+        return
+
+    # Headless, asyncio.run owns the main thread: SIGTERM quits the way Ctrl-C does, so a lowered volume is restored
+    loop, task = asyncio.get_running_loop(), asyncio.current_task()
+
+    def on_sigterm() -> None:
+        loop.remove_signal_handler(signal.SIGTERM)  # a second SIGTERM ends Vox at once
+        log.info("Quitting on SIGTERM")
+        task.cancel()
+
+    loop.add_signal_handler(signal.SIGTERM, on_sigterm)
+    try:
+        await daemon.run()
+    finally:
+        loop.remove_signal_handler(signal.SIGTERM)
 
 
 class _Daemon:
