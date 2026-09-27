@@ -330,7 +330,9 @@ def _read_vision_ocr(win_id: str) -> str:
                 return ""
 
             lines = [obs.topCandidates_(1)[0].string() for obs in results if obs.topCandidates_(1)]
-            return " ".join(lines)[:_MAX_CONTEXT_CHARS]
+            # One line per recognized line, like tmux and tesseract: the secret filter drops a
+            # password-like value up to the end of its line, which must not be the whole window
+            return "\n".join(lines)[:_MAX_CONTEXT_CHARS]
     except Exception as e:
         log.debug("Vision OCR capture failed: %s", e)
         return ""
@@ -426,24 +428,28 @@ def _read_ocr(win_id: str) -> str:
     return result.stdout.decode("utf-8", errors="replace").strip()[:_MAX_CONTEXT_CHARS]
 
 
-def _process_parents() -> dict[str, str]:
-    """pid -> parent pid for every process, from one ps call."""
-    parents = {}
-    for line in (_run_tool(["ps", "-A", "-o", "pid=", "-o", "ppid="]) or "").splitlines():
+def _process_table() -> dict[str, tuple[str, str]]:
+    """pid -> (parent pid, controlling tty) for every process, from one ps call."""
+    table = {}
+    for line in (_run_tool(["ps", "-A", "-o", "pid=", "-o", "ppid=", "-o", "tty="]) or "").splitlines():
         fields = line.split()
-        if len(fields) == 2:
-            parents[fields[0]] = fields[1]
-    return parents
+        if len(fields) == 3:
+            table[fields[0]] = (fields[1], fields[2])
+    return table
 
 
-def _descends_from(pid: str, ancestor: str, parents: dict[str, str]) -> bool:
-    for _ in range(32):  # bounded, in case the table has a cycle
-        if pid == ancestor:
-            return True
-        pid = parents.get(pid, "")
-        if pid in ("", "0", "1"):
-            return False
-    return False
+def _descendants(ancestor: str, table: dict[str, tuple[str, str]]) -> set[str]:
+    children: dict[str, list[str]] = {}
+    for pid, (ppid, _) in table.items():
+        children.setdefault(ppid, []).append(pid)
+    found: set[str] = set()
+    pending = [ancestor]
+    while pending:
+        for child in children.get(pending.pop(), ()):
+            if child not in found:  # ends even if the table has a cycle
+                found.add(child)
+                pending.append(child)
+    return found
 
 
 def _read_tmux_pane(terminal_pid: str) -> str:
@@ -451,22 +457,31 @@ def _read_tmux_pane(terminal_pid: str) -> str:
 
     A bare `capture-pane` reads whichever pane was used last, which may be a background session
     the user is not looking at, so only a client descended from the terminal's process counts.
+    Every window and tab of a terminal app shares that process, so the pane is read only when the
+    app has no other session: then the tmux client is in the focused window.
     """
     if not _is_number(terminal_pid) or not shutil.which("tmux"):
         return ""
-    clients = _run_tool(["tmux", "list-clients", "-F", "#{client_pid} #{pane_id}"])
+    clients = _run_tool(["tmux", "list-clients", "-F", "#{client_pid} #{client_tty} #{pane_id}"])
     if not clients:
         return ""
-    parents = _process_parents()
-    panes = set()
-    for line in clients.splitlines():
-        client_pid, _, pane = line.partition(" ")
-        if pane and _descends_from(client_pid, terminal_pid, parents):
-            panes.add(pane)
-    if len(panes) != 1:
+    table = _process_table()
+    inside = _descendants(terminal_pid, table)
+    found = {
+        (fields[1].removeprefix("/dev/"), fields[2])
+        for fields in map(str.split, clients.splitlines())
+        if len(fields) == 3 and fields[0] in inside
+    }
+    if len(found) != 1:
         # None, or several tmux clients in this terminal app and no way to tell which one is focused
         return ""
-    text = _run_tool(["tmux", "capture-pane", "-p", "-t", panes.pop()])
+    ((client_tty, pane),) = found
+    # ps shows no controlling terminal as "?" on Linux and "??" on macOS
+    session_ttys = {table[pid][1] for pid in inside} - {"?", "??"}
+    if session_ttys != {client_tty}:
+        # Another window or tab of the app, which may be the focused one; macOS OCRs that window instead
+        return ""
+    text = _run_tool(["tmux", "capture-pane", "-p", "-t", pane])
     return text.strip()[:_MAX_CONTEXT_CHARS] if text else ""
 
 
