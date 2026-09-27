@@ -58,7 +58,7 @@ The system SHALL provide immediate audible confirmation when a recording or proc
 
 #### Scenario: Cancellation sound played upon successful cancel
 - **WHEN** a double-tap cancellation successfully aborts recording or processing while sounds are enabled
-- **THEN** the system plays a distinct cancellation sound (such as the native macOS alert sound or a synthetic descending tone)
+- **THEN** the system plays a distinct cancellation sound: the macOS alert sound Blow, or on Linux Vox's own sound that resembles it
 
 #### Scenario: Cancellation sound suppressed when sounds are disabled
 - **WHEN** a cancellation occurs while `[sounds] enabled` is set to false
