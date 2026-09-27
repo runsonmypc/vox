@@ -1,4 +1,4 @@
-The change is on branch `vt/hotkey`, which starts from `vt/rename` (6cf8436). Every test named here exists on that branch. Task 9.4 is left open: it needs a person at a real display, which agents must not use.
+The change is on branch `vt/hotkey`, which starts from `vt/rename` (6cf8436), and its review fixes are on `vt/final`. Every test named here exists on `vt/final`. Task 9.4 is left open: it needs a person at a real display, which agents must not use.
 
 ## 1. Listener and config
 
@@ -49,7 +49,7 @@ The change is on branch `vt/hotkey`, which starts from `vt/rename` (6cf8436). Ev
 
 ## 9. Verification
 
-- [x] 9.1 `uv run --frozen pytest -q -p no:cacheprovider` passes on macOS (1018 passed, 39 skipped; 959 passed and 30 skipped before this change), and so does `uv run --frozen ruff check vox tests`
-- [x] 9.2 The Linux suite passes under Xvfb on the Linux test PC, with the GTK window tests and the Linux key-name test: 944 passed and 77 skipped without GTK, and 36 GTK tests passed with `VOX_REQUIRE_GTK=1`; `test_linux_key_names_name_the_keys_the_listener_reports` ran there and passed
+- [x] 9.1 `uv run --frozen pytest -q -p no:cacheprovider` passes on macOS (1019 passed, 40 skipped on `vt/final`; 959 passed and 30 skipped before this change), and so does `uv run --frozen ruff check vox tests`
+- [x] 9.2 The Linux suite passes under Xvfb on the Linux test PC, with the GTK window tests and the Linux key-name test: on `vt/final`, 945 passed and 77 skipped without GTK, and 37 GTK tests passed with `VOX_REQUIRE_GTK=1`; `test_linux_key_names_name_the_keys_the_listener_reports`, `test_alt_with_shift_held_is_still_alt` and `test_gtk_records_alt_pressed_after_shift` ran there and passed
 - [x] 9.3 `openspec validate hotkey-window --strict` passes
 - [ ] 9.4 A person tries the window once on a real display on macOS and on Linux: records Right Command, then Control + Space, saves, and checks that the new keys dictate at once and the old key does not

@@ -1,4 +1,4 @@
-The rename is on branch `vt/rename`, which starts from main at ae10a09. Every test named here exists on that branch. Tasks 3.5 and 4.4 are left open: they need a real Mac session and the Linux PC, and neither was used for this change.
+The rename is on branch `vt/rename`, which starts from main at ae10a09, and its review fixes are on `vt/final`. Every test named here exists on that branch. Task 3.5 is left open: it needs a real Mac session, which was not used for this change.
 
 ## 1. Inventory
 
@@ -25,7 +25,7 @@ The rename is on branch `vt/rename`, which starts from main at ae10a09. Every te
 - [x] 4.1 Set `Name=Vox Transfer` in the application and autostart entries that `install.sh` writes; verified by `test_linux_launchers_add_an_autostart_entry`
 - [x] 4.2 Name Vox Transfer in the `.deb`'s desktop entries, the systemd unit's `Description=`, the package description and `Upstream-Name`, and the GitHub release title, while the package and unit stay `vox`; verified by `test_users_see_the_name_vox_transfer_while_the_package_and_service_stay_vox`
 - [x] 4.3 Rename the app in installer messages; verified by `test_failed_build_keeps_the_previous_venv`, `test_mac_launcher_is_skipped_when_both_places_have_another_app_named_vox_transfer`, `test_mac_uninstall_carries_on_when_the_launcher_cannot_be_deleted` and `test_bootstrap_needs_a_published_release`
-- [ ] 4.4 Run the Linux suite, with the GTK window tests, under Xvfb on the Linux test PC
+- [x] 4.4 Run the Linux suite, with the GTK window tests, under Xvfb on the Linux test PC; run on `vt/hotkey` and again on `vt/final`, which hold every rename commit: on `vt/final`, 945 passed and 77 skipped without GTK, and 37 GTK tests passed
 
 ## 5. Docs and specs
 
