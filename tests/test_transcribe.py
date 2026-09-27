@@ -5,6 +5,7 @@ import logging
 import subprocess
 import sys
 import threading
+import time
 import wave
 from unittest.mock import AsyncMock, patch
 
@@ -18,6 +19,7 @@ from vox.errors import TranscriptionError
 from vox.transcribe import (
     PartialTranscriptionError,
     Transcriber,
+    _drop_secrets,
     _extract_vocab,
     build_prompt,
     build_vocabulary,
@@ -286,6 +288,96 @@ def test_screen_vocabulary_never_includes_secrets():
         assert secret not in joined
     for word in ["Kubernetes", "useState", "FastAPI"]:
         assert word in vocab
+
+
+# Every probe from the review (AUDIO-2, PLATFORM-1, XSEC-3): passwords in URLs, on command lines and
+# after short or multi-word password names, as a terminal, an editor or a window title shows them
+@pytest.mark.parametrize("line, secret", [
+    ("DATABASE_URL=postgres://app:Winter2024Pass@db.internal:5432/prod", "Winter2024Pass"),
+    ("REDIS_URL=redis://default:Kx9vQ2mRt7@cache:6379", "Kx9vQ2mRt7"),
+    ("mysql -pS3cretPass42", "S3cretPass42"),
+    ("curl -u admin:Hunter2Hunter2", "Hunter2Hunter2"),
+    ("psql --password Summer2023Pw", "Summer2023Pw"),
+    ("git remote add origin https://alex:Tr0ub4dor3@github.com/alex/repo.git", "Tr0ub4dor3"),
+    ("DB_PASSWORD=Winter2024Pass", "Winter2024Pass"),
+    ("DATABASE_URL=postgres://app:Xy7pQ9zRw2@db.internal:5432/prod", "Xy7pQ9zRw2"),
+    ("git clone https://oauth2:glpat-AbCdEfGhIjKl@gitlab.com/group/project.git", "AbCdEfGhIjKl"),
+    ("curl -u alice:S3cretPass https://api.example.com/v1", "S3cretPass"),
+    ("psql --password Hunter2Xyz", "Hunter2Xyz"),
+    ("DB_PASS=Hunter2Xyz", "Hunter2Xyz"),
+    ("DB_PWD=Hunter2Xyz", "Hunter2Xyz"),
+    ("DATABASE_URL=postgres://admin:S3cretPass99@db.internal:5432/app", "S3cretPass99"),
+    ("redis://:Tr0ub4dorX9@cache", "Tr0ub4dorX9"),
+    ("git clone https://alex:Hunter2Pass7@github.com/alex/app.git", "Hunter2Pass7"),
+    ("password: Correct Horse Battery Staple", "Horse"),
+    ("password: Correct Horse Battery Staple", "Staple"),
+    ("MYSQL_PWD=Hunter2x7", "Hunter2x7"),
+    ("mysql -uroot -pS3cr3tRoot", "S3cr3tRoot"),
+    # The same forms spelled the other ways the filter accepts
+    ("curl --user alice:S3cretPass https://example.com", "S3cretPass"),
+    ("curl --user=alice:S3cretPass https://example.com", "S3cretPass"),
+    ('curl -u "alice:S3cret Pass" https://example.com', "S3cret"),
+    ("tool --passwd Hunter2Xyz", "Hunter2Xyz"),
+    ("tool --pass=Hunter2Xyz", "Hunter2Xyz"),
+    ("tool --password='Correct Horse'", "Horse"),
+    ('mysql -p"S3cret Pass9"', "S3cret"),
+    ("gpg_passphrase: Hunter2Xyz", "Hunter2Xyz"),
+    ("credentials = Hunter2Xyz", "Hunter2Xyz"),
+    ("postgres://app:P@ssw0rd123@db.internal/prod", "ssw0rd123"),
+])
+def test_passwords_in_urls_command_lines_and_password_fields_are_dropped(line, secret):
+    screen = f"Kubernetes FastAPI\n{line}\nuseState"
+    joined = " ".join(_extract_vocab(screen))
+    assert secret not in joined
+    assert all(word in joined for word in ["Kubernetes", "FastAPI", "useState"])
+    title = AppContext(wm_class="term", window_title=f"{line} - Terminal", app_type=AppType.TERMINAL)
+    assert secret not in " ".join(build_vocabulary(Config(), title))
+
+
+def test_url_credentials_go_but_the_host_stays():
+    assert _drop_secrets("postgres://app:Xy7pQ9zRw2@db.internal:5432/prod") == "postgres://db.internal:5432/prod"
+    vocab = _extract_vocab("git clone https://deploy:Hunter2Pass7@BuildServer.example.com/TeamApp.git")
+    assert vocab == ["BuildServer.example.com", "TeamApp.git"]
+
+
+def test_a_password_value_runs_to_the_end_of_its_line_and_no_further():
+    vocab = _extract_vocab("password: Correct Horse Battery Staple\nKubernetes HelmChart")
+    assert vocab == ["Kubernetes", "HelmChart"]
+    # A command-line value is one argument: the rest of the command is kept
+    assert _extract_vocab("mysqldump --password=Hunter2Xyz AppDatabase") == ["AppDatabase"]
+
+
+def test_ordinary_words_urls_and_mail_addresses_still_come_through():
+    screen = "\n".join([
+        "FastAPI PostgreSQL useState",
+        "git clone https://github.com/Owner/RepoName.git",
+        "mailto:Alice.Smith@Example.com",
+        "git push -u origin FeatureBranch",
+        "pip install --user HelmChart",
+        "ssh -p 2222 DeployHost",
+    ])
+    assert _extract_vocab(screen) == [
+        "FastAPI", "PostgreSQL", "useState", "Owner", "RepoName.git", "Alice.Smith", "Example.com",
+        "FeatureBranch", "HelmChart", "DeployHost",
+    ]
+
+
+def test_a_long_word_on_screen_is_filtered_quickly():
+    """The value rules match names from the start of a word; tried inside every word they took seconds."""
+    started = time.perf_counter()
+    _extract_vocab("a" * 4000)
+    assert time.perf_counter() - started < 0.5
+
+
+@pytest.mark.anyio
+async def test_env_file_passwords_are_not_sent_as_keywords(fake_openai):
+    screen = "\n".join([
+        "DATABASE_URL=postgres://app:Winter2024Pass@db.internal:5432/prod",
+        "REDIS_URL=redis://default:Kx9vQ2mRt7@cache:6379",
+    ])
+    context = AppContext(wm_class="code", window_title="Code", app_type=AppType.EDITOR, screen_text=screen)
+    await Transcriber(Config(openai_api_key=KEY)).transcribe(WAV, context)
+    assert create_mock(fake_openai).call_args.kwargs["keywords"] == ["Code", "DATABASE_URL", "REDIS_URL"]
 
 
 @pytest.mark.parametrize("secret, pieces", [

@@ -64,6 +64,18 @@ def test_session_keywords_are_filtered_and_capped():
     assert "prompt" not in transcription
 
 
+@pytest.mark.parametrize("title, secret", [
+    ("psql postgres://app:Xy7pQ9zRw2@db.internal/prod - Terminal", "Xy7pQ9zRw2"),
+    ("mysql -uroot -pS3cr3tRoot - Terminal", "S3cr3tRoot"),
+    ("curl -u alice:Xy7pQ9zRw2 - Terminal", "Xy7pQ9zRw2"),
+    ("MYSQL_PWD=Hunter2x7 - vim", "Hunter2x7"),
+])
+def test_session_keywords_never_carry_a_password_from_the_window_title(title, secret):
+    context = AppContext(wm_class="term", window_title=title, app_type=AppType.TERMINAL)
+    transcription = build_session_update(Config(), context)["session"]["audio"]["input"]["transcription"]
+    assert secret not in json.dumps(transcription)
+
+
 def test_session_update_without_screen_context_has_only_the_dictionary():
     config = Config(dictionary=["Vox"], context_screen=False)
     context = AppContext(
