@@ -177,7 +177,7 @@ The system SHALL check the type and range of every setting in `config.toml`. Whe
 
 #### Scenario: File fixed while running
 - **WHEN** the user fixes `config.toml` while Vox runs
-- **THEN** within a few seconds Vox applies it, clears the error, and updates the status line, with no restart; settings that always need a restart, such as `[hotkey]`, apply after the next restart
+- **THEN** within a few seconds Vox applies it, including `[hotkey]`, clears the error, and updates the status line, with no restart
 
 #### Scenario: Permanent startup failure
 - **WHEN** a required system tool is missing (for example `xdotool` or `xclip` on Linux) or the lock directory cannot be created
@@ -188,7 +188,7 @@ The system SHALL check the type and range of every setting in `config.toml`. Whe
 - **THEN** Vox starts and logs one warning that it cannot tell terminals from other windows, so terminals get `Ctrl+V` and `[window_classes]` does not apply; this is not a status-78 startup failure
 
 ### Requirement: Settings Reload
-The system SHALL apply edits to `config.toml` while running, a few seconds after a save, except for settings that need a restart.
+The system SHALL apply every edit to `config.toml` while running, a few seconds after a save, with no restart.
 
 #### Scenario: Hot-reloaded settings
 - **WHEN** the user changes the dictionary, snippets, window classes, screen hints, sounds, attenuation, the recording limit, the transcription mode, a model, the language or the prompt
@@ -199,8 +199,9 @@ The system SHALL apply edits to `config.toml` while running, a few seconds after
 - **THEN** the change is applied once that recording ends, and the recording is not lost
 
 #### Scenario: Hotkey settings
-- **WHEN** `[hotkey]` changes
-- **THEN** the change applies after Vox restarts
+- **WHEN** `[hotkey]` key, fallback or double_tap_timeout_ms changes, by hand or from the hotkey window
+- **THEN** within a few seconds, or at once when the hotkey window closes, a new hotkey listener with those settings replaces the old one, with no restart, and the old key no longer toggles dictation
+- **AND** during a recording the new listener takes over at once, and the new key stops the recording
 
 #### Scenario: Invalid edit while running
 - **WHEN** a `config.toml` that loaded is edited into an invalid state while Vox runs
