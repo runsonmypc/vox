@@ -1,6 +1,7 @@
 """Unit tests for HotkeyListener double-tap detection and cancel events."""
 
 import asyncio
+import sys
 from unittest.mock import patch
 
 import pytest
@@ -9,7 +10,7 @@ from pynput import keyboard
 from vox import hotkey
 from vox.config import Config
 from vox.errors import DependencyError
-from vox.hotkey import HotkeyListener
+from vox.hotkey import HotkeyListener, resolve_key
 
 
 class ControlledClock:
@@ -340,6 +341,130 @@ async def test_alt_with_shift_held_is_still_alt():
     await asyncio.sleep(0)
     assert await queue.get() == "toggle"
     assert HotkeyListener._key_name(META_R) == "right_alt"
+
+
+@pytest.mark.anyio
+@pytest.mark.skipif(not hasattr(keyboard.Key, "pause"), reason="Mac keyboards have no Pause or Scroll Lock")
+@pytest.mark.parametrize(("configured", "name"), [("pause", "pause"), ("Scroll Lock", "scroll_lock")])
+async def test_pause_and_scroll_lock_toggle_when_tapped(configured, name):
+    clock = ControlledClock()
+    queue: asyncio.Queue[str] = asyncio.Queue()
+    listener = HotkeyListener(Config(hotkey=configured), asyncio.get_running_loop(), queue)
+
+    with patch("vox.hotkey.monotonic", side_effect=clock.time):
+        _tap(listener, clock, getattr(keyboard.Key, name))
+
+    await asyncio.sleep(0)
+    assert await queue.get() == "toggle"
+
+
+def test_globe_is_another_name_for_fn():
+    assert resolve_key("globe") == resolve_key("Globe") == resolve_key(" FN ") == "fn"
+
+
+# -- fn (Globe) on macOS --------------------------------------------------------------
+
+macos = pytest.mark.skipif(sys.platform != "darwin", reason="fn is a macOS key")
+FN = keyboard.KeyCode.from_vk(63)  # pynput has no Key for fn, so it reports fn by its key code
+
+
+@pytest.fixture
+def fn():
+    """Move fn as pynput's darwin listener reports it: a release of vk 63 whether fn goes down or
+    comes up, with the fn flag in the HID system's state (Quartz, mocked here) telling which."""
+    import Quartz
+
+    flags = {"now": 0}
+
+    def flags_state(source):
+        assert source == Quartz.kCGEventSourceStateHIDSystemState
+        return flags["now"]
+
+    def move(listener, down):
+        flags["now"] = Quartz.kCGEventFlagMaskSecondaryFn if down else 0
+        listener._on_release(FN)
+
+    with patch("vox.hotkey.CGEventSourceFlagsState", side_effect=flags_state):
+        yield move
+
+
+async def _events(queue):
+    await asyncio.sleep(0)
+    return [queue.get_nowait() for _ in range(queue.qsize())]
+
+
+@macos
+@pytest.mark.anyio
+async def test_fn_tapped_alone_toggles_and_double_tapped_cancels(fn):
+    clock = ControlledClock()
+    queue: asyncio.Queue[str] = asyncio.Queue()
+    listener = HotkeyListener(Config(hotkey="globe", double_tap_timeout_ms=400), asyncio.get_running_loop(), queue)
+
+    with patch("vox.hotkey.monotonic", side_effect=clock.time):
+        for _ in range(2):
+            fn(listener, down=True)
+            clock.advance(0.1)
+            fn(listener, down=False)
+            clock.advance(0.1)
+
+    assert await _events(queue) == ["toggle", "cancel"]
+
+
+@macos
+@pytest.mark.anyio
+async def test_fn_held_for_another_key_does_not_toggle(fn):
+    clock = ControlledClock()
+    queue: asyncio.Queue[str] = asyncio.Queue()
+    listener = HotkeyListener(Config(hotkey="fn"), asyncio.get_running_loop(), queue)
+
+    with patch("vox.hotkey.monotonic", side_effect=clock.time):
+        fn(listener, down=True)
+        clock.advance(0.1)
+        listener._on_press(keyboard.Key.f5)  # fn+F5 on a Mac laptop
+        listener._on_release(keyboard.Key.f5)
+        clock.advance(0.1)
+        fn(listener, down=False)
+
+    assert await _events(queue) == []
+
+
+@macos
+@pytest.mark.anyio
+async def test_a_missed_fn_event_cannot_leave_fn_down(fn):
+    clock = ControlledClock()
+    queue: asyncio.Queue[str] = asyncio.Queue()
+    listener = HotkeyListener(Config(hotkey="fn"), asyncio.get_running_loop(), queue)
+
+    with patch("vox.hotkey.monotonic", side_effect=clock.time):
+        fn(listener, down=True)  # and its release never arrives
+        clock.advance(1.0)
+        listener._on_press(keyboard.KeyCode.from_char("a"))
+        listener._on_release(keyboard.KeyCode.from_char("a"))
+        clock.advance(1.0)
+        fn(listener, down=True)  # the next tap works: fn down again starts a new press
+        clock.advance(0.1)
+        fn(listener, down=False)
+        clock.advance(1.0)
+        fn(listener, down=False)  # a release whose press was missed fires nothing
+        clock.advance(1.0)
+        fn(listener, down=True)
+        clock.advance(0.1)
+        fn(listener, down=False)
+
+    assert await _events(queue) == ["toggle", "toggle"]
+
+
+@macos
+@pytest.mark.anyio
+async def test_fn_held_for_a_function_key_keeps_a_combination_working(fn):
+    queue: asyncio.Queue[str] = asyncio.Queue()
+    listener = HotkeyListener(Config(hotkey_fallback="ctrl+f5"), asyncio.get_running_loop(), queue)
+
+    listener._on_press(keyboard.Key.ctrl)
+    fn(listener, down=True)
+    listener._on_press(keyboard.Key.f5)
+
+    assert await _events(queue) == ["toggle"]
 
 
 @pytest.mark.anyio

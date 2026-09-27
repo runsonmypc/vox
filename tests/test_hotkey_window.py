@@ -60,7 +60,9 @@ def model(tmp_path):
 def test_mac_key_codes_name_the_keys_the_listener_reports():
     keyboard = hotkey.keyboard
     for code, name in MAC_KEYS.items():
-        key = next(k for k in keyboard.Key if k.value.vk == code and not getattr(k.value, "_is_media", False))
+        key = next(
+            (k for k in keyboard.Key if k.value.vk == code and not getattr(k.value, "_is_media", False)), None
+        ) or keyboard.KeyCode.from_vk(code)  # fn, which pynput has no Key for
         assert HotkeyListener._key_name(key) == name, code
 
 
@@ -116,6 +118,32 @@ def test_a_key_held_before_recording_is_ignored():
     assert capture.press("space") == ("space",)
 
 
+def test_fn_tapped_alone_is_recorded_as_fn():
+    capture = Capture()
+    assert capture.press("fn") is None
+    assert capture.preview == ""
+    assert capture.release("fn") == ("fn",)
+
+
+def test_fn_held_with_another_key_records_only_that_key():
+    capture = Capture()
+    capture.press("fn")
+    assert capture.press("f5") == ("f5",)  # Mac laptops need fn held for the function keys
+    assert capture.release("fn") is None
+
+    capture = Capture()
+    capture.press("fn")
+    capture.press("cmd_r")
+    assert capture.release("cmd_r") == ("cmd_r",)
+
+    capture = Capture()
+    capture.press("ctrl")
+    capture.press("fn")
+    assert capture.release("fn") is None
+    assert capture.preview == f"{label('ctrl')} + …"
+    assert capture.press("space") == ("ctrl", "space")
+
+
 def test_the_combination_field_shows_the_held_modifiers():
     capture = Capture()
     assert capture.preview == ""
@@ -133,6 +161,19 @@ def test_modifiers_and_function_keys_can_be_the_hotkey(model):
         assert model.record_key((name,)) is None
         assert model.key == name
     assert label("cmd_r") == ("Right Command" if MAC else "Right Super")
+
+
+def test_fn_on_macos_and_pause_and_scroll_lock_on_linux_can_be_the_hotkey(model):
+    ours, theirs = (("fn",), ("pause", "scroll_lock")) if MAC else (("pause", "scroll_lock"), ("fn",))
+    for name in ours:
+        assert model.record_key((name,)) is None
+        assert model.key == name
+    for name in theirs:
+        assert model.record_key((name,)) == TYPING_KEY
+    if MAC:
+        assert label("fn") == label("globe") == "fn (Globe)"
+    else:
+        assert (label("pause"), label("scroll_lock")) == ("Pause", "Scroll Lock")
 
 
 @pytest.mark.parametrize("name", [None, "space", "a", "1", "enter", "tab", "esc", "caps_lock", "vk_63", "up"])
@@ -154,6 +195,11 @@ def test_a_combination_pressed_for_the_hotkey_points_to_its_own_field(model):
     (("ctrl", "alt"), None),  # modifiers only
     (("f5",), None),  # F5 alone is a hotkey, not a combination
     (("vk_65027", "space"), None),  # AltGr
+    (("fn",), None),
+    (("ctrl", "fn"), None),
+    (("fn", "space"), None),
+    (("ctrl", "pause"), None),
+    (("ctrl", "scroll_lock"), None),
 ])
 def test_a_combination_needs_a_modifier_and_space_or_a_function_key(model, names, saved):
     assert model.record_combination(names) == (None if saved else BAD_COMBINATION)
@@ -201,6 +247,17 @@ def test_function_keys_and_linux_tap_keys_warn(model):
     assert (model.warning is not None and "Alt" in model.warning) == (not MAC)
     model.record_key(("cmd_r",))
     assert model.warning is None
+
+
+def test_fn_warns_that_macos_acts_on_it_too_and_pause_and_scroll_lock_do_not(model):
+    if MAC:
+        model.record_key(("fn",))
+        assert "“Do Nothing”" in model.warning and "Dictation" in model.warning
+        assert model.status(None, None) == (model.warning, "warning")
+    else:
+        for name in ("pause", "scroll_lock"):
+            model.record_key((name,))
+            assert model.key == name and model.warning is None
 
 
 # -- Reading and saving ---------------------------------------------------------------
@@ -310,6 +367,7 @@ def mac_window(appkit, tmp_path):
 # The device-independent flag each modifier key sets, next to its own device bit
 _FLAGS = {
     56: "Shift", 60: "Shift", 59: "Control", 62: "Control", 58: "Option", 61: "Option", 55: "Command", 54: "Command",
+    63: "Function",
 }
 
 
@@ -322,11 +380,7 @@ def _key(AppKit, controller, code, repeat=False):
 def _flags(AppKit, controller, code, down):
     from vox.ui.mac.hotkey import _DOWN
 
-    flags = 0
-    if down and code in _DOWN:
-        flags = _DOWN[code] | getattr(AppKit, f"NSEventModifierFlag{_FLAGS[code]}")
-    elif down:  # fn
-        flags = AppKit.NSEventModifierFlagFunction
+    flags = _DOWN[code] | getattr(AppKit, f"NSEventModifierFlag{_FLAGS[code]}") if down else 0
     return AppKit.NSEvent.keyEventWithType_location_modifierFlags_timestamp_windowNumber_context_characters_charactersIgnoringModifiers_isARepeat_keyCode_(
         AppKit.NSEventTypeFlagsChanged, (0, 0), flags, 0, controller.window.windowNumber(), None, "", "", False, code
     )
@@ -403,13 +457,45 @@ def test_mac_escape_stops_recording_and_keeps_the_key(appkit, mac_window):
     assert window.key_field.state() == appkit.NSControlStateValueOff
 
 
-def test_mac_ignores_fn_so_function_keys_can_be_recorded_with_it(appkit, mac_window):
+def test_mac_records_fn_tapped_on_its_own_and_warns(appkit, mac_window):
+    window = mac_window()
+    window.recordKey_(None)
+    _tap(appkit, window, 63)
+    assert window.model.key == "fn"
+    assert window.key_field.title() == "fn (Globe)"
+    assert "“Do Nothing”" in window.status.stringValue()
+    assert window.status.textColor() == appkit.NSColor.systemOrangeColor()
+
+
+def test_mac_records_the_key_pressed_while_fn_is_held(appkit, mac_window):
     window = mac_window()
     window.recordKey_(None)
     assert window.handle_key(_flags(appkit, window, 63, True)) is None
     assert window.recording == "key" and window.refusal is None
     assert window.handle_key(_key(appkit, window, 96)) is None  # F5
     assert window.model.key == "f5"
+    assert window.recording is None
+
+    window.recordKey_(None)
+    window.handle_key(_flags(appkit, window, 63, True))
+    _tap(appkit, window, 54)
+    assert window.model.key == "cmd_r"
+    window.handle_key(_flags(appkit, window, 63, False))
+    assert window.model.key == "cmd_r"
+
+
+def test_mac_keeps_fn_out_of_combinations(appkit, mac_window):
+    window = mac_window()
+    window.recordCombination_(None)
+    _tap(appkit, window, 63)
+    assert window.refusal == BAD_COMBINATION
+    assert window.recording == "combination"
+
+    window.handle_key(_flags(appkit, window, 59, True))
+    window.handle_key(_flags(appkit, window, 63, True))
+    assert window.combination_field.title() == "Left Control + …"
+    window.handle_key(_key(appkit, window, 96))  # F5
+    assert window.model.combination == "ctrl+f5"
 
 
 def test_mac_keys_pass_through_while_not_recording(appkit, mac_window):
@@ -550,6 +636,31 @@ def test_gtk_records_altgr_as_the_listener_names_it(gtk, gtk_window):
     tap(window, gtk.Gdk.KEY_ISO_Level3_Shift)
     assert window.model.key == "vk_65027"
     assert window.key_field.get_label() == "AltGr"
+
+
+def test_gtk_records_pause_and_scroll_lock_tapped_on_their_own(gtk, tmp_path, gtk_window):
+    window = gtk_window()
+    window.key_field.emit("clicked")
+    tap(window, gtk.Gdk.KEY_Pause)
+    assert window.model.key == "pause"
+    assert window.key_field.get_label() == "Pause"
+    assert not window.status.get_visible()  # no warning
+
+    window.key_field.emit("clicked")
+    tap(window, gtk.Gdk.KEY_Scroll_Lock)
+    assert window.model.key == "scroll_lock"
+    assert window.key_field.get_label() == "Scroll Lock"
+
+    window.combination_field.emit("clicked")
+    press(window, gtk.Gdk.KEY_Control_L)
+    press(window, gtk.Gdk.KEY_Pause)
+    assert window.status.get_label() == BAD_COMBINATION
+    assert window.model.combination == ""
+    release(window, gtk.Gdk.KEY_Pause)
+    release(window, gtk.Gdk.KEY_Control_L)
+
+    window.save()
+    assert load_config(tmp_path / "config.toml").hotkey == "scroll_lock"
 
 
 def test_gtk_records_a_combination_and_offers_to_clear_it(gtk, gtk_window):

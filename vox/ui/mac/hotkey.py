@@ -43,9 +43,12 @@ _LABEL_WIDTH = 120
 _FIELD_WIDTH = 250
 _SPACING = 8
 
-_KEY_FN = 63  # fn only changes what the function keys send, so Fn+F5 records F5
-# Key codes of the modifiers -> their NX_DEVICE*KEYMASK bit in modifierFlags, set while that key is down
-_DOWN = {59: 0x01, 56: 0x02, 60: 0x04, 55: 0x08, 54: 0x10, 58: 0x20, 61: 0x40, 62: 0x2000}
+# Key codes of the modifiers -> their NX_DEVICE*KEYMASK bit in modifierFlags, set while that key is down;
+# fn, a single key, sets the function flag
+_DOWN = {
+    59: 0x01, 56: 0x02, 60: 0x04, 55: 0x08, 54: 0x10, 58: 0x20, 61: 0x40, 62: 0x2000,
+    63: AppKit.NSEventModifierFlagFunction,
+}
 _STATUS_COLORS = {"error": AppKit.NSColor.systemRedColor(), "warning": AppKit.NSColor.systemOrangeColor()}
 
 
@@ -198,7 +201,7 @@ class HotkeyController(NSObject):
                 self.record(None)
             else:
                 self.took(self.capture.press(MAC_KEYS.get(code)))
-        elif code != _KEY_FN:
+        else:
             mask = _DOWN.get(code)
             if mask is None:  # Caps Lock
                 self.took(self.capture.press(None))

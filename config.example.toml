@@ -19,7 +19,8 @@
 [hotkey]
 # Set Hotkey… in the menu records the key and the combination for you.
 # The key that starts and stops dictation when tapped on its own. Double-tap it to cancel.
-# Other choices include "right_ctrl", "right_alt", "cmd_r" (macOS) and "f13".
+# Other choices include "right_ctrl", "right_alt", "cmd_r" (macOS), "f13", "fn" (macOS, the Globe
+# key), "pause" and "scroll_lock" (Linux).
 # key = "right_shift"
 # An optional key combination that also toggles dictation, for example "ctrl+space", where "ctrl"
 # is the left Control key and "right_ctrl" the right one.

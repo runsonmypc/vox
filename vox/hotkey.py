@@ -29,6 +29,9 @@ except ImportError as e:  # the X11 backend connects to the display on import
     keyboard = None
     _IMPORT_ERROR = _import_problem(e)
 
+if sys.platform == "darwin":
+    from Quartz import CGEventSourceFlagsState, kCGEventFlagMaskSecondaryFn, kCGEventSourceStateHIDSystemState
+
 log = logging.getLogger(__name__)
 
 # pynput names for the right-hand modifiers -> the names Vox's config uses
@@ -38,17 +41,30 @@ _KEY_NAMES = {"shift_r": "right_shift", "ctrl_r": "right_ctrl", "alt_r": "right_
 _ALIASES = {
     "left_shift": "shift", "left_ctrl": "ctrl", "left_alt": "alt",
     "shift_l": "shift", "ctrl_l": "ctrl", "alt_l": "alt",
+    "globe": "fn",
     **_KEY_NAMES,
 }
 # X11 reports the Alt keys as Meta_L and Meta_R while Shift is held; naming them Alt
 # keeps an Alt released after Shift from staying down in a combination
 _META_KEYSYMS = {0xFFE7: "alt", 0xFFE8: "right_alt"}
+# macOS: the key code of fn (Globe), which pynput has no Key for
+_FN_VK = 63
 
 
 def resolve_key(name: str) -> str:
     """Normalize a configured key name to the name the listener reports: "Right Shift" -> "right_shift"."""
     name = name.strip().lower().replace(" ", "_")
     return _ALIASES.get(name, name)
+
+
+def _fn_down() -> bool:
+    """Whether fn is down now, by the HID system's modifier flags.
+
+    pynput's darwin listener has no flag for fn, so it reports fn going down as a release too.
+    Asking for the current state at every fn event, instead of flipping a remembered one, means
+    a missed event can't leave fn down.
+    """
+    return bool(CGEventSourceFlagsState(kCGEventSourceStateHIDSystemState) & kCGEventFlagMaskSecondaryFn)
 
 
 def parse_combo(combo: str) -> set[str]:
@@ -127,8 +143,8 @@ class HotkeyListener:
         # Solo modifier detection
         if key_name == self._hotkey_name:
             with self._lock:
-                if self._modifier_pressed:
-                    return  # ignore auto-repeat
+                if self._modifier_pressed and key_name != "fn":
+                    return  # ignore auto-repeat; fn never repeats, so fn down again means its release was missed
                 self._modifier_pressed = True
                 self._other_key_pressed = False
                 self._press_time = monotonic()
@@ -164,6 +180,9 @@ class HotkeyListener:
 
     def _on_release(self, key: keyboard.Key | keyboard.KeyCode | None) -> None:
         key_name = self._key_name(key)
+        if key_name == "fn" and _fn_down():
+            self._on_press(key)  # pynput reports fn going down as a release too
+            return
 
         if key_name == self._hotkey_name:
             now = monotonic()
@@ -202,6 +221,8 @@ class HotkeyListener:
             # e.g. Key.shift_r -> "right_shift"
             return _KEY_NAMES.get(key.name, key.name)
         if isinstance(key, keyboard.KeyCode):
+            if sys.platform == "darwin" and key.vk == _FN_VK:
+                return "fn"
             if key.char:
                 return key.char.lower()
             if key.vk:

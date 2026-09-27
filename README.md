@@ -258,12 +258,15 @@ The Vox Transfer menu, from the menu bar icon on macOS or the tray icon on Linux
 - **Recording Limit**: 5, 10, 15, 30 or 60 minutes.
 - **Recent dictations**: click one to copy it.
 - **Search History…**, **Vocabulary & Snippets…**, **Set API Key…**, **Set Hotkey…**
-- **Set Hotkey…** (while idle): click **Hotkey** and tap the key you want, such as Right Command,
-  Right Option or F13, or click **Key combination** and press an optional combination such as
-  Control + Space, which also starts and stops dictation (press it twice quickly to cancel; the app
-  you're in receives it too). Keys you type with are refused. **Use Default** goes back to right
-  Shift. The new hotkey works as soon as you click Save, and while the window is open the hotkey
-  does not dictate.
+- **Set Hotkey…** (while idle): click **Hotkey** and tap the key you want: Shift, Control, Option or
+  Command on either side (on Linux Ctrl, Alt or Super, or AltGr), a function key from F1 to F20,
+  fn (Globe) on macOS, or Pause or Scroll Lock on Linux. Keys you type with are refused. Click
+  **Key combination** and press an optional combination such as Control + Space, which also starts
+  and stops dictation (press it twice quickly to cancel; the app you're in receives it too).
+  **Use Default** goes back to right Shift. The new hotkey works as soon as you click Save, and
+  while the window is open the hotkey does not dictate. macOS acts on fn too: to use it, set
+  **Press 🌐 key to** to **Do Nothing** in System Settings > Keyboard, and if the Dictation
+  shortcut there is to press 🌐 twice, choose another.
 - **Quit Vox Transfer**. To start it again, open Vox Transfer from Applications or Spotlight (macOS)
   or your applications list (Linux). Vox Transfer quits the same way when its login service stops
   (for example `systemctl --user stop vox` on Linux), when you log out, or during an update, so a
@@ -284,7 +287,7 @@ a new `[hotkey]` takes over at once, even during a recording, which the new key 
 | Setting | Default | Meaning |
 | --- | --- | --- |
 | `dictionary` (top level) | `[]` | Words to spell exactly as written. |
-| `[hotkey] key` | `"right_shift"` | The key to tap on its own, such as `"right_ctrl"`, `"right_alt"`, `"cmd_r"` or `"f13"`. **Set Hotkey…** records it for you. |
+| `[hotkey] key` | `"right_shift"` | The key to tap on its own: a modifier (`"right_shift"`, `"right_ctrl"`, `"right_alt"` or `"cmd_r"`, and `"shift"`, `"ctrl"`, `"alt"` or `"cmd"` for the left one), `"f1"` to `"f20"`, `"fn"` on macOS (the Globe key, also written `"globe"`), or `"pause"` or `"scroll_lock"` on Linux. **Set Hotkey…** records it for you. |
 | `[hotkey] fallback` | `""` (none) | An extra key combination that toggles dictation, such as `"ctrl+space"` (`ctrl` is the left Control key; `right_ctrl` the right one). |
 | `[hotkey] double_tap_timeout_ms` | `400` | How fast a double-tap must be to cancel. |
 | `[audio] device` | unset (system default) | Input device index or name, from `vox --list-devices`. |

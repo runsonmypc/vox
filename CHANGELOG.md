@@ -66,6 +66,8 @@ The first public release. The command is `vox`, and its settings live in `~/.con
 - Set Hotkey… records the key you tap and an optional key combination as you press them, refuses
   keys you type with, and applies the new hotkey as soon as you save, with no restart. While the
   window is open the hotkey does not dictate.
+- Besides the modifier keys and F1 to F20, the hotkey can be fn (Globe) on macOS, or Pause or
+  Scroll Lock on Linux.
 - Hotkey settings edited in the settings file also apply within seconds, without a restart.
 - The menu shows problems that need you: a missing API key, an error in the settings file, a broken
   whisper.cpp setup, missing Accessibility access, a silent microphone, a Wayland session, or a

@@ -40,10 +40,10 @@ KEY_HINT = "Tap the key you want on its own. Esc keeps the current one."
 COMBINATION_HINT = f"Hold {_MODIFIER_NAMES}, and press Space or a function key. Esc keeps the current one."
 TYPING_KEY = (
     "Vox Transfer needs a key you don’t type with: Shift, Control, Option or Command on either side, "
-    "or a function key, F1 to F20."
+    "fn (Globe), or a function key, F1 to F20."
     if MAC else
     "Vox Transfer needs a key you don’t type with: Shift, Ctrl, Alt or Super on either side, AltGr, "
-    "or a function key, F1 to F20."
+    "Pause, Scroll Lock, or a function key, F1 to F20."
 )
 NOT_ALONE = "The hotkey is a single key tapped on its own. Set a combination under Key combination."
 BAD_COMBINATION = f"A combination holds {_MODIFIER_NAMES}, and ends with Space or a function key, F1 to F20."
@@ -57,11 +57,15 @@ _F_KEY_WARNING = (
 )
 _SUPER_WARNING = "GNOME and KDE open their overview when Super is tapped on its own."
 _ALT_WARNING = "Some apps, such as Firefox, show their menu bar when Alt is tapped on its own."
+_FN_WARNING = (
+    "macOS acts on fn too. In System Settings > Keyboard, set “Press 🌐 key to” to “Do Nothing”, "
+    "and if the Dictation shortcut is to press 🌐 twice, choose another."
+)
 
 # NSEvent key codes -> the names the listener reports for those keys on macOS (pynput's darwin Key values)
 MAC_KEYS = {
     60: "right_shift", 56: "shift", 62: "right_ctrl", 59: "ctrl", 61: "right_alt", 58: "alt",
-    54: "cmd_r", 55: "cmd", 49: "space",
+    54: "cmd_r", 55: "cmd", 63: "fn", 49: "space",
     122: "f1", 120: "f2", 99: "f3", 118: "f4", 96: "f5", 97: "f6", 98: "f7", 100: "f8", 101: "f9", 109: "f10",
     103: "f11", 111: "f12", 105: "f13", 107: "f14", 113: "f15", 106: "f16", 64: "f17", 79: "f18", 80: "f19", 90: "f20",
 }
@@ -72,6 +76,7 @@ LINUX_KEYS = {
     "Meta_R": "right_alt", "Meta_L": "alt",  # Alt pressed while Shift is held
     # Right Alt on layouts that type with it (AltGr): pynput has no Key for it, so the listener names its keysym
     "ISO_Level3_Shift": "vk_65027",
+    "Pause": "pause", "Scroll_Lock": "scroll_lock",
     "space": "space", **{f"F{n}": f"f{n}" for n in range(1, 21)},
 }
 _MAC_LABELS = {
@@ -82,9 +87,14 @@ _LINUX_LABELS = {
     "right_shift": "Right Shift", "shift": "Left Shift", "right_ctrl": "Right Ctrl", "ctrl": "Left Ctrl",
     "right_alt": "Right Alt", "alt": "Left Alt", "cmd_r": "Right Super", "cmd": "Left Super", "vk_65027": "AltGr",
 }
-LABELS = {**(_MAC_LABELS if MAC else _LINUX_LABELS), "space": "Space", **{f"f{n}": f"F{n}" for n in range(1, 21)}}
+# Keys that are only ever tapped on their own, never held for a combination
+_TAP_ONLY_LABELS = {"fn": "fn (Globe)"} if MAC else {"pause": "Pause", "scroll_lock": "Scroll Lock"}
+LABELS = {
+    **(_MAC_LABELS if MAC else _LINUX_LABELS), **_TAP_ONLY_LABELS,
+    "space": "Space", **{f"f{n}": f"F{n}" for n in range(1, 21)},
+}
 MODIFIERS = frozenset(_MAC_LABELS if MAC else _LINUX_LABELS)
-TAP_KEYS = MODIFIERS | set(_FUNCTION_KEYS)
+TAP_KEYS = MODIFIERS | set(_TAP_ONLY_LABELS) | set(_FUNCTION_KEYS)
 COMBINATION_KEYS = {"space", *_FUNCTION_KEYS}
 # The modifiers a combination may hold, in the order it is saved
 _ORDER = ("ctrl", "right_ctrl", "alt", "right_alt", "shift", "right_shift", "cmd", "cmd_r")
@@ -107,14 +117,19 @@ class Capture:
     modifier completes it at once, and so does letting go of a modifier.
 
     Keys are the listener's names, or None for a key the window doesn't know. A modifier that was
-    already down when recording started is ignored.
+    already down when recording started is ignored. fn counts only when tapped on its own: Mac
+    laptops need it held for the function keys, so fn held with another key records that key.
     """
 
     def __init__(self) -> None:
         self.held: list[str] = []  # modifiers down now, in press order
         self.pressed: list[str] = []  # modifiers pressed since recording started
+        self.fn_alone = False  # fn went down with no other key held, and no key has gone down since
 
     def press(self, name: str | None) -> tuple | None:
+        self.fn_alone = name == "fn" and not self.held
+        if name == "fn":
+            return None
         if name not in MODIFIERS:
             return (*self.held, name)
         if name not in self.held:
@@ -124,6 +139,8 @@ class Capture:
         return None
 
     def release(self, name: str | None) -> tuple | None:
+        if name == "fn":
+            return ("fn",) if self.fn_alone else None
         if name not in self.held:
             return None
         return tuple(self.pressed)
@@ -186,6 +203,8 @@ class HotkeyModel:
             return _SUPER_WARNING
         if not MAC and key in ("alt", "right_alt"):
             return _ALT_WARNING
+        if MAC and key == "fn":
+            return _FN_WARNING
         return None
 
     def status(self, recording: str | None, refusal: str | None) -> tuple[str, str | None]:
