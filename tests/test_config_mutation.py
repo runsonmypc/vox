@@ -17,6 +17,7 @@ from vox.config import (
     update_max_recording_seconds,
     update_snippet,
     update_transcription_mode,
+    write_atomically,
 )
 from vox.errors import ConfigError
 
@@ -248,6 +249,15 @@ def test_refuses_to_overwrite_unparseable_config(tmp_path):
     with pytest.raises(ConfigError):
         update_dictionary(path, add=["Vox"])
     assert path.read_text() == "[audio\nbroken = \n"
+
+
+def test_write_atomically_can_make_an_existing_file_owner_only(tmp_path):
+    path = tmp_path / "vox.env"
+    path.write_text("OLD=1\n")
+    os.chmod(path, 0o644)
+    write_atomically(path, "NEW=1\n", keep_mode=False)
+    assert path.read_text() == "NEW=1\n"
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
 
 def test_bumps_mtime_for_reloader(cfg):

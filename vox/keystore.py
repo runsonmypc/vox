@@ -11,17 +11,15 @@ user put there out of it, so processes Vox starts don't inherit it.
 
 from __future__ import annotations
 
-import contextlib
 import logging
 import os
-import tempfile
 from pathlib import Path
 
 import keyring
 from keyring.backends import fail
 from keyring.errors import PasswordDeleteError
 
-from .config import DEFAULT_CONFIG_PATH, read_api_key_setting, remove_api_key_setting
+from .config import DEFAULT_CONFIG_PATH, read_api_key_setting, remove_api_key_setting, write_atomically
 
 log = logging.getLogger(__name__)
 
@@ -231,19 +229,7 @@ def _other_lines(path: Path) -> list[str]:
 
 def _write_private(path: Path, lines: list[str]) -> None:
     """Replace ``path`` (or the file a symlink there points to) atomically with an owner-only (0600) file."""
-    path = path.resolve()
-    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")  # created 0600
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write("\n".join(lines) + "\n")
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp, path)
-    except BaseException:
-        with contextlib.suppress(FileNotFoundError):
-            os.unlink(tmp)
-        raise
+    write_atomically(path, "\n".join(lines) + "\n", keep_mode=False)
 
 
 def _shown(path: Path) -> str:

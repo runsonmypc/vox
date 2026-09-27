@@ -405,23 +405,29 @@ def _read_document(path: Path) -> tomlkit.TOMLDocument:
 
 
 def _write_document(path: Path, doc: tomlkit.TOMLDocument) -> None:
-    """Write atomically (temp file + os.replace), following symlinks and keeping file permissions.
-
-    A new file is owner-only (0600), in an owner-only directory if that is new too: snippets can be personal.
-    """
+    """Write config.toml atomically, keeping its permissions. Snippets can be personal, so a new file is 0600."""
     text = tomlkit.dumps(doc)
     tomllib.loads(text)  # never replace a valid config with an unparseable one
+    write_atomically(path, text)
 
+
+def write_atomically(path: Path, text: str, *, keep_mode: bool = True) -> None:
+    """Replace ``path``, or the file a symlink there points to, with ``text`` (temp file + os.replace).
+
+    A new file is owner-only (0600), in an owner-only directory if that is new too. An existing file
+    keeps its permissions with ``keep_mode``, and is made owner-only without it.
+    """
     target = path.resolve()
     target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=target.parent, prefix=f".{target.name}.", suffix=".tmp")
+    fd, tmp = tempfile.mkstemp(dir=target.parent, prefix=f".{target.name}.", suffix=".tmp")  # created 0600
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(text)
             f.flush()
             os.fsync(f.fileno())
-        with contextlib.suppress(FileNotFoundError):
-            os.chmod(tmp, stat.S_IMODE(target.stat().st_mode))  # new files keep the 0600 from mkstemp
+        if keep_mode:
+            with contextlib.suppress(FileNotFoundError):
+                os.chmod(tmp, stat.S_IMODE(target.stat().st_mode))
         os.replace(tmp, target)
     except BaseException:
         with contextlib.suppress(FileNotFoundError):
