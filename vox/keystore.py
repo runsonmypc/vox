@@ -35,7 +35,7 @@ _env_key = ""  # an OPENAI_API_KEY taken out of os.environ by hide_env_override
 
 
 class KeystoreError(Exception):
-    """A keychain exists but could not be read or written."""
+    """The keychain, or without one the plain-text file, could not be read or written."""
 
 
 def env_override() -> bool:
@@ -186,13 +186,23 @@ def _is_key_line(line: str) -> bool:
     return bool(sep) and name.strip() == ENV_VAR
 
 
-def _env_values(path: Path) -> list[str]:
-    """The non-empty ``OPENAI_API_KEY=`` values in a .env file, in order."""
+def _env_lines(path: Path) -> list[str]:
+    """The .env file's lines; [] when there is no file. Raises KeystoreError when it can't be read.
+
+    A keystore error, not a crash, so Vox still starts and the tray says the key can't be read.
+    """
     try:
-        lines = path.read_text(encoding="utf-8").splitlines()
+        return path.read_text(encoding="utf-8").splitlines()
     except FileNotFoundError:
         return []
-    values = [line.partition("=")[2].strip().strip("\"'") for line in lines if _is_key_line(line)]
+    except (OSError, UnicodeDecodeError) as e:
+        reason = e.strerror if isinstance(e, OSError) and e.strerror else _reason(e)
+        raise KeystoreError(f"Couldn't read {_shown(path)}: {reason}") from e
+
+
+def _env_values(path: Path) -> list[str]:
+    """The non-empty ``OPENAI_API_KEY=`` values in a .env file, in order."""
+    values = [line.partition("=")[2].strip().strip("\"'") for line in _env_lines(path) if _is_key_line(line)]
     return [v for v in values if v]
 
 
@@ -235,10 +245,7 @@ def _remove_env_key(path: Path) -> None:
 
 
 def _other_lines(path: Path) -> list[str]:
-    try:
-        return [line for line in path.read_text(encoding="utf-8").splitlines() if not _is_key_line(line)]
-    except FileNotFoundError:
-        return []
+    return [line for line in _env_lines(path) if not _is_key_line(line)]
 
 
 def _write_private(path: Path, lines: list[str]) -> None:
