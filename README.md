@@ -320,7 +320,11 @@ Vox Transfer is running is logged and ignored, and the previous settings stay in
 ### Sounds
 
 Vox Transfer plays a sound when dictation starts, stops, is cancelled or fails, when you press the
-hotkey while it is busy or paused, and when you pause or resume. To use your own, put WAV files in
+hotkey while it is busy or paused, and when you pause or resume. On macOS these are the system alert
+sounds Tink, Pop, Basso, Funk, Blow, Bottle and Glass. On Linux Vox Transfer makes its own sounds that
+resemble them: a quick high tick when dictation starts, a bubbly pop when it stops, a low honk for an
+error, three plucked notes when it is busy, a soft swelling hum when you cancel, three falling knocks
+when you pause and a glassy chime when you resume. To use your own, put WAV files in
 `~/.config/vox/sounds`, named after the sound they replace: `start.wav`, `stop.wav`, `cancel.wav`,
 `error.wav`, `busy.wav`, `pause.wav` and `resume.wav`. Vox Transfer loads them when it starts; any
 it does not find keep the built-in sound. `[sounds] enabled = false` turns all of them off.

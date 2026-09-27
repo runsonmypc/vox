@@ -29,6 +29,7 @@ The first public release. The command is `vox`, and its settings live in `~/.con
   whole transcript being lost.
 - Your own sounds: WAV files in `~/.config/vox/sounds` replace the built-in ones. On Linux a long
   one is no longer cut off when Vox Transfer rescans microphones after a dictation.
+- On Linux the built-in sounds resemble the macOS alert sounds instead of plain beeps.
 
 ### Privacy
 
