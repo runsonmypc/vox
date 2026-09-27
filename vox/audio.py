@@ -524,8 +524,10 @@ class Recorder:
         ``stream`` also feeds 24 kHz chunks to ``stream_chunks()``. ``on_limit``
         is called on ``loop`` once the recording reaches max_recording_seconds.
         """
+        # A fresh queue for each recording: the tail and end marker of one that was just stopped or
+        # discarded may still be on their way through the loop, and must land in the old queue
+        self._stream_queue = None
         self.get_chunk_queue(loop)
-        self._drop_queued_chunks()
 
         self._streaming = stream
         self._resampler = Resampler(self._sample_rate, STREAM_RATE) if stream else None

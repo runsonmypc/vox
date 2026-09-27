@@ -365,6 +365,48 @@ async def test_a_live_session_that_gives_up_stops_the_queue_but_not_the_recordin
     assert recorder.get_chunk_queue().empty()
 
 
+@pytest.mark.anyio
+async def test_a_discarded_recording_does_not_end_the_next_one_s_live_stream():
+    """A cancel and the next start can run in one loop turn, before the discarded recording's
+    tail and end marker, posted through the loop, have landed."""
+    recorder = Recorder(Config(sample_rate=48000))
+    loop = asyncio.get_running_loop()
+    streamed = []
+
+    async def consume():
+        async for chunk in recorder.stream_chunks():
+            streamed.append(chunk)
+
+    with patch("vox.audio.sd.InputStream", side_effect=[FakeStream(), FakeStream()]):
+        recorder.start(loop=loop, stream=True)
+        recorder._callback(_block(1, 2400), 2400, None, 0)
+        await asyncio.sleep(0)
+        recorder.discard()
+        recorder.start(loop=loop, stream=True)
+        consumer = asyncio.create_task(consume())
+        for value in (2, 3, 4):
+            recorder._callback(_block(value, 2400), 2400, None, 0)
+            await asyncio.sleep(0)
+        recorder.stop()
+        await consumer
+
+    assert len(np.frombuffer(b"".join(streamed), dtype="<i2")) == 3600  # all of the second recording
+
+
+@pytest.mark.anyio
+async def test_the_block_delivered_while_stopping_streams_before_the_end_marker():
+    """The last PortAudio block is posted through the loop, so the end marker must be too."""
+    recorder = Recorder(Config(sample_rate=48000))
+    closing = FakeStream(on_stop=lambda: recorder._callback(_block(3, 2400), 2400, None, 0))
+    with patch("vox.audio.sd.InputStream", return_value=closing):
+        recorder.start(loop=asyncio.get_running_loop(), stream=True)
+        recorder._callback(_block(1, 2400), 2400, None, 0)
+        recorder.stop()
+        await asyncio.sleep(0)
+    _, streamed = _drain(recorder.get_chunk_queue())
+    assert len(streamed) == 2400  # 4800 frames at 48 kHz, the last block included
+
+
 def test_stop_does_not_leak_audio_into_the_next_recording():
     """Replaces the old pre-roll test: the mic is closed between recordings, so nothing carries over."""
     recorder = Recorder(Config(sample_rate=16000))
