@@ -6,11 +6,11 @@ Keeps the user's OpenAI API key encrypted by the operating system and lets them 
 ## Requirements
 
 ### Requirement: Encrypted Key Storage
-The system SHALL store the OpenAI API key in the operating system's keychain: the macOS Keychain, or the Secret Service on Linux. The key SHALL NOT be written to disk in plain text while a keychain is available, and SHALL NOT appear in logs, command-line arguments, or the environment of processes Vox starts.
+The system SHALL store the OpenAI API key in the operating system's keychain: the macOS Keychain, or the Secret Service on Linux. The key SHALL NOT be written to disk in plain text while a keychain is available, and SHALL NOT appear in logs, command-line arguments, or the environment of processes Vox starts. With a tray, a plain-text fallback file that cannot be read SHALL NOT stop Vox from starting; headless Vox, which has nowhere to ask for a key, treats it like a missing key.
 
 #### Scenario: Saving on macOS
 - **WHEN** the user saves a key on macOS
-- **THEN** it is stored in the login keychain under "Vox" and no plain-text copy is written
+- **THEN** it is stored in the login keychain as the item "vox" (account "openai_api_key") and no plain-text copy is written
 
 #### Scenario: Saving on Linux with a keyring
 - **WHEN** the user saves a key on a Linux desktop running a Secret Service provider such as GNOME Keyring or KWallet
@@ -20,12 +20,16 @@ The system SHALL store the OpenAI API key in the operating system's keychain: th
 - **WHEN** the user saves a key on Linux and no Secret Service provider is available
 - **THEN** the key is saved to `~/.config/vox/.env` readable only by the user, and the key window warns beforehand that it will not be encrypted
 
+#### Scenario: Unreadable plain-text file
+- **WHEN** Vox has a tray, no keyring is available, and `~/.config/vox/.env` cannot be read (no permission, a directory, or not UTF-8 text)
+- **THEN** Vox still starts and reports a key it can't read (the tray's first line says "Can’t read the keyring" and the key window shows the reason), and saving or removing a key fails with that reason and leaves the file as it is
+
 #### Scenario: Keyring locked or refusing
 - **WHEN** a keychain is available but locked, or refuses access
 - **THEN** the key is not saved anywhere else and the window shows the error
 
 ### Requirement: Key Entry from the Tray
-The system SHALL provide a "Set API Key…" tray item that opens a key window. The window SHALL mask the key unless the user turns on Show, SHALL say where the key will be stored, and SHALL show only the last four characters of a saved key.
+The system SHALL provide a "Set API Key…" tray item that opens a key window. The window SHALL mask the key unless the user turns on Show, SHALL say where the key will be stored, and SHALL show only the last four characters of a saved key. It SHALL refuse a key with a character that cannot be part of an OpenAI key.
 
 #### Scenario: Setting a key
 - **WHEN** the user pastes a key and clicks Save
@@ -47,6 +51,10 @@ The system SHALL provide a "Set API Key…" tray item that opens a key window. T
 - **WHEN** the check cannot reach OpenAI
 - **THEN** the window says so and lets the user save the key anyway
 
+#### Scenario: Key with a character that is not part of an OpenAI key
+- **WHEN** the user saves a key that contains a character outside printable ASCII (such as a zero-width space, byte-order mark, curly quote or en dash)
+- **THEN** the key is not saved, whether or not "Check with OpenAI" is on, and the window says the key has a character that isn't part of an OpenAI key and asks the user to copy it again
+
 ### Requirement: Running Without a Key
 When the configured transcription mode calls OpenAI and no key is available, the system SHALL keep running instead of exiting, so the service manager does not restart it.
 
@@ -67,18 +75,18 @@ When the configured transcription mode calls OpenAI and no key is available, the
 - **THEN** Vox runs normally without a key and does not open the key window
 
 ### Requirement: Key Sources
-The system SHALL use the `OPENAI_API_KEY` environment variable when it is set, and otherwise the stored key. It SHALL NOT read the key from `.env` files or `config.toml`, except for the Linux plain-text fallback file when no keyring is available.
+The system SHALL use the `OPENAI_API_KEY` environment variable when it is set, and otherwise the stored key. It SHALL NOT read the key from `.env` files or `config.toml`, except for the Linux plain-text fallback file when no keyring is available. A key taken from the environment SHALL be removed from Vox's own environment at startup, before Vox starts any process.
 
 #### Scenario: Environment variable override
 - **WHEN** `OPENAI_API_KEY` is set in Vox's environment
-- **THEN** Vox uses it, and the key window says the environment variable is overriding the stored key
+- **THEN** Vox uses it, removes it from its own environment at startup so processes Vox starts (whisper-cli, xclip, its windows and others) do not inherit it, and the key window, which learns of the override without receiving the key, says the environment variable is overriding the stored key
 
 #### Scenario: Stale key files
 - **WHEN** a key remains in a checkout's `.env` or elsewhere Vox no longer reads
 - **THEN** Vox ignores it
 
 ### Requirement: Moving Plain-Text Keys
-On start, when a keychain is available and holds no key, the system SHALL move a key found in `~/.config/vox/.env` or the `[api]` section of `config.toml` into the keychain, and SHALL delete the plain-text copy only after reading the key back from the keychain.
+On start, when a keychain is available and holds no key, the system SHALL move a key found in `~/.config/vox/.env` or the `[api]` section of `config.toml` into the keychain, and SHALL delete the plain-text copy only after reading the key back from the keychain. It SHALL never move a key it cannot tell is the right one, SHALL never raise, and SHALL NOT open the keychain when there is nothing to move.
 
 #### Scenario: First start after updating
 - **WHEN** Vox starts with a key in `~/.config/vox/.env` and an empty keychain
@@ -95,3 +103,23 @@ On start, when a keychain is available and holds no key, the system SHALL move a
 #### Scenario: Keychain already holds the same key
 - **WHEN** a plain-text key matches the one in the keychain
 - **THEN** the plain-text copy is deleted
+
+#### Scenario: Several keys in .env
+- **WHEN** `~/.config/vox/.env` holds more than one different `OPENAI_API_KEY` value
+- **THEN** none of them is moved, the file is left unchanged, and a warning names the file and asks the user to save the right key with Set API Key…
+
+#### Scenario: Symlinked .env
+- **WHEN** `~/.config/vox/.env` is a symlink, for example into a dotfiles repository
+- **THEN** the key line is removed from the file the link points to, or that file is deleted when nothing else remains; the link is never replaced by a regular file, and the log names the real file
+
+#### Scenario: No keychain, key in config.toml
+- **WHEN** no keychain is available and `config.toml` holds `[api] openai_api_key`
+- **THEN** Vox leaves the setting in place and logs a warning that it is not read and stays in plain text
+
+#### Scenario: Nothing to move
+- **WHEN** Vox starts and neither `~/.config/vox/.env` nor `config.toml` holds a plain-text key
+- **THEN** the move does not touch the keychain, so a locked keyring is not asked to unlock for it
+
+#### Scenario: Settings file that does not load
+- **WHEN** `config.toml` cannot be parsed and `~/.config/vox/.env` holds a key
+- **THEN** each source is checked on its own: the `.env` key still moves, and a warning says `config.toml` could not be checked
