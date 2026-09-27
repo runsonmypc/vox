@@ -5,13 +5,17 @@ from __future__ import annotations
 import asyncio
 import io
 import logging
+import math
 import threading
 import warnings
 import wave
-from collections.abc import AsyncGenerator, Callable
+from collections.abc import AsyncGenerator, Callable, Iterator
+from fractions import Fraction
+from functools import cache
 
 import numpy as np
 import sounddevice as sd
+from numpy.lib.stride_tricks import sliding_window_view
 
 with warnings.catch_warnings():
     warnings.simplefilter("ignore", category=UserWarning)
@@ -29,9 +33,28 @@ _MIN_RMS_ENERGY = 20.0
 # Samples per block when summing energy, so a long recording never needs a float copy of all of it
 _ENERGY_BLOCK = 1 << 20
 
+# WebRTC VAD rates, and the frame length used
+_VAD_RATES = (8000, 16000, 32000, 48000)
+_VAD_FRAME_MS = 30
+
 # OpenAI accepts uploads up to 25 MB; stay a little under it
 UPLOAD_LIMIT_BYTES = 24 * 1024 * 1024
 _WAV_HEADER_BYTES = 44
+
+# The live transcription session takes 24 kHz PCM16
+STREAM_RATE = 24000
+
+# Resampling low-pass (Kaiser-windowed sinc): flat to 85% of the lower rate's Nyquist
+# frequency and at least 70 dB down from it on, so nothing above the new band aliases into it
+_PASSBAND = 0.85
+_STOPBAND_DB = 70.0
+# Rate pairs whose exact ratio needs more filter phases than this (11.025 and 22.05 kHz,
+# odd rates) use a close approximation; the timing error stays under 0.01%
+_MAX_PHASES = 256
+# Outputs computed per matrix row, so a whole-number ratio still makes a worthwhile multiply
+_MIN_ROW = 32
+# Frames converted at a time: a long recording needs only this much extra memory
+_BLOCK_FRAMES = 1 << 16
 
 
 def read_wav(wav_bytes: bytes) -> tuple[np.ndarray, int, int]:
@@ -55,25 +78,123 @@ def pcm16_wav(samples: np.ndarray, rate: int, channels: int = 1) -> bytes:
     return buf.getvalue()
 
 
-def resample(samples: np.ndarray, src: int, dst: int) -> np.ndarray:
-    """Linearly resample mono audio. Downsampling by a whole factor keeps every nth sample instead."""
-    if src == dst or len(samples) == 0:
-        return samples
-    if src > dst and src % dst == 0:
-        return samples[:: src // dst]
-    target_len = round(len(samples) * dst / src)
-    return np.interp(
-        np.arange(target_len) * (src / dst),
-        np.arange(len(samples)),
-        samples.astype(np.float32),
-    )
+@cache
+def _polyphase(src: int, dst: int) -> tuple[int, int, int, int, np.ndarray]:
+    """The low-pass filter for ``src`` -> ``dst`` Hz as one matrix: a row of input (``stride``
+    new samples plus the context around them) times it gives the next ``matrix.shape[1]`` outputs.
+
+    Output ``n`` lies at input position ``n * down / up``; its taps are the windowed sinc
+    evaluated at the distance to each input sample, so a whole-number ratio is plain
+    decimation of the filtered signal and any other ratio interpolates it exactly there.
+    """
+    ratio = Fraction(src, dst).limit_denominator(_MAX_PHASES)
+    down, up = ratio.numerator, ratio.denominator
+    outputs = up * math.ceil(_MIN_ROW / up)
+    nyquist = min(up / down, 1.0) / 2  # of the lower rate, in cycles per input sample
+    width = (1 - _PASSBAND) * nyquist
+    cutoff = nyquist - width / 2
+    half = math.ceil((_STOPBAND_DB - 7.95) / (4 * math.pi * 2.285 * width))  # Kaiser's length estimate
+    beta = 0.1102 * (_STOPBAND_DB - 8.7)
+
+    out = np.arange(outputs)
+    offset, phase = np.divmod(out * down, up)
+    taps = np.arange(2 * half + 1)[:, None]
+    tau = phase / up + half - taps  # from each output to each of its taps, in input samples
+    window = np.i0(beta * np.sqrt(np.clip(1 - (tau / half) ** 2, 0, None))) / np.i0(beta)
+    kernel = np.where(np.abs(tau) <= half, 2 * cutoff * np.sinc(2 * cutoff * tau) * window, 0.0)
+    kernel /= kernel.sum(axis=0)  # every phase passes DC at exactly unit gain
+    matrix = np.zeros((offset[-1] + 2 * half + 1, outputs), dtype=np.float32)
+    matrix[offset + taps, out] = kernel
+    matrix.flags.writeable = False  # shared through the cache
+    return up, down, half, outputs * down // up, matrix
+
+
+class Resampler:
+    """Band-limited sample-rate conversion of mono audio, fed a block at a time.
+
+    Blocks can be any size and the result matches converting everything at once,
+    because the filter's context carries over from one block to the next. Each
+    output needs a millisecond or two of input after it, so ``flush()`` returns
+    the last few at the end. Beyond its ends the signal holds its first and last value.
+    """
+
+    def __init__(self, src: int, dst: int) -> None:
+        self._matrix: np.ndarray | None = None
+        self._up = self._down = 1
+        if src != dst:
+            self._up, self._down, self._half, self._stride, self._matrix = _polyphase(src, dst)
+        self._pending: np.ndarray | None = None  # input not yet used up, after the context it needs
+        self._frames_in = 0
+        self._frames_out = 0
+
+    def output_length(self, frames: int) -> int:
+        """How many output samples ``frames`` input samples make."""
+        return -(-frames * self._up // self._down)
+
+    def process(self, samples: np.ndarray) -> np.ndarray:
+        """Take the next block; returns the float32 outputs it completes."""
+        x = np.asarray(samples, dtype=np.float32).reshape(-1)
+        self._frames_in += len(x)
+        if self._matrix is None or not len(x):
+            return x
+        if self._pending is None:
+            self._pending = np.full(self._half, x[0], dtype=np.float32)
+        out = self._rows(np.concatenate((self._pending, x)))
+        self._frames_out += len(out)
+        return out
+
+    def flush(self) -> np.ndarray:
+        """The outputs still owed once the input has ended."""
+        missing = self.output_length(self._frames_in) - self._frames_out
+        if self._matrix is None or missing <= 0:
+            return np.empty(0, dtype=np.float32)
+        rows = -(-missing // self._matrix.shape[1])
+        pending = self._pending
+        hold = np.full((rows - 1) * self._stride + len(self._matrix) - len(pending), pending[-1], dtype=np.float32)
+        out = self._rows(np.concatenate((pending, hold)))[:missing]
+        self._frames_out += len(out)
+        return out
+
+    def _rows(self, buf: np.ndarray) -> np.ndarray:
+        """Filter every whole row in ``buf``; what is left waits for the next block."""
+        width, stride = len(self._matrix), self._stride
+        rows = (len(buf) - width) // stride + 1 if len(buf) >= width else 0
+        self._pending = buf[rows * stride :]
+        if not rows:
+            return np.empty(0, dtype=np.float32)
+        windows = sliding_window_view(buf, width)[: rows * stride : stride]
+        return (np.ascontiguousarray(windows) @ self._matrix).ravel()
+
+
+def _mono(samples: np.ndarray, channels: int) -> np.ndarray:
+    """Float32 mono from int16 samples with ``channels`` interleaved."""
+    if channels == 1:
+        return samples.astype(np.float32).reshape(-1)
+    return samples.reshape(-1, channels).mean(axis=1, dtype=np.float32)
+
+
+def _pcm16(samples: np.ndarray) -> np.ndarray:
+    return np.clip(np.rint(samples), -32768, 32767).astype("<i2")
+
+
+def mono_blocks(samples: np.ndarray, channels: int, resampler: Resampler) -> Iterator[np.ndarray]:
+    """``samples`` (int16, ``channels`` interleaved) as mono int16 through ``resampler``, a block
+    at a time, so converting a long recording takes only a block's worth of extra memory."""
+    step = _BLOCK_FRAMES * channels
+    for start in range(0, len(samples), step):
+        yield _pcm16(resampler.process(_mono(samples[start : start + step], channels)))
+    yield _pcm16(resampler.flush())
 
 
 def to_16k_mono(samples: np.ndarray, rate: int, channels: int = 1) -> np.ndarray:
     """Downmix and resample to the 16 kHz mono int16 that speech models take."""
-    if channels > 1:
-        samples = samples.reshape(-1, channels).mean(axis=1, dtype=np.float32)
-    return np.asarray(resample(samples, rate, 16000), dtype="<i2")
+    resampler = Resampler(rate, 16000)
+    out = np.empty(resampler.output_length(len(samples) // channels), dtype="<i2")
+    end = 0
+    for block in mono_blocks(samples, channels, resampler):
+        out[end : end + len(block)] = block
+        end += len(block)
+    return out
 
 
 def split_at_pauses(samples: np.ndarray, rate: int, max_samples: int) -> list[np.ndarray]:
@@ -117,17 +238,6 @@ def is_digital_silence(wav_bytes: bytes) -> bool:
     return len(samples) > 0 and not samples.any()
 
 
-def to_pcm24k(audio: np.ndarray, orig_rate: int = 48000) -> bytes:
-    """Convert audio array to 24kHz mono 16-bit little-endian PCM bytes."""
-    samples = np.asarray(audio)
-    if samples.ndim > 1:
-        if samples.shape[1] > 1:
-            samples = samples.mean(axis=1).astype(np.int16)
-        else:
-            samples = samples.squeeze(axis=1)
-    return np.asarray(resample(samples, orig_rate, 24000)).astype("<i2").tobytes()
-
-
 def _rms(samples: np.ndarray) -> float:
     total = 0.0
     for i in range(0, len(samples), _ENERGY_BLOCK):
@@ -146,15 +256,11 @@ def has_speech(wav_bytes: bytes) -> bool:
 
 
 def _has_speech(wav_bytes: bytes) -> bool:
-    with wave.open(io.BytesIO(wav_bytes), "rb") as wf:
-        sample_rate = wf.getframerate()
-        pcm = wf.readframes(wf.getnframes())
-
-    if not pcm:
+    samples, rate, channels = read_wav(wav_bytes)
+    if not len(samples):
         return False
 
     # Energy check (RMS) to quickly reject silence or mic noise floor
-    samples = np.frombuffer(pcm, dtype=np.int16)
     rms = _rms(samples)
     log.debug("Audio RMS energy: %.1f", rms)
     if rms < _MIN_RMS_ENERGY:
@@ -163,28 +269,23 @@ def _has_speech(wav_bytes: bytes) -> bool:
 
     vad = webrtcvad.Vad(0)  # aggressiveness 0-3 (0 = least aggressive, prevents false negatives on soft speech/consonants)
 
-    # WebRTC VAD needs 10/20/30ms frames at 8/16/32/48kHz
-    vad_rate = sample_rate
-    vad_pcm = pcm
-    if sample_rate not in (8000, 16000, 32000, 48000):
-        if sample_rate == 24000:
-            vad_pcm = np.repeat(samples, 2).astype("<i2").tobytes()
-            vad_rate = 48000
-        else:
-            vad_pcm = np.asarray(resample(samples, sample_rate, 16000)).astype("<i2").tobytes()
-            vad_rate = 16000
-
-    frame_ms = 30
-    frame_bytes = 2 * vad_rate * frame_ms // 1000  # 16-bit = 2 bytes/sample
-
+    # WebRTC VAD takes 10/20/30 ms frames of mono audio at 8/16/32/48 kHz
+    vad_rate = rate if rate in _VAD_RATES else 16000
+    frame = vad_rate * _VAD_FRAME_MS // 1000
     speech_frames = 0
-    for i in range(0, len(vad_pcm) - frame_bytes + 1, frame_bytes):
-        if vad.is_speech(vad_pcm[i : i + frame_bytes], vad_rate):
-            speech_frames += 1
-            if speech_frames * frame_ms >= _MIN_SPEECH_MS:
-                return True  # enough; no need to scan the rest of a long recording
+    rest = np.empty(0, dtype="<i2")
+    # Block by block, so a long recording that starts with speech is never converted in full
+    for block in mono_blocks(samples, channels, Resampler(rate, vad_rate)):
+        block = np.concatenate((rest, block))
+        whole = len(block) - len(block) % frame
+        for i in range(0, whole, frame):
+            if vad.is_speech(block[i : i + frame].tobytes(), vad_rate):
+                speech_frames += 1
+                if speech_frames * _VAD_FRAME_MS >= _MIN_SPEECH_MS:
+                    return True  # enough; no need to scan the rest of a long recording
+        rest = block[whole:]
 
-    log.debug("VAD: %dms speech detected", speech_frames * frame_ms)
+    log.debug("VAD: %dms speech detected", speech_frames * _VAD_FRAME_MS)
     return False
 
 
@@ -277,6 +378,7 @@ class Recorder:
         self._stream: sd.InputStream | None = None
         self._stream_queue: asyncio.Queue[bytes | None] | None = None
         self._streaming = False
+        self._resampler: Resampler | None = None  # to STREAM_RATE, one per streamed recording
         self._loop: asyncio.AbstractEventLoop | None = None
         self._on_limit: Callable[[], None] | None = None
         self._is_recording = False
@@ -418,6 +520,7 @@ class Recorder:
         self._drop_queued_chunks()
 
         self._streaming = stream
+        self._resampler = Resampler(self._sample_rate, STREAM_RATE) if stream else None
         self._on_limit = on_limit
         self._chunks = []
         self._frames = 0
@@ -488,7 +591,12 @@ class Recorder:
             queue.get_nowait()
 
     def _end_stream_queue(self) -> None:
+        """Queue the last resampled samples and the end marker. Call once the stream is closed."""
         if self._streaming:
+            self._streaming = False
+            tail = _pcm16(self._resampler.flush()).tobytes()
+            if tail:
+                self._post(self._stream_queue.put_nowait, tail)
             self._post(self._stream_queue.put_nowait, None)
 
     def _post(self, fn: Callable[..., None], *args: object) -> None:
@@ -511,7 +619,9 @@ class Recorder:
         self._chunks.append(chunk)
         self._frames += len(chunk)
         if self._streaming:
-            self._post(self._stream_queue.put_nowait, to_pcm24k(chunk, self._sample_rate))
+            pcm = _pcm16(self._resampler.process(_mono(chunk, self._channels))).tobytes()
+            if pcm:
+                self._post(self._stream_queue.put_nowait, pcm)
         if self._frames >= self._max_frames:
             self._limit_reached = True
             if self._on_limit is not None:

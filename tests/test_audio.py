@@ -9,79 +9,71 @@ import numpy as np
 import pytest
 
 from vox.audio import (
+    STREAM_RATE,
     Recorder,
+    Resampler,
     has_speech,
     is_digital_silence,
     resolve_input_device,
     split_at_pauses,
-    to_pcm24k,
     upload_wavs,
 )
 from vox.config import Config
 from vox.errors import AudioError
 
 
-def test_to_pcm24k_from_48k():
-    """Verify 48kHz -> 24kHz decimation, chunk size, and 16-bit little-endian byte format."""
-    orig_rate = 48000
-    duration = 0.1  # 100ms
-    num_samples = int(orig_rate * duration)  # 4800 samples
-    # Create known 16-bit integer samples
-    t = np.linspace(0, duration, num_samples, endpoint=False)
-    # 440Hz sine wave scaled to int16 range
-    sine_wave = (np.sin(2 * np.pi * 440 * t) * 10000).astype(np.int16)
-
-    pcm_bytes = to_pcm24k(sine_wave, orig_rate=orig_rate)
-
-    # Output should have 2400 samples (4800 // 2)
-    expected_samples = 2400
-    expected_bytes = expected_samples * 2  # 2 bytes per sample (16-bit)
-    assert len(pcm_bytes) == expected_bytes
-
-    # Unpack as little-endian 16-bit signed integers
-    unpacked = np.frombuffer(pcm_bytes, dtype="<i2")
-    assert len(unpacked) == expected_samples
-
-    # Verify decimation (every 2nd sample from input)
-    np.testing.assert_array_equal(unpacked, sine_wave[::2])
-
-    # Verify output chunk rate: 2400 samples / 0.1s = 24000 samples/sec
-    effective_sample_rate = len(unpacked) / duration
-    assert effective_sample_rate == 24000
+def _one_shot(samples, src, dst):
+    resampler = Resampler(src, dst)
+    out = np.concatenate([resampler.process(samples), resampler.flush()])
+    return np.clip(np.rint(out), -32768, 32767).astype(np.int16)
 
 
-def test_to_pcm24k_from_24k():
-    orig_rate = 24000
-    samples = np.array([100, -200, 300, -400], dtype=np.int16)
-    pcm_bytes = to_pcm24k(samples, orig_rate=orig_rate)
-    assert len(pcm_bytes) == 8
-    unpacked = np.frombuffer(pcm_bytes, dtype="<i2")
-    np.testing.assert_array_equal(unpacked, samples)
+def _drain(queue):
+    """Everything queued before the end marker, as int16 samples."""
+    chunks = []
+    while (chunk := queue.get_nowait()) is not None:
+        chunks.append(chunk)
+    return chunks, np.frombuffer(b"".join(chunks), dtype="<i2")
 
 
-def test_to_pcm24k_from_16k():
-    orig_rate = 16000
-    duration = 0.1  # 100ms
-    num_samples = int(orig_rate * duration)  # 1600 samples
-    samples = np.full(num_samples, 500, dtype=np.int16)
-    pcm_bytes = to_pcm24k(samples, orig_rate=orig_rate)
-    # Resampled to 24kHz: 1600 * 24 / 16 = 2400 samples
-    assert len(pcm_bytes) == 2400 * 2
-    unpacked = np.frombuffer(pcm_bytes, dtype="<i2")
-    assert len(unpacked) == 2400
+@pytest.mark.anyio
+@pytest.mark.parametrize(("rate", "channels"), [(48000, 1), (48000, 2), (44100, 1), (24000, 1), (16000, 1)])
+async def test_streamed_audio_is_24k_mono_pcm16_that_joins_up_seamlessly(rate, channels):
+    """50 ms blocks go out as they arrive; together they equal converting the whole recording at once."""
+    recorder = Recorder(Config(sample_rate=rate, channels=channels))
+    frames = rate // 20
+    t = np.arange(frames * 6) / rate
+    audio = (np.sin(2 * np.pi * 440 * t) * 8000).astype(np.int16)
+    blocks = np.repeat(audio[:, None], channels, axis=1)
+    with patch("vox.audio.sd.InputStream", return_value=FakeStream()):
+        recorder.start(loop=asyncio.get_running_loop(), stream=True)
+        for i in range(6):
+            recorder._callback(blocks[i * frames : (i + 1) * frames], frames, None, 0)
+        recorder.stop()
+        await asyncio.sleep(0)
+
+    chunks, streamed = _drain(recorder.get_chunk_queue())
+    assert len(chunks) >= 6  # one per block as it arrives, then the filter's last few samples
+    assert len(streamed) == -(-len(audio) * STREAM_RATE // rate)
+    assert np.abs(streamed.astype(int) - _one_shot(audio, rate, STREAM_RATE)).max() <= 1
+    if rate == STREAM_RATE:
+        np.testing.assert_array_equal(streamed, audio)
 
 
-def test_to_pcm24k_stereo_to_mono():
-    orig_rate = 48000
-    # Stereo: 4800 samples x 2 channels
+@pytest.mark.anyio
+async def test_streamed_stereo_is_the_mean_of_the_channels():
+    recorder = Recorder(Config(sample_rate=48000, channels=2))
     stereo = np.zeros((4800, 2), dtype=np.int16)
     stereo[:, 0] = 1000
     stereo[:, 1] = 3000
-    pcm_bytes = to_pcm24k(stereo, orig_rate=orig_rate)
-    unpacked = np.frombuffer(pcm_bytes, dtype="<i2")
-    assert len(unpacked) == 2400
-    # Mean of 1000 and 3000 is 2000
-    assert unpacked[0] == 2000
+    with patch("vox.audio.sd.InputStream", return_value=FakeStream()):
+        recorder.start(loop=asyncio.get_running_loop(), stream=True)
+        recorder._callback(stereo, 4800, None, 0)
+        recorder.stop()
+        await asyncio.sleep(0)
+    _, streamed = _drain(recorder.get_chunk_queue())
+    assert len(streamed) == 2400
+    assert set(streamed.tolist()) == {2000}
 
 
 def test_has_speech_silence():
@@ -134,13 +126,13 @@ async def test_recorder_streaming_and_buffer_retention():
         wav_bytes = recorder.stop()
         await consumer_task
 
-        # Verify stream consumer received all 3 chunks converted to 24kHz PCM16
-        assert len(collected_chunks) == 3
-        for chunk in collected_chunks:
-            # 4800 samples at 48k decimated to 2400 samples at 24k = 4800 bytes
-            assert len(chunk) == 4800
-            samples_24k = np.frombuffer(chunk, dtype="<i2")
-            assert len(samples_24k) == 2400
+        # The consumer got the three blocks at 24 kHz (a chunk each, then the filter's tail):
+        # 14400 samples at 48 kHz make 7200, the same as converting the recording in one go
+        assert len(collected_chunks) == 4
+        streamed = np.frombuffer(b"".join(collected_chunks), dtype="<i2")
+        expected = _one_shot(np.concatenate([chunk1, chunk2, chunk3]), 48000, 24000)
+        assert len(streamed) == 7200
+        assert np.abs(streamed.astype(int) - expected).max() <= 1
 
         # Verify complete turn audio buffer was preserved in memory as valid WAV
         assert len(wav_bytes) > 0
@@ -474,18 +466,52 @@ def test_has_speech_stops_at_the_first_80ms_of_speech():
     assert vad.return_value.is_speech.call_count == 3  # ceil(80 / 30), not 2000 frames
 
 
+def test_has_speech_converts_44k_audio_to_16k_for_the_vad():
+    rate = 44100
+    word = (np.sin(2 * np.pi * 300 * np.arange(int(rate * 0.2)) / rate) * 60).astype(np.int16)
+    assert has_speech(_wav(word, rate))
+    assert not has_speech(_wav(np.zeros(rate), rate))
+    with patch("vox.audio.webrtcvad.Vad") as vad:
+        vad.return_value.is_speech.return_value = False
+        assert not has_speech(_wav(word, rate))
+    calls = vad.return_value.is_speech.call_args_list
+    assert len(calls) == 6  # 200 ms is 3200 samples at 16 kHz: six whole 30 ms frames
+    assert {(len(c.args[0]), c.args[1]) for c in calls} == {(960, 16000)}
+
+
+def test_has_speech_gives_the_vad_mono_frames_of_a_stereo_recording():
+    rate = 48000
+    tone = (np.sin(2 * np.pi * 300 * np.arange(int(rate * 0.2)) / rate) * 3000).astype(np.int16)
+    with patch("vox.audio.webrtcvad.Vad") as vad:
+        vad.return_value.is_speech.return_value = False
+        assert not has_speech(_wav(np.stack([tone, tone], axis=1).ravel(), rate, channels=2))
+    calls = vad.return_value.is_speech.call_args_list
+    assert len(calls) == 6  # 200 ms of audio, not 400 ms of interleaved samples
+    assert calls[0].args == (tone[:1440].tobytes(), 48000)
+
+
 def test_has_speech_assumes_speech_when_detection_breaks(caplog):
     assert has_speech(b"not a wav") is True
     assert "transcribing anyway" in caplog.text
 
 
-def test_upload_wavs_downsamples_to_16k_mono():
-    ramp = (np.arange(48000 * 3) % 30000).astype(np.int16)
-    [upload] = upload_wavs(_wav(ramp, 48000))
+def _level(samples, freq, rate):
+    """Amplitude of the ``freq`` Hz component, over the middle 80%."""
+    x = np.asarray(samples, dtype=np.float64)[len(samples) // 10 : -len(samples) // 10]
+    return 2 * abs(np.dot(x, np.exp(-2j * np.pi * freq * np.arange(len(x)) / rate))) / len(x)
+
+
+@pytest.mark.parametrize("rate", [48000, 44100])
+def test_upload_wavs_downsamples_to_16k_mono_without_aliasing(rate):
+    t = np.arange(rate * 2) / rate
+    # A voice-band tone, plus a 12 kHz one that plain decimation would fold down to 4 kHz
+    audio = (np.sin(2 * np.pi * 1000 * t) * 8000 + np.sin(2 * np.pi * 12000 * t) * 8000).astype(np.int16)
+    [upload] = upload_wavs(_wav(audio, rate))
     with wave.open(io.BytesIO(upload), "rb") as wf:
-        assert (wf.getframerate(), wf.getnchannels(), wf.getsampwidth()) == (16000, 1, 2)
+        assert (wf.getframerate(), wf.getnchannels(), wf.getsampwidth(), wf.getnframes()) == (16000, 1, 2, 32000)
         samples = np.frombuffer(wf.readframes(wf.getnframes()), dtype=np.int16)
-    np.testing.assert_array_equal(samples, ramp[::3])
+    assert _level(samples, 1000, 16000) == pytest.approx(8000, rel=0.02)
+    assert _level(samples, 4000, 16000) < 80  # 40 dB down
 
     stereo = np.stack([np.full(4410, 1000), np.full(4410, 3000)], axis=1).astype(np.int16)
     [upload] = upload_wavs(_wav(stereo.ravel(), 44100, channels=2))

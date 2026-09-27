@@ -11,7 +11,7 @@ import time
 import wave
 from pathlib import Path
 
-from .audio import pcm16_wav, read_wav, to_16k_mono
+from .audio import Resampler, mono_blocks, read_wav
 from .config import Config
 from .errors import ConfigError, TranscriptionError
 from .transcribe import build_prompt, is_prompt_hallucination
@@ -50,12 +50,17 @@ def _resolve_model(config: Config) -> Path:
 
 
 def _write_input(wav_bytes: bytes, path: Path) -> None:
-    """Write a 16 kHz mono PCM16 WAV accepted by whisper-cli."""
+    """Write a 16 kHz mono PCM16 WAV accepted by whisper-cli, converting a block at a time."""
     try:
         samples, rate, channels = read_wav(wav_bytes)
     except (EOFError, ValueError, wave.Error) as exc:
         raise TranscriptionError(f"Invalid WAV input for whisper.cpp: {exc}") from exc
-    path.write_bytes(pcm16_wav(to_16k_mono(samples, rate, channels), 16000))
+    with wave.open(str(path), "wb") as wf:
+        wf.setnchannels(1)
+        wf.setsampwidth(2)
+        wf.setframerate(16000)
+        for block in mono_blocks(samples, channels, Resampler(rate, 16000)):
+            wf.writeframes(block)
 
 
 class WhisperCppTranscriber:
