@@ -20,9 +20,10 @@ The system SHALL provide "Set Hotkey…" in the tray menu, right after "Set API 
 - **THEN** the hotkey is `right_shift` with no combination, and Use Default is disabled while that is already the setting
 
 #### Scenario: A typing key is refused
-- **WHEN** the Hotkey field records and the user presses a key that types or edits text, such as a letter, a digit, Space, Return, Tab, an arrow, Caps Lock or fn
+- **WHEN** the Hotkey field records and the user presses a key that types or edits text, such as a letter, a digit, Space, Return, Tab, an arrow or Caps Lock
 - **THEN** the window says that Vox Transfer needs a key you don't type with (Shift, Control, Option or Command on either side, or F1 to F20 on macOS; Shift, Ctrl, Alt or Super on either side, AltGr, or F1 to F20 on Linux), keeps the old key, and keeps recording, so the next key can be pressed at once
 - **AND** pressing two keys together in the Hotkey field says that the hotkey is a single key and points to Key combination
+- **AND** on macOS the window ignores fn, so holding fn and pressing a function key records that function key
 
 #### Scenario: An unusable combination is refused
 - **WHEN** the Key combination field records Shift with Space, a modifier with a letter, modifiers alone, a function key alone, or AltGr with Space
