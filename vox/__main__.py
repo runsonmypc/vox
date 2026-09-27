@@ -3,27 +3,54 @@
 from __future__ import annotations
 
 import argparse
+import importlib.metadata
 import logging
+import os
 import sys
 from pathlib import Path
-from typing import IO
 
-LOCK_PATH = Path("/tmp/vox-daemon.lock")
+# A startup problem only the user can fix (sysexits EX_CONFIG), so restarting can't help. The login services
+# restart Vox on it unless their files opt out: RestartPreventExitStatus=78 in vox.service, and on macOS,
+# where launchd has no such setting, a plist wrapper that turns 78 into a clean exit.
+EXIT_CANNOT_START = os.EX_CONFIG
 
 
-def _acquire_instance_lock(path: Path = LOCK_PATH) -> IO[str] | None:
-    """Hold an advisory lock for the life of the process; None if another instance has it."""
+def _lock_dir() -> Path:
+    """Vox's per-user lock directory, where no cleaner deletes old files."""
+    if sys.platform != "darwin":
+        # The same runtime directory however Vox was started, even without XDG_RUNTIME_DIR set
+        runtime = Path(os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}")
+        if runtime.is_absolute() and runtime.is_dir():
+            return runtime / "vox"
+    return Path.home() / ".local" / "state" / "vox"
+
+
+def _acquire_instance_lock(directory: Path) -> int | None:
+    """Lock ``directory`` for the life of the process; None if another instance holds it. Raises OSError.
+
+    The lock is on the directory rather than on a file in it, so deleting a file can't let a second
+    Vox start next to the first, as happened with the old /tmp/vox-daemon.lock.
+    """
     import fcntl
+
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY)
     try:
-        lock = open(path, "a")
-    except OSError:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        os.close(fd)
         return None
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+def _version() -> str:
     try:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except OSError:
-        lock.close()
-        return None
-    return lock
+        return importlib.metadata.version("vox")
+    except importlib.metadata.PackageNotFoundError:  # run from a checkout that was never installed
+        return "unknown"
 
 
 def main() -> None:
@@ -31,6 +58,7 @@ def main() -> None:
         prog="vox",
         description="Voice-to-text daemon for Linux and macOS",
     )
+    parser.add_argument("--version", action="version", version=f"%(prog)s {_version()}")
     parser.add_argument(
         "--config", "-c",
         type=Path,
@@ -69,7 +97,12 @@ def main() -> None:
         return
 
     # One instance at a time. Exit cleanly so launchd/systemd don't retry it, and before any permission prompt
-    lock = _acquire_instance_lock()
+    lock_dir = _lock_dir()
+    try:
+        lock = _acquire_instance_lock(lock_dir)
+    except OSError as e:
+        log.error("Couldn't lock %s to keep Vox to one instance: %s", lock_dir, e)
+        sys.exit(EXIT_CANNOT_START)
     if lock is None:
         log.info("Vox is already running.")
         return
@@ -81,10 +114,11 @@ def main() -> None:
         config = load_config(args.config)
     except ConfigError as e:
         log.error("%s", e)
-        sys.exit(1)
+        sys.exit(EXIT_CANNOT_START)
 
     # Without a key Vox still starts: the menu asks for one, and a service exiting here would only be restarted
-    from .keystore import KeystoreError, get_api_key, migrate_plaintext
+    from .keystore import KeystoreError, get_api_key, hide_env_override, migrate_plaintext
+    hide_env_override()  # before Vox starts any process, so none inherits the key
     migrate_plaintext(config.config_path)
     try:
         config.openai_api_key = get_api_key()
@@ -98,8 +132,9 @@ def main() -> None:
         try:
             WhisperCppTranscriber(config)
         except ConfigError as e:
-            log.error("%s", e)
-            sys.exit(1)
+            # Start anyway, like without a key: the menu can switch modes, and exiting would only get Vox restarted
+            config.mode_error = str(e)
+            log.error("Local transcription can't run: %s. Choose another mode from the Vox menu.", e)
 
     # Check system dependencies
     from .injector import check_accessibility_permission, check_dependencies
@@ -107,7 +142,7 @@ def main() -> None:
         check_dependencies()
     except DependencyError as e:
         log.error("%s", e)
-        sys.exit(1)
+        sys.exit(EXIT_CANNOT_START)
 
     # Check macOS permissions
     if sys.platform == "darwin" and not check_accessibility_permission(prompt=True):
@@ -117,7 +152,7 @@ def main() -> None:
             "Enable Accessibility in System Settings -> Privacy & Security -> Accessibility."
         )
 
-    log.info("Starting vox daemon...")
+    log.info("Starting vox %s daemon...", _version())
 
     try:
         from .daemon import run

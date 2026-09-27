@@ -1,6 +1,7 @@
 """Tests for writing dictionary words and snippets back to config.toml."""
 
 import asyncio
+import logging
 import os
 import stat
 import tomllib
@@ -9,7 +10,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from vox.config import load_config, update_dictionary, update_snippet, update_transcription_mode
+from vox.config import (
+    RECORDING_LIMIT_CHOICES,
+    load_config,
+    update_dictionary,
+    update_max_recording_seconds,
+    update_snippet,
+    update_transcription_mode,
+)
 from vox.errors import ConfigError
 
 EXAMPLE = """\
@@ -81,6 +89,34 @@ def test_mode_switch_preserves_legacy_model_for_old_provider(tmp_path, old_mode,
     assert data[section][key] == "old-model"
 
 
+def test_mode_switch_keeps_the_effective_model_over_a_legacy_provider_model(tmp_path):
+    """[transcription] model wins over [whisper] model, so switching modes must not bring the shadowed one back."""
+    path = tmp_path / "config.toml"
+    path.write_text('[whisper]\nmodel = "whisper-1"\n\n[transcription]\nmode = "batch"\nmodel = "gpt-4o-transcribe"\n')
+    assert load_config(path).whisper_model == "gpt-4o-transcribe"
+    update_transcription_mode(path, "streaming")
+    assert "gpt-4o-transcribe" in path.read_text()
+    update_transcription_mode(path, "batch")
+    assert load_config(path).whisper_model == "gpt-4o-transcribe"
+
+
+def test_mode_switch_keeps_the_effective_streaming_model(tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_text('[transcription]\nmode = "streaming"\nmodel = "live-new"\nstreaming_model = "live-old"\n')
+    assert load_config(path).streaming_model == "live-new"
+    update_transcription_mode(path, "batch")
+    update_transcription_mode(path, "streaming")
+    assert load_config(path).streaming_model == "live-new"
+
+
+def test_mode_switch_keeps_the_effective_whisper_cpp_model(tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_text('[whisper_cpp]\nmodel = "old.bin"\n\n[transcription]\nmode = "whisper_cpp"\nmodel = "new.bin"\n')
+    update_transcription_mode(path, "batch")
+    update_transcription_mode(path, "whisper_cpp")
+    assert load_config(path).whisper_cpp_model == "new.bin"
+
+
 def test_add_skips_duplicates_and_blanks(cfg):
     update_dictionary(cfg, add=["FastAPI"])
     assert update_dictionary(cfg, add=["fastapi", "  ", "", " Kubernetes "]) == ["FastAPI", "Kubernetes"]
@@ -102,6 +138,13 @@ def test_edits_dictionary_where_load_config_reads_it(tmp_path, section):
     assert data[section]["dictionary"] == ["Vox", "Kubernetes"]
     assert "# the app" in path.read_text()
     assert load_config(path).dictionary == ["Vox", "Kubernetes"]
+
+
+def test_edits_the_dictionary_load_config_reads_when_several_sections_have_one(tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_text('[attenuation]\ndictionary = ["A"]\n\n[whisper]\ndictionary = ["W"]\n')
+    update_dictionary(path, add=["x"])
+    assert load_config(path).dictionary == ["A", "x"]
 
 
 def test_add_snippet_creates_table(tmp_path):
@@ -142,6 +185,36 @@ def test_creates_missing_file_and_dirs_with_private_mode(tmp_path):
     update_dictionary(path, add=["Vox"])
     assert load_config(path).dictionary == ["Vox"]
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def test_new_config_directory_is_owner_only(tmp_path):
+    path = tmp_path / "vox" / "config.toml"
+    update_snippet(path, "x", "y")
+    assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+def test_recording_limit_is_saved_in_the_audio_section(cfg):
+    update_max_recording_seconds(cfg, 1800)
+    assert load_config(cfg).max_recording_seconds == 1800
+    assert "sample_rate = 16000  # keep this comment" in cfg.read_text()
+    update_max_recording_seconds(cfg, RECORDING_LIMIT_CHOICES[0])
+    assert load_config(cfg).max_recording_seconds == RECORDING_LIMIT_CHOICES[0]
+
+
+def test_recording_limit_creates_a_private_file(tmp_path):
+    path = tmp_path / "new" / "config.toml"
+    update_max_recording_seconds(path, 600)
+    assert load_config(path).max_recording_seconds == 600
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+@pytest.mark.parametrize("seconds", [0, -60, True, 90.0, "600"])
+def test_recording_limit_rejects_invalid_values(cfg, seconds):
+    before = cfg.read_text()
+    with pytest.raises(ValueError):
+        update_max_recording_seconds(cfg, seconds)
+    assert cfg.read_text() == before
 
 
 def test_preserves_file_permissions(cfg):
@@ -261,3 +334,17 @@ async def test_menu_device_choice_survives_vocab_edits_but_file_changes_apply(cf
         cfg.write_text(tomlkit.dumps(doc))
         await wait_until(lambda: config.audio_device == "USB")
     recorder.reconfigure.assert_called_once_with(config)  # the live object, so later menu picks reach the recorder
+
+
+@pytest.mark.anyio
+async def test_invalid_edit_keeps_the_running_value(tmp_path, caplog):
+    path = tmp_path / "config.toml"
+    path.write_text("[attenuation]\nlevel = 0.3\n")
+    config = load_config(path)
+
+    with caplog.at_level(logging.WARNING, logger="vox.daemon"):
+        async with running_reloader(config, MagicMock()) as wait_until:
+            path.write_text('[attenuation]\nlevel = "0.8"\n')
+            await wait_until(lambda: "Config reload failed" in caplog.text)
+    assert config.attenuation_level == 0.3
+    assert "[attenuation] level" in caplog.text
