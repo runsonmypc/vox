@@ -17,7 +17,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from vox import injector
-from vox.errors import InjectionError
+from vox.errors import DependencyError, InjectionError
 from vox.window import AppType
 
 darwin_only = pytest.mark.skipif(sys.platform != "darwin", reason="NSPasteboard is macOS-only")
@@ -820,3 +820,38 @@ def test_clipboard_owner_counts_requests_split_across_reads(monkeypatch):
     assert owner.exited()
     owner.close()
 
+
+# -- Dependencies --------------------------------------------------------------------
+
+
+def _installed(*names):
+    return lambda name: f"/usr/bin/{name}" if name in names else None
+
+
+def test_linux_missing_xprop_is_a_startup_warning_not_an_error(monkeypatch, caplog):
+    """Without xprop terminals are not recognized and get Ctrl+V; Vox still starts and says why."""
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(injector.shutil, "which", _installed("xdotool", "xclip"))
+
+    injector.check_dependencies()
+
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert len(warnings) == 1
+    assert "xprop" in warnings[0].getMessage() and "x11-utils" in warnings[0].getMessage()
+
+
+def test_linux_dependencies_all_present_log_nothing(monkeypatch, caplog):
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(injector.shutil, "which", _installed("xdotool", "xclip", "xprop"))
+
+    injector.check_dependencies()
+
+    assert not caplog.records
+
+
+def test_linux_missing_xdotool_or_xclip_is_still_an_error(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(injector.shutil, "which", _installed("xprop"))
+
+    with pytest.raises(DependencyError, match="xdotool, xclip"):
+        injector.check_dependencies()
