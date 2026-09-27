@@ -16,8 +16,10 @@ from vox.ui.icons import IconState, make_icon
 from vox.ui.tray import (
     CONFIG_ERROR,
     HISTORY_WINDOW,
+    HOTKEY_WINDOW,
     KEY_WINDOW,
     RECENT_HEADER,
+    SET_HOTKEY,
     SET_KEY,
     VOCAB_WINDOW,
     TrayManager,
@@ -356,7 +358,7 @@ async def test_recent_dictations_are_their_own_menu_section(tmp_path):
         ["Vox Transfer · Idle"],
         ["Pause Dictation", "Input Device", "Transcription", "Recording Limit"],
         [RECENT_HEADER, "“three”", "“two”", "“one”"],
-        ["Search History…", "Vocabulary & Snippets…", "Set API Key…"],
+        ["Search History…", "Vocabulary & Snippets…", "Set API Key…", "Set Hotkey…"],
         ["Quit Vox Transfer"],
     ]
     history.close()
@@ -616,6 +618,68 @@ def test_daemon_can_open_the_key_window():
     with patch("vox.ui.tray.threading.Thread"):
         tray.open_key_window()
     launcher.assert_called_once_with([sys.executable, "-P", "-m", KEY_WINDOW])
+
+
+# -- Hotkey -------------------------------------------------------------------------
+
+
+def test_set_hotkey_follows_set_api_key():
+    _, icon = make_tray()
+    texts = [item.text for item in icon.menu]
+    assert texts.index(SET_HOTKEY) == texts.index(SET_KEY) + 1
+    _, icon = make_tray(Config(mode="batch"))  # no key: Set API Key… moves to the top, Set Hotkey… stays
+    texts = [item.text for item in icon.menu]
+    assert texts.index(SET_KEY) == 1
+    assert texts.index(SET_HOTKEY) == texts.index("Vocabulary & Snippets…") + 1
+
+
+def hotkey_tray(tmp_path, launcher):
+    """A tray with a config path whose daemon events, and window launches, land in one list in order."""
+    config = Config(openai_api_key="test")
+    config._config_path = tmp_path / "config.toml"
+    events = []
+    tray, icon = make_tray(config, launcher=launcher)
+    loop, queue = MagicMock(), MagicMock()
+    loop.call_soon_threadsafe.side_effect = lambda fn, *args: events.append(args[0])
+    tray.attach(loop, queue, None, MagicMock())
+    return tray, icon, events
+
+
+def test_hotkey_window_suspends_the_hotkey_until_it_closes(tmp_path):
+    proc = _fake_proc()
+
+    def launch(command):
+        events.append("launched")
+        return proc
+
+    launcher = MagicMock(side_effect=launch)
+    tray, icon, events = hotkey_tray(tmp_path, launcher)
+    with patch("vox.ui.tray.threading.Thread") as thread:
+        find(icon.menu, SET_HOTKEY)(icon)
+    command = [sys.executable, "-P", "-m", HOTKEY_WINDOW, "--config", str(tmp_path / "config.toml")]
+    launcher.assert_called_once_with(command)
+    assert events == ["hotkey:suspend", "launched"]
+
+    kwargs = thread.call_args.kwargs
+    kwargs["target"](*kwargs["args"])  # what the thread runs: wait for the window, however it ends, then resume
+    proc.wait.assert_called_once_with()
+    assert events == ["hotkey:suspend", "launched", "hotkey:resume"]
+
+
+def test_a_hotkey_window_that_fails_to_open_resumes_the_hotkey(tmp_path):
+    tray, icon, events = hotkey_tray(tmp_path, MagicMock(side_effect=OSError("no python")))
+    find(icon.menu, SET_HOTKEY)(icon)
+    assert events == ["hotkey:suspend", "hotkey:resume"]
+
+
+def test_set_hotkey_is_unavailable_while_recording_or_processing():
+    tray, icon = make_tray()
+    assert find(icon.menu, SET_HOTKEY).enabled
+    for state, enabled in (("RECORDING", False), ("PROCESSING", False), ("IDLE", True)):
+        tray.set_state(state)
+        assert find(icon.menu, SET_HOTKEY).enabled is enabled
+    tray.set_paused(True)
+    assert find(icon.menu, SET_HOTKEY).enabled
 
 
 # -- Status line problems -----------------------------------------------------------
