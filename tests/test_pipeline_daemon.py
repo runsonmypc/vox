@@ -968,7 +968,8 @@ async def test_a_partial_transcription_that_history_cannot_keep_is_pasted(tmp_pa
     kwargs["batch_transcriber"].transcribe.side_effect = PartialTranscriptionError(
         "part 2 of 3 failed: rate limited", "the first ten minutes",
     )
-    with patch("vox.daemon.paste") as paste:
+    with patch("vox.daemon.detect_active_window", return_value=AppContext("", "", AppType.OTHER)), \
+         patch("vox.daemon.paste") as paste:
         outcome = await _process(**kwargs)
 
     paste.assert_called_once_with("the first ten minutes", AppType.EDITOR)  # billed text is never dropped
