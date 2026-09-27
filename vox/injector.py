@@ -67,6 +67,12 @@ def check_dependencies() -> None:
             raise DependencyError("Missing system dependency: osascript")
         return
 
+    if not shutil.which("xprop"):
+        # Vox still works, but window detection reads WM_CLASS through xprop
+        log.warning(
+            "xprop is not installed, so Vox can't tell which app is focused: it pastes into terminals with "
+            "Ctrl+V, which they ignore, and [window_classes] doesn't apply. Install with: sudo apt install x11-utils"
+        )
     missing = []
     if not shutil.which("xdotool"):
         missing.append("xdotool")
@@ -149,16 +155,23 @@ def _snapshot_pasteboard(pb) -> list[dict] | None:
 
 
 def _write_transient(pb, text: str) -> int:
-    """Write the dictation for this Mac only, marked transient. Returns the pasteboard's changeCount."""
+    """Write the dictation for this Mac only, marked transient. Returns the pasteboard's changeCount.
+
+    The text and its markers go in one item and one write, markers first: the pasteboard publishes
+    an item's types one at a time in the order they were set, so a clipboard manager polling
+    during the write would otherwise see the text without the markers, and record it.
+    """
     try:
-        from AppKit import NSPasteboardContentsCurrentHostOnly, NSPasteboardTypeString
+        from AppKit import NSPasteboardContentsCurrentHostOnly, NSPasteboardItem, NSPasteboardTypeString
         from Foundation import NSData
 
-        pb.prepareForNewContentsWithOptions_(NSPasteboardContentsCurrentHostOnly)
-        if not pb.setString_forType_(text, NSPasteboardTypeString):
-            raise InjectionError("NSPasteboard refused the text")
+        item = NSPasteboardItem.alloc().init()
         for marker in _TRANSIENT_TYPES:
-            pb.setData_forType_(NSData.data(), marker)
+            item.setData_forType_(NSData.data(), marker)
+        item.setString_forType_(text, NSPasteboardTypeString)
+        pb.prepareForNewContentsWithOptions_(NSPasteboardContentsCurrentHostOnly)
+        if not pb.writeObjects_([item]):
+            raise InjectionError("NSPasteboard refused the text")
         return pb.changeCount()
     except InjectionError:
         raise

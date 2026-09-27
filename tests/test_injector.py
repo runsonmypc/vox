@@ -17,7 +17,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from vox import injector
-from vox.errors import InjectionError
+from vox.errors import DependencyError, InjectionError
 from vox.window import AppType
 
 darwin_only = pytest.mark.skipif(sys.platform != "darwin", reason="NSPasteboard is macOS-only")
@@ -156,19 +156,81 @@ def test_macos_copy_during_paste_is_not_overwritten(pasteboard):
 
 
 class RefusingPasteboard:
-    """The private pasteboard, except that writing the restored items back is refused."""
+    """The private pasteboard, except that writing the restored items back is refused (and with
+    ``dictation=True`` writing the dictation too)."""
 
-    def __init__(self, pb, on_write=None) -> None:
+    def __init__(self, pb, on_write=None, dictation=False) -> None:
         self._pb = pb
         self._on_write = on_write
+        self._dictation = dictation
 
     def __getattr__(self, name):
         return getattr(self._pb, name)
 
     def writeObjects_(self, objects):
+        if not self._dictation and any(injector._TRANSIENT_TYPES[0] in item.types() for item in objects):
+            return self._pb.writeObjects_(objects)
         if self._on_write is not None:
             self._on_write()
         return False
+
+
+class ObservingPasteboard:
+    """The private pasteboard, noting its types after every write, as a polling clipboard manager could see them."""
+
+    _WRITES = ("clearContents", "prepareForNewContentsWithOptions_", "setString_forType_", "setData_forType_", "writeObjects_")
+
+    def __init__(self, pb) -> None:
+        self._pb = pb
+        self.calls: list[tuple] = []
+        self.states: list[set[str]] = []
+
+    def __getattr__(self, name):
+        method = getattr(self._pb, name)
+        if name not in self._WRITES:
+            return method
+
+        def write(*args):
+            result = method(*args)
+            self.calls.append((name, *args))
+            self.states.append({str(t) for t in self._pb.types() or ()})
+            return result
+
+        return write
+
+
+@darwin_only
+def test_macos_dictation_is_never_on_the_clipboard_without_its_markers(pasteboard):
+    """A clipboard manager polling at any moment of the write sees the text only with the transient markers."""
+    import AppKit
+
+    observed = ObservingPasteboard(pasteboard.pb)
+    injector._write_transient(observed, "dictated")
+
+    with_text = [types for types in observed.states if AppKit.NSPasteboardTypeString in types]
+    assert with_text
+    assert all(set(injector._TRANSIENT_TYPES) <= types for types in with_text)
+    assert observed.calls[0] == ("prepareForNewContentsWithOptions_", AppKit.NSPasteboardContentsCurrentHostOnly)
+    assert pasteboard.pb.stringForType_(AppKit.NSPasteboardTypeString) == "dictated"
+
+    # writeObjects_ publishes the item's types one at a time in their order, so the markers come first
+    [(_, [item])] = [call for call in observed.calls if call[0] == "writeObjects_"]
+    order = [str(t) for t in item.types()]
+    assert all(order.index(marker) < order.index(AppKit.NSPasteboardTypeString) for marker in injector._TRANSIENT_TYPES)
+
+
+@darwin_only
+def test_macos_refused_dictation_write_raises_and_never_pastes(pasteboard):
+    import AppKit
+
+    _write_items(pasteboard.pb, {"public.utf8-plain-text": b"original"})
+
+    refusing = RefusingPasteboard(pasteboard.pb, dictation=True)
+    with patch.object(injector, "_general_pasteboard", return_value=refusing), pytest.raises(InjectionError):
+        injector.paste("dictated", AppType.EDITOR)
+
+    pasteboard.post.assert_not_called()
+    assert pasteboard.pb.stringForType_(AppKit.NSPasteboardTypeString) == "original"
 
 
 @darwin_only
@@ -762,3 +824,39 @@ def test_clipboard_owner_counts_requests_split_across_reads(monkeypatch):
     assert not owner.wait_served(3, 1)
     assert owner.exited()
     owner.close()
+
+
+# -- Dependencies --------------------------------------------------------------------
+
+
+def _installed(*names):
+    return lambda name: f"/usr/bin/{name}" if name in names else None
+
+
+def test_linux_missing_xprop_is_a_startup_warning_not_an_error(monkeypatch, caplog):
+    """Without xprop terminals are not recognized and get Ctrl+V; Vox still starts and says why."""
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(injector.shutil, "which", _installed("xdotool", "xclip"))
+
+    injector.check_dependencies()
+
+    warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+    assert len(warnings) == 1
+    assert "xprop" in warnings[0].getMessage() and "x11-utils" in warnings[0].getMessage()
+
+
+def test_linux_dependencies_all_present_log_nothing(monkeypatch, caplog):
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(injector.shutil, "which", _installed("xdotool", "xclip", "xprop"))
+
+    injector.check_dependencies()
+
+    assert not caplog.records
+
+
+def test_linux_missing_xdotool_or_xclip_is_still_an_error(monkeypatch):
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(injector.shutil, "which", _installed("xprop"))
+
+    with pytest.raises(DependencyError, match="xdotool, xclip"):
+        injector.check_dependencies()

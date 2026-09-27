@@ -6,6 +6,8 @@ All platform tools and frameworks are faked: nothing captures the screen or quer
 from __future__ import annotations
 
 import contextlib
+import itertools
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -165,37 +167,90 @@ def test_atspi_helper_needs_a_numeric_pid():
 
 # -- tmux ------------------------------------------------------------------------------
 
-_PS = b"  500     1\n  800   500\n  900   800\n  300     1\n  901   300\n  902   800\n"
+# (pid, ppid, tty). Terminal app 500 has one tab: login 800 -> shell 810 -> tmux client 900, and a
+# helper 520 with no terminal. Another terminal app, 300, runs tmux client 901 in its own tab.
+_PROCESSES = [
+    ("500", "1", "none"), ("520", "500", "none"),
+    ("800", "500", "tty1"), ("810", "800", "tty1"), ("900", "810", "tty1"),
+    ("300", "1", "none"), ("310", "300", "tty5"), ("901", "310", "tty5"),
+]
+# A second tab of app 500 with a plain shell: login 700 -> shell 710
+_SECOND_TAB = [("700", "500", "tty2"), ("710", "700", "tty2")]
+# (pid, tty, pane)
+_CLIENT_IN_APP = ("900", "tty1", "%1")
+_CLIENT_ELSEWHERE = ("901", "tty5", "%2")
+_MACOS_TTYS = {"none": "??", "tty1": "ttys001", "tty2": "ttys002", "tty5": "ttys005"}
+_LINUX_TTYS = {"none": "?", "tty1": "pts/1", "tty2": "pts/2", "tty5": "pts/5"}
 
 
-def _tmux_tools(clients: bytes) -> FakeTools:
-    return FakeTools({
-        ("tmux", "list-clients"): clients,
-        ("ps",): _PS,
-        ("tmux", "capture-pane"): b"$ kubectl get pods\n",
-    })
+class FakeTmux(FakeTools):
+    """ps and tmux list-clients answering in whatever format they are asked for, from one process table."""
+
+    def __init__(self, clients, processes=_PROCESSES, ttys=_MACOS_TTYS) -> None:
+        super().__init__({("tmux", "capture-pane"): b"$ kubectl get pods\n"})
+        self.clients = clients
+        self.processes = processes
+        self.ttys = ttys
+
+    def run(self, args, **kwargs):
+        if args[:2] == ["tmux", "list-clients"]:
+            fields = {"client_pid": 0, "client_tty": 1, "pane_id": 2}
+            rows = [(pid, f"/dev/{self.ttys[tty]}", pane) for pid, tty, pane in self.clients]
+            self.responses[("tmux", "list-clients")] = "".join(
+                re.sub(r"#\{(\w+)\}", lambda m, row=row: row[fields[m.group(1)]], args[-1]) + "\n" for row in rows
+            ).encode()
+        elif args[:1] == ["ps"]:
+            columns = [name.rstrip("=") for flag, spec in itertools.pairwise(args) if flag == "-o" for name in spec.split(",")]
+            fields = {"pid": 0, "ppid": 1, "tty": 2}
+            rows = [(pid, ppid, self.ttys[tty]) for pid, ppid, tty in self.processes]
+            self.responses[("ps",)] = "".join(
+                " ".join(f"{row[fields[c]]:>5}" for c in columns) + "\n" for row in rows
+            ).encode()
+        return super().run(args, **kwargs)
 
 
-def test_tmux_reads_the_pane_of_the_client_inside_the_focused_terminal():
-    tools = _tmux_tools(b"901 %2\n900 %1\n")
+def _read_pane(tools: FakeTools) -> str:
     with patch("vox.window.shutil.which", return_value="/usr/bin/tmux"), patch("vox.window.subprocess.run", tools.run):
-        assert window._read_tmux_pane("500") == "$ kubectl get pods"
+        return window._read_tmux_pane("500")
+
+
+@pytest.mark.parametrize("ttys", [_MACOS_TTYS, _LINUX_TTYS], ids=["macos", "linux"])
+def test_tmux_reads_the_pane_of_the_client_inside_the_focused_terminal(ttys):
+    tools = FakeTmux([_CLIENT_ELSEWHERE, _CLIENT_IN_APP], ttys=ttys)
+    assert _read_pane(tools) == "$ kubectl get pods"
     assert ["tmux", "capture-pane", "-p", "-t", "%1"] in tools.calls
 
 
 def test_tmux_ignores_sessions_outside_the_focused_terminal():
     """A background tmux session must not stand in for a terminal that is not running tmux."""
-    tools = _tmux_tools(b"901 %2\n")
-    with patch("vox.window.shutil.which", return_value="/usr/bin/tmux"), patch("vox.window.subprocess.run", tools.run):
-        assert window._read_tmux_pane("500") == ""
+    tools = FakeTmux([_CLIENT_ELSEWHERE])
+    assert _read_pane(tools) == ""
     assert not tools.called("tmux", "capture-pane")
 
 
 def test_tmux_is_skipped_when_the_focused_client_is_ambiguous():
     """Two tmux clients in the same terminal app: no way to tell which window is focused."""
-    tools = _tmux_tools(b"900 %1\n902 %4\n")
-    with patch("vox.window.shutil.which", return_value="/usr/bin/tmux"), patch("vox.window.subprocess.run", tools.run):
-        assert window._read_tmux_pane("500") == ""
+    tools = FakeTmux([_CLIENT_IN_APP, ("902", "tty2", "%4")], processes=[*_PROCESSES, *_SECOND_TAB, ("902", "710", "tty2")])
+    assert _read_pane(tools) == ""
+    assert not tools.called("tmux", "capture-pane")
+
+
+@pytest.mark.parametrize("ttys", [_MACOS_TTYS, _LINUX_TTYS], ids=["macos", "linux"])
+def test_tmux_in_another_tab_of_the_terminal_app_is_not_read(ttys):
+    """Every tab shares the app's pid, so the one tmux client may be in a tab the user is not looking at."""
+    tools = FakeTmux([_CLIENT_IN_APP], processes=[*_PROCESSES, *_SECOND_TAB], ttys=ttys)
+    assert _read_pane(tools) == ""
+    assert not tools.called("tmux", "capture-pane")
+
+
+def test_macos_ocrs_the_focused_window_when_tmux_runs_in_another_tab():
+    tools = FakeTmux([_CLIENT_IN_APP], processes=[*_PROCESSES, *_SECOND_TAB])
+    with patch("sys.platform", "darwin"), \
+         patch("vox.window.shutil.which", return_value="/usr/bin/tmux"), \
+         patch("vox.window.subprocess.run", tools.run), \
+         patch("vox.window._read_vision_ocr", return_value="focused window text") as ocr:
+        assert window._capture_screen_text("77", "500", AppType.TERMINAL) == "focused window text"
+    ocr.assert_called_once_with("77")
     assert not tools.called("tmux", "capture-pane")
 
 
@@ -291,11 +346,14 @@ def test_macos_title_falls_back_to_app_name():
     run.assert_not_called()
 
 
-def _fake_vision(text: str):
+def _fake_vision(*lines: str):
     request = MagicMock()
-    observation = MagicMock()
-    observation.topCandidates_.return_value = [MagicMock(string=MagicMock(return_value=text))]
-    request.results.return_value = [observation]
+    observations = []
+    for text in lines:
+        observation = MagicMock()
+        observation.topCandidates_.return_value = [MagicMock(string=MagicMock(return_value=text))]
+        observations.append(observation)
+    request.results.return_value = observations
     handler = MagicMock()
     handler.performRequests_error_.return_value = (True, None)
     vision = MagicMock()
@@ -322,6 +380,19 @@ def test_macos_ocr_captures_only_the_focused_window():
     assert argv[:5] == ["screencapture", "-x", "-o", "-l", "77"]
     assert not Path(argv[-1]).exists()
     request.setUsesLanguageCorrection_.assert_called_once_with(False)
+
+
+def test_macos_ocr_keeps_one_line_per_recognized_line():
+    """The secret filter drops a password-like value up to the end of its line, not of the window."""
+    vision, _ = _fake_vision("DB_PASSWORD: correct horse battery", "KubeClient handleRequest")
+
+    def screencapture(args, **kwargs):
+        Path(args[-1]).write_bytes(b"PNG")
+        return subprocess.CompletedProcess(args, 0)
+
+    modules = {"objc": _fake_objc(), "Vision": vision, "Foundation": MagicMock()}
+    with patch.dict(sys.modules, modules), patch("vox.window.subprocess.run", screencapture):
+        assert window._read_vision_ocr("77") == "DB_PASSWORD: correct horse battery\nKubeClient handleRequest"
 
 
 def test_macos_ocr_never_falls_back_to_the_whole_screen():

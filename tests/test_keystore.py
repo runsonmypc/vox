@@ -111,6 +111,40 @@ def test_env_file_reads_quoted_values_and_the_last_assignment(no_keychain):
     assert keystore.get_stored_key() == KEY
 
 
+def _unreadable_env(kind: str) -> None:
+    path = keystore.FALLBACK_PATH
+    if kind == "latin-1":
+        path.write_bytes(f"# caf\xe9\nOPENAI_API_KEY={KEY}\n".encode("latin-1"))
+    elif kind == "no permission":
+        if os.geteuid() == 0:
+            pytest.skip("root reads any file")
+        path.write_text(f"OPENAI_API_KEY={KEY}\n")
+        path.chmod(0)
+    else:
+        path.mkdir()
+
+
+@pytest.mark.parametrize("kind", ["latin-1", "no permission", "directory"])
+def test_unreadable_env_file_is_a_keystore_error_not_a_crash(no_keychain, kind):
+    """Startup and the tray handle KeystoreError; anything else crash-loops the service."""
+    _unreadable_env(kind)
+    with pytest.raises(KeystoreError, match=r"^Couldn't read .*vox\.env: "):
+        keystore.get_api_key()
+
+
+@pytest.mark.parametrize("kind", ["latin-1", "directory"])
+def test_saving_over_an_unreadable_env_file_is_a_keystore_error_and_keeps_it(no_keychain, kind):
+    """The key window shows Couldn't Save for a KeystoreError; the file's other lines are not thrown away."""
+    _unreadable_env(kind)
+    before = keystore.FALLBACK_PATH.read_bytes() if kind == "latin-1" else None
+    with pytest.raises(KeystoreError, match="Couldn't read"):
+        keystore.set_api_key(OTHER)
+    with pytest.raises(KeystoreError, match="Couldn't read"):
+        keystore.delete_api_key()
+    if before is not None:
+        assert keystore.FALLBACK_PATH.read_bytes() == before
+
+
 def test_storage_names(memory_keyring):
     assert keystore.storage_name() == "the system keyring"
     keyring.set_keyring(fail.Keyring())
