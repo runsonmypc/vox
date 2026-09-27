@@ -113,6 +113,14 @@ def load_config(path: Path | None = None) -> Config:
     return config
 
 
+def fallback_config(path: Path | None, error: ConfigError) -> Config:
+    """Default settings for a config.toml that failed to load, remembering why: Vox runs on them but won't record."""
+    config = Config()
+    config._config_path = path or DEFAULT_CONFIG_PATH
+    config.config_error = str(error)
+    return config
+
+
 def _apply(config: Config, data: dict) -> None:
     _apply_section(config, data, "hotkey", {
         "key": ("hotkey", _text),
@@ -326,20 +334,15 @@ def update_transcription_mode(path: Path, mode: str) -> None:
     if mode not in MODES:
         raise ValueError(f"Invalid transcription mode: {mode}")
     doc = _read_document(path)
-    if "transcription" not in doc:
-        doc["transcription"] = tomlkit.table()
-    transcription = doc["transcription"]
-    old_mode = transcription.get("mode", doc.get("whisper", {}).get("mode", "batch"))
+    transcription = _edited_table(doc, "transcription")
+    old_mode = transcription.get("mode", _edited_table(doc, "whisper", create=False).get("mode", "batch"))
     if old_mode != mode and "model" in transcription:
         # The generic model was the one in effect for the old provider, so it replaces that provider's own setting
         old_model = transcription.pop("model")
         if old_mode == "streaming":
             transcription["streaming_model"] = old_model
         elif old_mode in ("batch", "whisper_cpp"):
-            section = "whisper" if old_mode == "batch" else "whisper_cpp"
-            if section not in doc:
-                doc[section] = tomlkit.table()
-            doc[section]["model"] = old_model
+            _edited_table(doc, "whisper" if old_mode == "batch" else "whisper_cpp")["model"] = old_model
     transcription["mode"] = mode
     _write_document(path, doc)
 
@@ -352,9 +355,7 @@ def update_max_recording_seconds(path: Path, seconds: int) -> None:
     if isinstance(seconds, bool) or not isinstance(seconds, int) or seconds <= 0:
         raise ValueError(f"Invalid recording limit: {seconds!r}")
     doc = _read_document(path)
-    if "audio" not in doc:
-        doc["audio"] = tomlkit.table()
-    doc["audio"]["max_recording_seconds"] = seconds
+    _edited_table(doc, "audio")["max_recording_seconds"] = seconds
     _write_document(path, doc)
 
 
@@ -397,6 +398,18 @@ def _read_document(path: Path) -> tomlkit.TOMLDocument:
         return tomlkit.parse(text)
     except Exception as e:
         raise ConfigError(f"Failed to parse config file {path}: {e}") from e
+
+
+def _edited_table(doc: tomlkit.TOMLDocument, name: str, *, create: bool = True) -> dict:
+    """The ``[name]`` table of a document being edited, added if missing (an empty dict if not ``create``).
+
+    Raises ConfigError when the file has something else under that name, as load_config() does.
+    """
+    if name not in doc:
+        if not create:
+            return {}
+        doc[name] = tomlkit.table()
+    return _table(f"[{name}]", doc[name])
 
 
 def _write_document(path: Path, doc: tomlkit.TOMLDocument) -> None:

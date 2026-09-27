@@ -10,9 +10,9 @@ import stat
 import sys
 from pathlib import Path
 
-# A startup problem only the user can fix (sysexits EX_CONFIG), so restarting can't help. The login services
-# restart Vox on it unless their files opt out: RestartPreventExitStatus=78 in vox.service, and on macOS,
-# where launchd has no such setting, a plist wrapper that turns 78 into a clean exit.
+# A startup problem only the user can fix, such as a missing system tool (sysexits EX_CONFIG), so restarting
+# can't help: vox.service has RestartPreventExitStatus=78. launchd has no such setting and retries every 10 s.
+# A broken config.toml is not one of these: Vox starts without recording and picks up the fixed file.
 EXIT_CANNOT_START = os.EX_CONFIG
 
 # launchd appends Vox's output to one log file for good; past this size, a new start begins it afresh
@@ -130,14 +130,15 @@ def main() -> None:
     if cleared is not None:
         log.info("Cleared the log file, which had grown to %.0f MiB", cleared / 1024 / 1024)
 
-    from .config import load_config
+    from .config import fallback_config, load_config
     from .errors import ConfigError, DependencyError
 
     try:
         config = load_config(args.config)
     except ConfigError as e:
-        log.error("%s", e)
-        sys.exit(EXIT_CANNOT_START)
+        # Exiting would only get Vox restarted into the same error; it waits for the fixed file instead
+        config = fallback_config(args.config, e)
+        log.error("%s. Vox won't record until the file is fixed, and loads it as soon as it is.", e)
 
     # Without a key Vox still starts: the menu asks for one, and a service exiting here would only be restarted
     from .keystore import KeystoreError, get_api_key, hide_env_override, migrate_plaintext
@@ -148,7 +149,8 @@ def main() -> None:
     except KeystoreError as e:
         config.api_key_error = str(e)
         log.warning("Couldn't read the OpenAI API key from the keychain: %s", e)
-    if config.uses_openai and not config.openai_api_key and config.api_key_error is None:
+    no_key = config.uses_openai and not config.openai_api_key and config.api_key_error is None
+    if no_key and config.config_error is None:
         log.warning("No OpenAI API key yet. Choose Set API Key… from the Vox menu.")
     if config.mode == "whisper_cpp":
         from .modes import mode_problem

@@ -192,19 +192,28 @@ def test_valid_whisper_cpp_setup_has_no_mode_error(monkeypatch):
     assert config.mode_error is None
 
 
-def test_invalid_config_exits_with_the_code_services_do_not_retry(monkeypatch, tmp_path, caplog):
+@pytest.mark.parametrize("text, problem", [
+    ('[attenuation]\nlevel = "0.5"\n', "[attenuation] level must be a number from 0 to 1"),
+    ("[audio\nsample_rate = 16000\n", "Failed to parse config file"),
+])
+def test_invalid_config_starts_on_defaults_without_recording(monkeypatch, tmp_path, caplog, text, problem):
+    """Exiting would get Vox restarted into the same error; it waits for the fixed file instead."""
     path = tmp_path / "config.toml"
-    path.write_text('[attenuation]\nlevel = "0.5"\n')
+    path.write_text(text)
     monkeypatch.setattr("sys.argv", ["vox", "--config", str(path)])
     with (
         patch.object(cli, "_acquire_instance_lock", return_value=object()),
+        patch("vox.injector.check_dependencies"),
+        patch("vox.injector.check_accessibility_permission", return_value=True),
         patch("vox.daemon.run") as run,
-        pytest.raises(SystemExit) as exit_info,
     ):
         cli.main()
-    assert exit_info.value.code == cli.EXIT_CANNOT_START
-    assert "[attenuation] level" in caplog.text
-    run.assert_not_called()
+    [config] = run.call_args.args
+    assert problem in config.config_error
+    assert config.config_path == path  # the file the reloader watches for the fix
+    assert (config.mode, config.attenuation_level, config.sample_rate) == ("batch", 0.5, 48000)
+    assert problem in caplog.text
+    assert "No OpenAI API key" not in caplog.text  # the file may choose local transcription
 
 
 def test_missing_system_dependency_exits_with_the_code_services_do_not_retry(monkeypatch):

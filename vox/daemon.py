@@ -13,6 +13,7 @@ import wave
 from collections.abc import Coroutine
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from .attenuation import get_volume, set_volume
@@ -93,7 +94,8 @@ def run(config: Config) -> None:
     from .ui.tray import create_tray
 
     tray = create_tray(config)
-    if tray is None and config.uses_openai and not config.openai_api_key:
+    # With a config error the mode in the file is unknown, and it may not need a key
+    if tray is None and config.uses_openai and not config.openai_api_key and config.config_error is None:
         # Nowhere to ask for a key; headless Vox is started by hand, not by a service that would retry
         reason = f" ({config.api_key_error})" if config.api_key_error else ""
         log.error(
@@ -228,9 +230,9 @@ class _Daemon:
         log.info("Vox ready (%s mode). Press %s to toggle recording.", config.mode, config.hotkey)
         if tray is not None:
             tray.attach(self.loop, self.queue, self.history, asyncio.current_task())
-            if self._key_missing() and config.api_key_error is None:
+            if self._key_missing() and config.api_key_error is None and config.config_error is None:
                 tray.open_key_window()
-        reload_task = asyncio.create_task(_config_reloader(config, self.sounds, self.recorder))
+        reload_task = asyncio.create_task(_config_reloader(config, self.recorder, tray))
         self._schedule_device_refresh(0)
 
         try:
@@ -510,6 +512,11 @@ class _Daemon:
 
     async def _ready_to_record(self) -> bool:
         config = self.config
+        if config.config_error is not None:
+            # Running on defaults: the file may choose local-only transcription, so no audio may go to OpenAI
+            self.sounds.play("error")
+            log.warning("Not recording until the settings file loads: %s", config.config_error)
+            return False
         if self._key_missing():
             await self._reload_api_key()  # it may have been saved, or the keyring unlocked, since
         if self._key_missing():
@@ -573,9 +580,19 @@ class _Daemon:
 
     # -- Menu events -----------------------------------------------------------
 
+    def _settings_file_broken(self, change: str) -> bool:
+        """Refuse a menu change while config.toml doesn't load: Vox can't know what the file sets."""
+        if self.config.config_error is None:
+            return False
+        log.warning("Can't change the %s until the settings file loads: %s", change, self.config.config_error)
+        self.sounds.play("error")
+        return True
+
     async def _switch_mode(self, mode: str) -> None:
         config = self.config
-        if self.state is not State.IDLE or (mode == config.mode and config.mode_error is None):
+        if self.state is not State.IDLE or self._settings_file_broken("transcription mode"):
+            return
+        if mode == config.mode and config.mode_error is None:
             return
         try:
             # Building the transcriber tries the whisper.cpp setup, so mode_problem needn't
@@ -598,6 +615,8 @@ class _Daemon:
     def _set_limit(self, value: str) -> None:
         """Persist a recording limit picked from the menu; it applies from the next recording."""
         config = self.config
+        if self._settings_file_broken("recording limit"):
+            return
         try:
             seconds = int(value)
             if seconds <= 0:
@@ -872,33 +891,37 @@ def _wav_duration(wav_data: bytes) -> float | None:
         return None
 
 
-async def _config_reloader(config: Config, sounds: SoundPlayer, recorder: Recorder) -> None:
-    """Poll config file mtime and reload hot-reloadable settings every couple of seconds.
+def _file_stamp(path: Path) -> tuple[int, int, int] | None:
+    """Changes whenever the file does, also when an older copy is moved back over it; None if it is missing."""
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    return st.st_mtime_ns, st.st_size, st.st_ino
 
-    Hotkey settings are read once at startup and need a restart.
+
+async def _config_reloader(config: Config, recorder: Recorder, tray: TrayManager | None = None) -> None:
+    """Poll config.toml every couple of seconds and apply the settings that can change while Vox runs.
+
+    Hotkey settings are read once at startup and need a restart. While config.config_error is set,
+    the first version of the file that loads is applied and clears it, so Vox records again.
     """
-    if config.config_path is None:
+    path = config.config_path
+    if path is None:
         return
 
-    last_mtime: float = 0
-    try:
-        last_mtime = config.config_path.stat().st_mtime
-    except OSError:
-        pass
+    last_stamp = _file_stamp(path)
     file_audio = (config.audio_device, config.sample_rate, config.channels)
 
     while True:
         await asyncio.sleep(_CONFIG_POLL_SECONDS)
         try:
-            try:
-                current_mtime = config.config_path.stat().st_mtime
-            except OSError:
-                continue
-            if current_mtime <= last_mtime:
+            stamp = _file_stamp(path)
+            if stamp is None or stamp == last_stamp:
                 continue
 
-            last_mtime = current_mtime
-            new_config = load_config(config.config_path)
+            last_stamp = stamp
+            new_config = load_config(path)
 
             config.snippets = new_config.snippets
             config.dictionary = new_config.dictionary
@@ -924,9 +947,16 @@ async def _config_reloader(config: Config, sounds: SoundPlayer, recorder: Record
                 config.audio_device, config.sample_rate, config.channels = new_file_audio
                 recorder.reconfigure(config)  # waits for a recording in progress to end
 
-            sounds._enabled = new_config.sounds_enabled
-
-            log.info("Config reloaded from %s", config.config_path)
+            if config.config_error is not None:
+                config.config_error = None
+                log.info("%s loads again: Vox is using its settings and records again", path)
+                hotkey = (new_config.hotkey, new_config.hotkey_fallback, new_config.double_tap_timeout_ms)
+                if hotkey != (config.hotkey, config.hotkey_fallback, config.double_tap_timeout_ms):
+                    log.warning("The hotkey settings in %s take effect when Vox restarts", path)
+            else:
+                log.info("Config reloaded from %s", path)
+            if tray is not None:
+                tray.mode_changed()  # the menu shows the mode and the limit, and the status line the problems
         except ConfigError as e:
             log.warning("Config reload failed: %s", e)
         except Exception:

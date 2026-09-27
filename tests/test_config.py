@@ -6,7 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from vox.config import Config, load_config
+import vox.config
+from vox.config import Config, fallback_config, load_config
 from vox.errors import ConfigError
 
 
@@ -242,6 +243,16 @@ def test_context_screen_defaults_on_and_loads_from_the_context_section(tmp_path)
     assert load(tmp_path, "").context_screen is True
     assert load(tmp_path, "[context]\nscreen = false\n").context_screen is False
     assert load(tmp_path, "[context]\nscreen = true\n").context_screen is True
+
+
+def test_a_file_that_does_not_load_leaves_defaults_that_remember_why(tmp_path):
+    path = tmp_path / "config.toml"
+    config = fallback_config(path, ConfigError(f"{path}: [attenuation] level must be a number from 0 to 1"))
+    assert config.config_path == path
+    assert config.config_error == f"{path}: [attenuation] level must be a number from 0 to 1"
+    assert (config.mode, config.attenuation_level, config.max_recording_seconds) == ("batch", 0.5, 900)
+    assert fallback_config(None, ConfigError("x")).config_path == vox.config.DEFAULT_CONFIG_PATH
+    assert load_config(path).config_error is None
 
 
 def test_the_old_styles_table_is_ignored(tmp_path):
