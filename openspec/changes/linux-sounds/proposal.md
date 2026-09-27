@@ -11,7 +11,7 @@ On macOS, Vox plays the system alert sounds (Tink, Pop, Basso, Funk, Blow, Bottl
   - busy (like Funk): three plucked notes, 159, 319 and 401 Hz, each damped, then a faint echo, 1.0 s.
   - cancel (like Blow): a soft 391 Hz hum that swells in with a 48 Hz flutter, joined by 494 and 587 Hz, 1.37 s.
   - pause (like Bottle): three knocks falling in pitch, 494, 246 and 185 Hz, 0.86 s.
-  - resume (like Glass): a 391 Hz body under two strikes of bell partials from 2.3 to 14.7 kHz, 1.04 s.
+  - resume (like Glass): a 391 Hz body under bell partials from 2.3 to 14.7 kHz, struck again every 126 ms and softer each time, 1.04 s.
 - Levels follow the macOS sounds, so the sounds keep their loudness relative to each other, and every sound peaks at least 6 dB below full scale.
 - macOS is unchanged. Custom WAV files in `~/.config/vox/sounds` replace the built-in sounds as before, and the device rescan after a dictation still waits for a sound that is still playing.
 
@@ -29,7 +29,7 @@ None.
 ## Impact
 
 - Code: `vox/sounds.py` only. The two-tone table and its generator are replaced by `Partial`, the `_SYNTH_SOUNDS` table and `_synthesize`. numpy only, no new dependency.
-- Startup: making the seven sounds takes about 10 ms (see tasks.md).
+- Startup: making the seven sounds takes about 11 ms (see tasks.md).
 - The Linux sounds are longer than the beeps (0.055 to 1.37 s instead of 0.14 to 0.4 s), so after a cancel the device rescan waits about 1.5 s instead of 1 s.
 - Tests: `tests/test_sounds.py`.
 - Docs: the README's Sounds section and the CHANGELOG's 1.0.0 entry.
