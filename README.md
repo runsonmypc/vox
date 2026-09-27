@@ -34,7 +34,7 @@ Vox is free software under the GNU GPL, version 3.
 - **macOS** on Apple Silicon or Intel, with [uv](https://docs.astral.sh/uv/) (`brew install uv`).
   The installer uses uv to set up a private Python 3.12 for Vox.
 - **Linux** with an X11 session and Python 3.12 or 3.13 as `/usr/bin/python3`, such as Ubuntu
-  24.04 or newer, Debian 13 and Linux Mint 22. On Debian-based systems the installer
+  24.04 and distributions based on it, or Debian 13. On Debian-based systems the installer
   adds the system packages Vox needs; on other distributions you install them yourself (the
   installer lists them). Wayland sessions work only partly, see [Wayland](#wayland).
 - An **OpenAI API key** for the OpenAI modes. Local whisper.cpp transcription needs no key.
@@ -85,8 +85,9 @@ sudo apt install ./vox_<version>_amd64.deb
 
 Vox then starts at each user's next login. To start it right away, open Vox from your applications
 or run `systemctl --user start vox`. The package installs into `/opt/vox` and pulls in its system
-dependencies; `tesseract-ocr` and `maim` are optional and let screen hints read windows that do not
-expose their text to accessibility tools. Remove it with `sudo apt remove vox`.
+dependencies. It suggests three optional packages for screen hints: `gir1.2-atspi-2.0` reads window
+text through the accessibility interface, and `tesseract-ocr` with `maim` reads windows that do not
+expose their text that way. Remove it with `sudo apt remove vox`.
 
 To stop Vox starting at login for everyone, run `sudo systemctl --global disable vox.service` and
 add `Hidden=true` to `/etc/xdg/autostart/vox.desktop`; updates keep both. One user can opt out
@@ -97,11 +98,12 @@ user who ran it.
 
 ### First start
 
-Vox asks for your OpenAI API key the first time you dictate in an OpenAI mode. You can also choose
-**Set API Key…** from its menu at any time. The key goes into the macOS Keychain or your Linux login
-keyring (GNOME Keyring, KWallet), never into a file Vox writes in plain text, unless your Linux
-system has no keyring at all, in which case it goes into `~/.config/vox/.env`, readable only by you.
-An `OPENAI_API_KEY` environment variable overrides the stored key.
+In an OpenAI mode, Vox asks for your OpenAI API key when it starts without one, and again if you
+dictate before saving one. You can also choose **Set API Key…** from its menu at any time. The key
+goes into the macOS Keychain or your Linux login keyring (GNOME Keyring, KWallet), never into a
+file Vox writes in plain text, unless your Linux system has no keyring at all, in which case it
+goes into `~/.config/vox/.env`, readable only by you. An `OPENAI_API_KEY` environment variable
+overrides the stored key.
 
 ## Permissions
 
@@ -117,8 +119,9 @@ macOS asks you to allow these the first time Vox needs them. The prompts and the
 | Input Monitoring | To notice the hotkey from any app. |
 | Screen Recording | Only for screen hints (`[context] screen`, on by default): Vox reads text in the focused window. Turn screen hints off and macOS never asks. |
 
-Vox shows **Accessibility access needed** in its menu when it cannot paste, and **Microphone is
-silent: check its permission** when a recording comes back empty.
+If Accessibility is not allowed when Vox starts, its menu shows **Accessibility access needed**. If
+a recording comes back as pure digital silence, which usually means Vox may not use the microphone,
+the menu shows **Microphone is silent: check its permission** until a recording has sound again.
 
 These grants belong to that exact Python binary. If an update moves Vox to a different Python
 build, the installer warns you, and macOS asks again; remove the old python3.12 entries from the
@@ -143,15 +146,17 @@ telemetry or update checks.
 | Mode | Sent to OpenAI |
 | --- | --- |
 | OpenAI (batch), the default | The recording (as 16 kHz mono audio), the model name, your `language` and `prompt` settings, and a list of spelling hints. |
-| OpenAI (streaming) | The recording as you speak, the model name, your `language` and `prompt` settings, and the same list of spelling hints. |
+| OpenAI (streaming) | The recording as you speak (as 24 kHz mono audio), the model name, your `language` and `prompt` settings, and spelling hints from your dictionary and the window title. If the live session fails, Vox sends the recording as in batch mode. |
 | Local (whisper.cpp) | Nothing. Audio, hints and text stay on your computer. |
 
 The spelling hints are your dictionary words plus, when screen hints are on, up to 10 words from
 the focused window's title and up to 25 words from the text visible in it: at most 40 words in
-total. Words that look like passwords, tokens or API keys (for example `sk-…`, `ghp_…`, `AKIA…`,
-JSON web tokens, long random strings, or anything after `KEY=`, `TOKEN=`, `SECRET=` or
-`PASSWORD=`) are removed before anything is sent. Your API key goes to OpenAI with each request, as
-any OpenAI client's does. OpenAI's API terms and data usage policies apply to what it receives.
+total. Streaming mode sends its hints as it connects, before the window's text could be read, so
+it uses only the dictionary and the title. Words that look like passwords, tokens or API keys (for
+example `sk-…`, `ghp_…`, `AKIA…`, JSON web tokens, long random strings, or the value after a name
+such as `API_KEY=` or `password:`) are removed before anything is sent. Your API key goes to OpenAI
+with each request, as any OpenAI client's does. OpenAI's API terms and data usage policies apply to
+what it receives.
 
 ### Screen hints (`[context] screen`)
 
@@ -160,12 +165,13 @@ default), Vox reads text from the focused window only, never the whole screen or
 
 - **macOS**: the pane text of tmux when the focused app is a terminal running it; otherwise a
   screenshot of the focused window, read with Apple's on-device text recognition.
-- **Linux**: the window's text through the accessibility interface (AT-SPI); if that has nothing,
-  a screenshot of the window read with `tesseract`, when `maim` and `tesseract` are installed; for
-  terminals, the tmux pane.
+- **Linux**: the window's text through the accessibility interface (AT-SPI). If that finds little,
+  a screenshot of the window read with `tesseract` when `maim` and `tesseract` are installed, or,
+  in a terminal running tmux, the pane text.
 
-Screenshots are temporary files, deleted as soon as they are read, and text recognition runs on
-your computer. Only the filtered words listed above are sent.
+Screenshots are never kept: on macOS the temporary file is deleted as soon as it is read, and on
+Linux the image goes straight from `maim` to `tesseract`. Text recognition runs on your computer,
+and only the filtered words listed above are sent.
 
 With `screen = false` under `[context]`, Vox sends no window-title words and no screen text to any
 service and never captures the screen, so macOS never asks for Screen Recording. It still looks up
@@ -173,19 +179,23 @@ which app has focus, locally, to pick the right paste shortcut.
 
 ### What stays on your computer
 
-- **History**: every dictation's text, with its time, length, mode and the kind of app it went to
-  (not the window title), in `~/.local/share/vox/history.db`, readable only by you. Recordings are
-  never saved. Open **Search History…** to find past dictations, **Delete** one, or **Clear
-  History** to erase them all; deleted text is overwritten, not just unlinked.
-- **Recent dictations**: the last few appear in the Vox menu, so anyone who sees your screen, for
+- **History**: every dictation's text, with its time, length, the kind of app it went to (not the
+  window title) and the transcription that produced it (batch, streaming or whisper.cpp; a streaming
+  recording that fell back to batch counts as batch), in `~/.local/share/vox/history.db`, readable
+  only by you. Recordings are never saved. Open **Search History…** to find past dictations,
+  **Delete** one, or **Clear History** to erase them all; deleted text is overwritten, not just
+  unlinked.
+- **Recent dictations**: the last three appear in the Vox menu, so anyone who sees your screen, for
   example in a screen share, can read them.
-- **Logs**: `~/Library/Logs/Vox/vox.log` on macOS (readable only by you), the user journal on Linux
-  (`journalctl --user -u vox`). They record events, lengths and errors, not what you said. Only
-  `vox -v` (verbose) logs transcripts and snippet expansions.
+- **Logs**: `~/Library/Logs/Vox/vox.log` on macOS (readable only by you, and emptied when Vox starts
+  if it has grown past 10 MiB), the user journal on Linux (`journalctl --user -u vox`). They record
+  events, lengths and errors, not what you said. Only `vox -v` (verbose) logs transcripts and
+  snippet expansions.
 - **Settings**: `~/.config/vox/config.toml`, which holds your dictionary and snippets.
-- **Clipboard**: Vox pastes through the clipboard and then restores what was there before, including
-  images, files and rich text. On macOS it marks its temporary copy so clipboard managers and
-  Universal Clipboard ignore it.
+- **Clipboard**: Vox pastes through the clipboard and then puts back what was there before. On
+  macOS that includes images, files and rich text, and Vox marks its temporary copy so clipboard
+  managers and Universal Clipboard ignore it. On Linux one form comes back: copied files, otherwise
+  plain text, otherwise an image or HTML, so rich text copied from a browser returns as plain text.
 
 ## Using Vox
 
@@ -201,9 +211,11 @@ transcribed as if you had tapped the key.
 
 The Vox menu, from the menu bar icon on macOS or the tray icon on Linux:
 
-- **Status**: idle, recording, processing, paused, or a problem to fix (such as a missing API key).
+- **Status**: idle, recording, processing, paused, or while idle a problem to fix (see
+  [Menu messages](#menu-messages)).
 - **Pause Dictation**: ignore the hotkey until you resume.
-- **Input Device**: the microphone to record from, or the system default.
+- **Input Device**: the microphone to record from, or the system default. A microphone connected
+  while Vox runs appears once Vox is idle again (on macOS also within 30 seconds while idle).
 - **Transcription**: OpenAI (batch), OpenAI (streaming) or Local (whisper.cpp). A mode that is not
   set up (no API key, or no whisper.cpp model) is greyed out.
 - **Recording Limit**: 5, 10, 15, 30 or 60 minutes.
@@ -212,7 +224,8 @@ The Vox menu, from the menu bar icon on macOS or the tray icon on Linux:
 - **Quit Vox**. To start it again, open Vox from Applications or Spotlight (macOS) or your
   applications list (Linux).
 
-Your choices in the menu are saved in `~/.config/vox/config.toml`.
+The transcription mode and recording limit you choose are saved in `~/.config/vox/config.toml`. The
+input device you choose lasts until Vox quits; set `[audio] device` to keep one.
 
 ## Configuration
 
@@ -249,6 +262,21 @@ wait for a recording in progress to end.
 Paths may be absolute, start with `~`, or be relative to the config file. `vox --config PATH` uses
 another file.
 
+If the file has an error when Vox starts (a typo, or a value of the wrong kind such as
+`level = "0.5"`), Vox starts anyway but does not record: the menu shows **Settings file has an
+error**, the log names the file and the setting, and the hotkey plays the error sound. Vox does
+not fall back to defaults for dictation, since they might send audio to OpenAI when you chose local
+transcription. Save a fixed file and Vox picks it up within a few seconds. An error in an edit
+while Vox is running is logged and ignored, and the previous settings stay in effect.
+
+### Sounds
+
+Vox plays a sound when dictation starts, stops, is cancelled or fails, when you press the hotkey
+while it is busy or paused, and when you pause or resume. To use your own, put WAV files in
+`~/.config/vox/sounds`, named after the sound they replace: `start.wav`, `stop.wav`, `cancel.wav`,
+`error.wav`, `busy.wav`, `pause.wav` and `resume.wav`. Vox loads them when it starts; any it does
+not find keep the built-in sound. `[sounds] enabled = false` turns all of them off.
+
 ## Local transcription with whisper.cpp
 
 1. Build whisper.cpp and download a model, in a checkout of
@@ -276,7 +304,8 @@ another file.
 3. Choose **Local (whisper.cpp)** from the Transcription menu.
 
 If the whisper.cpp setup later breaks (a moved model, say), Vox still starts, shows the problem in
-its menu, and lets you switch back to an OpenAI mode.
+its menu, and lets you switch back to an OpenAI mode. Each hotkey press checks the setup again, so
+once you fix it, dictation works without restarting Vox.
 
 ## Wayland
 
@@ -288,11 +317,31 @@ on Xorg**. macOS is not affected.
 
 ## Troubleshooting
 
+### Menu messages
+
+While Vox is idle, the first line of its menu names the most urgent problem that stops or affects
+dictation:
+
+| Message | What to do |
+| --- | --- |
+| API key needed | Choose **Set API Key…**, or switch to Local (whisper.cpp). |
+| Can’t read the keyring | Unlock your login keychain or keyring; Vox tries again on the next hotkey press. |
+| Settings file has an error | Fix `~/.config/vox/config.toml`; the log names the setting. Vox does not record until then. |
+| A whisper.cpp problem, such as a missing model | Fix `[whisper_cpp]`, or choose an OpenAI mode. |
+| Accessibility access needed | macOS: allow python3.12 under Accessibility, then quit and reopen Vox. |
+| Microphone is silent: check its permission | Allow the microphone (macOS: Microphone for python3.12) and check the Input Device menu. |
+| Wayland: hotkey and paste only work in X11 apps | See [Wayland](#wayland). |
+| Last dictation only partly transcribed: see History | A long recording failed partway. The parts that were transcribed are in **Search History…**. |
+
+### Common problems
+
 - **The hotkey does nothing (macOS).** Check that python3.12 is allowed under Accessibility and
   Input Monitoring in System Settings > Privacy & Security, then quit and reopen Vox. After an
   update that changed Python, remove the old entries and allow the new ones.
 - **Recordings come back empty.** Allow the microphone (macOS: Microphone permission for
   python3.12), check the Input Device menu, and try `vox --list-devices`.
+- **A paste did not arrive.** Vox plays the error sound and still saves the text in history: open
+  **Search History…** to copy it.
 - **No tray icon on GNOME.** Enable "AppIndicator and KStatusNotifierItem Support" in the Extensions
   app, or run the installer again. Vox keeps working without the icon.
 - **Vox does not start at login (Linux).** The installer adds both a systemd user service and an
@@ -300,7 +349,7 @@ on Xorg**. macOS is not affected.
   file. If Vox starts but cannot reach the display, run
   `systemctl --user import-environment DISPLAY XAUTHORITY` in your session startup first.
 - **Local (whisper.cpp) is greyed out.** Set `[whisper_cpp] model`, and `binary` as a full path.
-  The menu's status line shows what is missing.
+  Once whisper.cpp is the selected mode, the menu's first line shows what is missing.
 - **"Vox needs Python 3.12 or 3.13".** Some of Vox's dependencies do not yet publish packages for
   newer Pythons, and building them would need a compiler.
 - **Something else.** Read the log (`~/Library/Logs/Vox/vox.log` on macOS,
@@ -343,8 +392,9 @@ Dependencies are locked in `uv.lock`. After changing them, run `uv lock` and `sc
 which regenerates `requirements.lock`, the hash-pinned list the installer and the `.deb` install
 from. `scripts/lock.sh --check`, which CI runs, fails when the two disagree or when a locked package
 has no wheel for Linux (x86_64, arm64) or macOS with Python 3.12 or 3.13, since installing must never
-need a compiler. CI uses the uv version pinned in `.github/workflows/ci.yml`; another version may
-write a different lock.
+need a compiler. Lock with the uv version CI pins (`UV_VERSION` in `.github/workflows/ci.yml`);
+another version may write a different lock. [RELEASING.md](RELEASING.md#relock) shows how to run
+that version without installing it.
 
 CI also runs the installer and the package in clean Ubuntu 24.04 containers, which you can do with
 Docker from the checkout:
@@ -356,9 +406,8 @@ packaging/deb/build-deb.sh 1.0.0 amd64
 docker run --rm -v "$PWD:/src:ro" -w /src ubuntu:24.04 packaging/deb/smoke-test.sh dist/vox_1.0.0_amd64.deb
 ```
 
-To release, set the version in `pyproject.toml`, add a section for it to `CHANGELOG.md`, and push a
-`vX.Y.Z` tag. The release workflow runs the tests, builds the tarball and the `.deb` packages, and
-publishes them with `install.sh` and `SHA256SUMS`.
+[RELEASING.md](RELEASING.md) describes how to make a release and how to try the release workflow
+without publishing anything.
 
 Report security problems as described in [SECURITY.md](SECURITY.md).
 

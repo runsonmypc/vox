@@ -6,8 +6,9 @@
 
   KeepAlive/SuccessfulExit=false restarts Vox after a crash (launchd waits 10 s between
   starts) but not after Quit or "already running", which exit 0. launchd has no equivalent
-  of systemd's RestartPreventExitStatus, so a configuration error that exits non-zero is
-  retried every 10 s until the configuration is fixed or Vox is uninstalled.
+  of systemd's RestartPreventExitStatus, so a startup failure only the user can fix (exit 78,
+  such as a missing system program) is retried every 10 s until it is fixed or Vox is
+  uninstalled. An error in config.toml does not exit: Vox runs and shows it in the menu.
 -->
 <plist version="1.0">
 <dict>
