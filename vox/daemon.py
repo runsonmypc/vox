@@ -6,6 +6,7 @@ import asyncio
 import io
 import logging
 import os
+import signal
 import sys
 import threading
 import time
@@ -32,7 +33,7 @@ from .hotkey import HotkeyListener
 from .injector import check_accessibility_permission, paste
 from .keystore import KeystoreError, get_api_key
 from .modes import mode_problem
-from .sounds import SoundPlayer
+from .sounds import SoundPlayer, sound_playing_until
 from .streaming import StreamingTranscriber
 from .transcribe import PartialTranscriptionError, Transcriber
 from .whisper_cpp import WhisperCppTranscriber
@@ -52,7 +53,8 @@ PARTIAL_NOTICE = "Last dictation only partly transcribed: see History"
 _POST_ROLL_SECONDS = 0.12
 # How long a batch transcription waits for the screen capture started with the recording
 _SCREEN_WAIT_SECONDS = 1.5
-# The device re-scan restarts PortAudio, which on Linux also plays Vox's sounds: let them finish first
+# The device re-scan restarts PortAudio, which on Linux also plays Vox's sounds: let them finish first.
+# It waits this long after returning to idle, or longer while a sound is still playing (a custom one).
 _DEVICE_REFRESH_DELAY = 1.0
 # macOS also re-scans while idle, since the restart costs about 1 ms there. On Linux it costs about 45 ms,
 # and PipeWire's or PulseAudio's "default" device already follows hotplugs, so the re-scan after a recording does.
@@ -128,12 +130,43 @@ def run(config: Config) -> None:
             tray.stop()
 
     thread = threading.Thread(target=daemon, name="vox-daemon", daemon=True)
+    _quit_tray_on_sigterm(tray)
     thread.start()
-    tray.run()
+    try:
+        tray.run()
+    finally:
+        # The GUI loop that handled SIGTERM has ended: from here on it ends Vox at once
+        signal.signal(signal.SIGTERM, signal.SIG_DFL)
     tray.request_quit()  # no-op if the daemon already exited
     thread.join(timeout=5)
     if errors:
         raise errors[0]
+
+
+def _quit_tray_on_sigterm(tray: TrayManager) -> None:
+    """Make SIGTERM (a service stop, a logout, an upgrade) quit the way Quit does, so a lowered volume is restored.
+
+    The tray's GUI loop owns the main thread, so the handler runs in it: through a GLib signal source
+    on Linux, and a Mach port on macOS (as pystray does for SIGINT). A second SIGTERM ends Vox at once.
+    """
+
+    def on_sigterm(*_: object) -> bool:
+        signal.signal(signal.SIGTERM, signal.SIG_DFL)
+        log.info("Quitting on SIGTERM")
+        tray.request_quit()
+        return False  # GLib: remove the source
+
+    try:
+        if sys.platform == "darwin":
+            from PyObjCTools import MachSignals
+
+            MachSignals.signal(signal.SIGTERM, on_sigterm)
+        else:
+            from gi.repository import GLib
+
+            GLib.unix_signal_add(GLib.PRIORITY_DEFAULT, signal.SIGTERM, on_sigterm)
+    except Exception:
+        log.warning("Couldn't handle SIGTERM: stopping Vox that way won't restore a lowered volume", exc_info=True)
 
 
 def _platform_notice() -> str | None:
@@ -175,7 +208,24 @@ class _Session:
 
 
 async def _main(config: Config, tray: TrayManager | None = None) -> None:
-    await _Daemon(config, tray).run()
+    daemon = _Daemon(config, tray)
+    if tray is not None:  # run() has the tray's GUI loop handle SIGTERM
+        await daemon.run()
+        return
+
+    # Headless, asyncio.run owns the main thread: SIGTERM quits the way Ctrl-C does, so a lowered volume is restored
+    loop, task = asyncio.get_running_loop(), asyncio.current_task()
+
+    def on_sigterm() -> None:
+        loop.remove_signal_handler(signal.SIGTERM)  # a second SIGTERM ends Vox at once
+        log.info("Quitting on SIGTERM")
+        task.cancel()
+
+    loop.add_signal_handler(signal.SIGTERM, on_sigterm)
+    try:
+        await daemon.run()
+    finally:
+        loop.remove_signal_handler(signal.SIGTERM)
 
 
 class _Daemon:
@@ -310,7 +360,7 @@ class _Daemon:
         if self.tray is not None:
             self.tray.set_state(state.value)
         if state is State.IDLE:
-            self._schedule_device_refresh(_DEVICE_REFRESH_DELAY)
+            self._schedule_device_refresh(max(_DEVICE_REFRESH_DELAY, sound_playing_until() - time.monotonic() + 0.1))
 
     # -- Recording ------------------------------------------------------------
 
@@ -374,7 +424,7 @@ class _Daemon:
             self._abandon_recording()
             return
 
-        if is_digital_silence(wav_data):
+        if await asyncio.to_thread(is_digital_silence, wav_data):  # reads every sample: off the loop
             log.warning(
                 "The microphone delivered only silence (every sample zero), which usually means Vox may not use it. "
                 "On macOS, allow it in System Settings > Privacy & Security > Microphone."
@@ -464,11 +514,11 @@ class _Daemon:
             await self._restore_volume()
             self.recorder.discard()
             self._end_session()
+            self.sounds.play("error")  # before set_state, so the IDLE-return rescan waits for it
             # A transcription already under way finishes on its own and reports process_done
             if self.process_task is None or self.process_task.done():
                 self._end_processing()
                 self.set_state(State.IDLE)
-            self.sounds.play("error")
         except Exception:
             log.exception("Could not recover from the error")
 
@@ -533,26 +583,27 @@ class _Daemon:
     def _ensure_transcriber(self) -> bool:
         """Have a transcriber for the current mode, which a config edit may have changed.
 
-        While the mode can't run (config.mode_error), each hotkey press tries
-        again, so fixing the setup needs no restart.
+        A whisper.cpp setup is checked on every press (a PATH lookup and a stat), since its binary or
+        model can go away while Vox runs. While the mode can't run (config.mode_error), each hotkey
+        press tries again, so fixing the setup needs no restart.
         """
         config = self.config
         local = config.mode == "whisper_cpp"
-        if config.mode_error is None and self.batch_transcriber is not None and self.transcriber_local == local:
+        if not local and config.mode_error is None and self.batch_transcriber is not None and not self.transcriber_local:
             return True
-        had_error = config.mode_error is not None
+        old_error = config.mode_error
         try:
             transcriber = self._build_transcriber(config.mode)
         except ConfigError as e:
             config.mode_error = str(e)
             log.warning("Not recording: %s", e)
             self.sounds.play("error")
-            if self.tray is not None and not had_error:
+            if self.tray is not None and config.mode_error != old_error:
                 self.tray.mode_changed()
             return False
         config.mode_error = None
         self._use_transcriber(transcriber, config.mode)
-        if self.tray is not None and had_error:
+        if self.tray is not None and old_error is not None:
             self.tray.mode_changed()
         return True
 
@@ -726,7 +777,7 @@ async def _process(
     """Transcribe a finished recording (finish the live stream, else batch), paste it, and keep it in history.
 
     ``mode`` is the mode the recording started in; a config reload may change config.mode meanwhile.
-    Returns how the transcription went, or None when it gave no text.
+    Returns how the transcription went, or None when it failed or gave no text.
     """
     use_streaming = streaming_transcriber is not None  # only a streaming recording has one
     provider = mode  # what history records: a live session that failed hands the recording to batch
@@ -792,12 +843,17 @@ async def _process(
         raise
     except PartialTranscriptionError as e:
         # The parts that did transcribe are billed: keep them where the user can copy them
-        log.error("Transcription failed partway (%s); the parts transcribed so far are saved in history", e)
         sounds.play("error")
         if history is not None and await _record_history(history, e.text, context, wav_data, provider):
+            log.error("Transcription failed partway (%s); the parts transcribed so far are saved in history", e)
             if tray is not None:
                 tray.history_changed()
             return Outcome.PARTIAL  # the tray points to History until a dictation succeeds
+        log.error(
+            "Transcription failed partway (%s) and history is unavailable, so the parts transcribed so far "
+            "are pasted", e,
+        )
+        await _paste(e.text, context, config)
     except Exception as e:
         log.error("Processing error: %s", e, exc_info=not isinstance(e, VoxError))
         sounds.play("error")
@@ -941,6 +997,12 @@ async def _config_reloader(config: Config, recorder: Recorder, tray: TrayManager
             config.whisper_cpp_model = new_config.whisper_cpp_model
             config.whisper_language = new_config.whisper_language
             config.whisper_prompt = new_config.whisper_prompt
+            # The status line names a problem with the mode the file now selects, not one it moved away
+            # from; without a key an OpenAI mode is reported apart from this
+            mode_error = mode_problem(config, "whisper_cpp") if config.mode == "whisper_cpp" else None
+            if mode_error is not None and mode_error != config.mode_error:
+                log.warning("Local transcription can't run: %s", mode_error)
+            config.mode_error = mode_error
 
             # Apply audio settings only when the file changed them, so a device picked
             # from the menu bar survives unrelated edits such as vocabulary changes.

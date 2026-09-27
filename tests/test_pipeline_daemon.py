@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import threading
+import time
 import tomllib
 import wave
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -16,6 +17,7 @@ import pytest
 import websockets
 
 from vox import daemon as daemon_module
+from vox import sounds as sounds_module
 from vox.config import Config, fallback_config, load_config
 from vox.daemon import (
     ACCESSIBILITY_NOTICE,
@@ -378,6 +380,23 @@ async def test_a_mode_that_cannot_run_blocks_recording_and_is_retried_on_each_to
 
 
 @pytest.mark.anyio
+async def test_a_local_setup_that_breaks_while_vox_runs_is_caught_before_recording():
+    local = MagicMock()
+    cpp = {"side_effect": [local, ConfigError("whisper.cpp model not found: /models/ggml.bin")]}
+    config = Config(mode="whisper_cpp")
+    tray = MagicMock()
+
+    async with running(config, tray, cpp=cpp) as h:
+        assert config.mode_error is None
+        h.send("toggle")  # the model was moved since the last dictation
+        await until(lambda: h.played("error"))
+        assert h.state is State.IDLE
+        h.recorder.start.assert_not_called()  # nothing is recorded only to be lost at the end
+        assert config.mode_error == "whisper.cpp model not found: /models/ggml.bin"
+        tray.mode_changed.assert_called_once()  # the status line names the problem
+
+
+@pytest.mark.anyio
 async def test_a_mode_edited_in_the_file_gets_its_own_transcriber_at_the_next_toggle():
     local = MagicMock()
     config = openai_config()
@@ -581,6 +600,59 @@ async def test_without_idle_rescans_devices_are_rescanned_only_on_return_to_idle
 
 
 @pytest.mark.anyio
+async def test_the_rescan_on_return_to_idle_waits_for_a_sound_still_playing():
+    """On Linux the PortAudio restart stops sounddevice's sound, such as a long custom cancel.wav."""
+    tray = MagicMock()
+    scanned = []
+
+    def scan():
+        scanned.append(time.monotonic())
+        return [(0, "Built-in Mic")]
+
+    with patch("vox.daemon._DEVICE_REFRESH_DELAY", 0.01):
+        async with running(openai_config(), tray) as h:
+            h.recorder.refresh_input_devices.side_effect = scan
+            await until(lambda: scanned)
+            h.send("toggle")
+            await until(lambda: h.state is State.RECORDING)
+
+            ends = time.monotonic() + 0.3
+            with patch.object(sounds_module, "_sd_playing_until", ends):  # the cancel sound plays 0.3 s more
+                h.send("cancel")
+                await until(lambda: h.state is State.IDLE)
+                await until(lambda: len(scanned) == 2)
+    assert scanned[1] >= ends + 0.1
+
+
+@pytest.mark.anyio
+async def test_the_rescan_after_an_unexpected_error_waits_for_the_error_sound():
+    tray = MagicMock()
+    scanned = []
+    error_ends = []
+
+    def scan():
+        scanned.append(time.monotonic())
+        return [(0, "Built-in Mic")]
+
+    def play(name):
+        if name == "error":  # a long custom error.wav, 0.3 s here
+            error_ends.append(time.monotonic() + 0.3)
+            sounds_module._sd_playing_until = error_ends[-1]
+
+    with patch("vox.daemon._DEVICE_REFRESH_DELAY", 0.01), patch.object(sounds_module, "_sd_playing_until", 0.0):
+        async with running(openai_config(), tray) as h:
+            h.recorder.refresh_input_devices.side_effect = scan
+            h.sounds.play.side_effect = play
+            await until(lambda: scanned)
+            h.detect.side_effect = RuntimeError("window lookup exploded")  # the toggle ends in _recover
+            h.send("toggle")
+            await until(lambda: error_ends)
+            assert h.state is State.IDLE
+            await until(lambda: len(scanned) == 2)
+    assert scanned[1] >= error_ends[0] + 0.1
+
+
+@pytest.mark.anyio
 async def test_a_silent_microphone_shows_a_notice_until_audio_returns():
     tray = MagicMock()
     async with running(openai_config(), tray) as h:
@@ -600,6 +672,23 @@ async def test_a_silent_microphone_shows_a_notice_until_audio_returns():
         await until(lambda: h.paste.called)
         tray.set_notice.assert_called_with(None)  # back to the platform notice, here none
         assert tray.set_notice.call_count == 2
+
+
+@pytest.mark.anyio
+async def test_the_silent_microphone_check_runs_off_the_event_loop():
+    threads = []
+
+    def check(wav):  # reads every sample of what may be an hour of audio
+        threads.append(threading.current_thread())
+        return False
+
+    with patch("vox.daemon.is_digital_silence", side_effect=check):
+        async with running(openai_config()) as h:
+            h.send("toggle")
+            await until(lambda: h.state is State.RECORDING)
+            h.send("toggle")
+            await until(lambda: h.paste.called)
+    assert threads and threads[0] is not threading.current_thread()
 
 
 @pytest.mark.anyio
@@ -848,7 +937,7 @@ async def test_history_records_batch_when_a_streaming_recording_fell_back_to_it(
 
 
 @pytest.mark.anyio
-async def test_a_partial_transcription_is_kept_in_history(tmp_path, speech):
+async def test_a_partial_transcription_is_kept_in_history(tmp_path, speech, caplog):
     history = HistoryDB(tmp_path / "history.db")
     tray = MagicMock()
     kwargs = process_kwargs(history=history, tray=tray)
@@ -862,8 +951,36 @@ async def test_a_partial_transcription_is_kept_in_history(tmp_path, speech):
     [rec] = history.search()
     assert rec.text == "the first ten minutes"
     tray.history_changed.assert_called_once()
+    assert "the parts transcribed so far are saved in history" in caplog.text
     assert kwargs["queue"].get_nowait() == "process_done"
     history.close()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("history_works", [False, True])
+async def test_a_partial_transcription_that_history_cannot_keep_is_pasted(tmp_path, speech, caplog, history_works):
+    history = None
+    if history_works:  # it opened, but the insert fails (a full disk, say)
+        history = HistoryDB(tmp_path / "history.db")
+        history.insert = MagicMock(side_effect=OSError("disk full"))
+    tray = MagicMock()
+    kwargs = process_kwargs(history=history, tray=tray)
+    kwargs["batch_transcriber"].transcribe.side_effect = PartialTranscriptionError(
+        "part 2 of 3 failed: rate limited", "the first ten minutes",
+    )
+    with patch("vox.daemon.detect_active_window", return_value=AppContext("", "", AppType.OTHER)), \
+         patch("vox.daemon.paste") as paste:
+        outcome = await _process(**kwargs)
+
+    paste.assert_called_once_with("the first ten minutes", AppType.EDITOR)  # billed text is never dropped
+    kwargs["sounds"].play.assert_called_once_with("error")
+    assert outcome is None  # not a success, and nothing in History for the notice to point to
+    tray.history_changed.assert_not_called()
+    assert "saved in history" not in caplog.text
+    assert "history is unavailable, so the parts transcribed so far are pasted" in caplog.text
+    assert kwargs["queue"].get_nowait() == "process_done"
+    if history is not None:
+        history.close()
 
 
 @pytest.mark.anyio
@@ -1062,3 +1179,53 @@ async def test_a_later_edit_that_still_fails_replaces_the_error_and_is_logged_on
 
     assert caplog.text.count("Config reload failed") == 1
     tray.mode_changed.assert_not_called()
+
+
+def local_setup(tmp_path, model="ggml.bin"):
+    """config.toml text for a whisper.cpp setup whose binary exists; the model exists as ggml.bin."""
+    binary = tmp_path / "whisper-cli"
+    binary.write_text("#!/bin/sh\n")
+    binary.chmod(0o755)
+    (tmp_path / "ggml.bin").write_bytes(b"model")
+    return f'[transcription]\nmode = "whisper_cpp"\n[whisper_cpp]\nbinary = "{binary}"\nmodel = "{tmp_path / model}"\n'
+
+
+def rewrite(path, text):
+    """Edit the file so the reloader sees a change, even within the file system's time resolution."""
+    mtime = path.stat().st_mtime
+    path.write_text(text)
+    os.utime(path, (mtime + 10, mtime + 10))
+
+
+@pytest.mark.anyio
+async def test_a_reload_that_breaks_the_local_setup_shows_the_problem_at_once(tmp_path, caplog):
+    path = tmp_path / "config.toml"
+    path.write_text(local_setup(tmp_path))
+    config = load_config(path)
+    tray = MagicMock()
+
+    async with reloading(config, MagicMock(), tray):
+        rewrite(path, local_setup(tmp_path, model="ggml.binx"))  # a typo in the model path
+        await until(lambda: tray.mode_changed.called)
+        assert config.mode_error == f"whisper.cpp model not found: {tmp_path / 'ggml.binx'}"
+        assert "Local transcription can't run: whisper.cpp model not found" in caplog.text
+
+        rewrite(path, local_setup(tmp_path))
+        await until(lambda: tray.mode_changed.call_count == 2)
+        assert config.mode_error is None
+
+
+@pytest.mark.anyio
+async def test_a_reload_away_from_a_broken_local_setup_clears_its_problem(tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_text('[transcription]\nmode = "whisper_cpp"\n[whisper_cpp]\nmodel = "/nonexistent/ggml.bin"\n')
+    config = load_config(path)
+    config.mode_error = "whisper.cpp model not found: /nonexistent/ggml.bin"  # what __main__ found at startup
+    tray = MagicMock()
+
+    async with reloading(config, MagicMock(), tray):
+        rewrite(path, '[transcription]\nmode = "batch"\n')
+        await until(lambda: tray.mode_changed.called)
+
+    assert config.mode == "batch"
+    assert config.mode_error is None  # the status line no longer names the whisper.cpp problem
