@@ -82,6 +82,8 @@ class Config:
         self.api_key_error: str | None = None
         # Why the configured transcription mode can't run (e.g. a missing whisper.cpp model), set at startup
         self.mode_error: str | None = None
+        # Why config.toml could not be loaded, if so: Vox then runs on defaults but does not record
+        self.config_error: str | None = None
 
 
 MODES: tuple[str, ...] = ("batch", "streaming", "whisper_cpp")

@@ -188,6 +188,17 @@ def _has_speech(wav_bytes: bytes) -> bool:
     return False
 
 
+def match_input_device(spec: str, devices: list[tuple[int, str]]) -> int | None:
+    """Index of the device named ``spec`` among ``(index, name)`` pairs, ignoring case.
+
+    An exact name wins, otherwise the first name containing it. The tray uses this too, so the
+    device it shows as selected is the one that records.
+    """
+    needle = spec.lower().strip()
+    exact = next((i for i, name in devices if name.lower().strip() == needle), None)
+    return exact if exact is not None else next((i for i, name in devices if needle in name.lower()), None)
+
+
 def resolve_input_device(device_spec: int | str | None, channels: int = 1) -> int | None:
     """Resolve an audio device specification to a valid input device index.
 
@@ -204,15 +215,11 @@ def resolve_input_device(device_spec: int | str | None, channels: int = 1) -> in
         return None
 
     if isinstance(device_spec, str):
-        spec_lower = device_spec.lower().strip()
-        inputs = [(idx, d.get("name", "").lower()) for idx, d in enumerate(devices)
+        inputs = [(idx, d.get("name", "")) for idx, d in enumerate(devices)
                   if d.get("max_input_channels", 0) >= channels]
-        for idx, name in inputs:
-            if name == spec_lower:
-                return idx
-        for idx, name in inputs:
-            if spec_lower in name:
-                return idx
+        match = match_input_device(device_spec, inputs)
+        if match is not None:
+            return match
         log.warning(
             "Configured audio input device %r not found among devices with >= %d input channels",
             device_spec, channels,
