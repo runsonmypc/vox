@@ -11,7 +11,7 @@ import sys
 import threading
 import time
 import wave
-from collections.abc import Coroutine
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -248,6 +248,7 @@ class _Daemon:
 
         self.state = State.IDLE
         self.paused = False
+        self.hotkey_suspended = False  # while the hotkey window is open
         self.saved_volume: float | None = None
         # Lowering the volume runs on a worker thread; a quit that lands meanwhile waits for it, then restores
         self._volume_lock = threading.Lock()
@@ -282,7 +283,7 @@ class _Daemon:
             tray.attach(self.loop, self.queue, self.history, asyncio.current_task())
             if self._key_missing() and config.api_key_error is None and config.config_error is None:
                 tray.open_key_window()
-        reload_task = asyncio.create_task(_config_reloader(config, self.recorder, tray))
+        reload_task = asyncio.create_task(_config_reloader(config, self.recorder, tray, self._apply_hotkey))
         self._schedule_device_refresh(0)
 
         try:
@@ -311,6 +312,9 @@ class _Daemon:
             await self._reload_api_key()
             log.info("OpenAI API key %s", "set" if self.config.openai_api_key else "not set")
             return
+        if event in ("hotkey:suspend", "hotkey:resume"):  # the hotkey window opened, or closed
+            await self._suspend_hotkey(event == "hotkey:suspend")
+            return
 
         if event in ("pause", "resume"):
             self.paused = event == "pause"
@@ -321,6 +325,10 @@ class _Daemon:
                 self.sounds.play(event)
                 return
             event = "cancel"  # discard the in-progress recording and release the mic
+        elif self.hotkey_suspended and event in ("toggle", "cancel"):
+            # No busy sound: the user is pressing keys to record a new hotkey
+            log.info("Ignoring %s while the hotkey window is open", event)
+            return
         elif self.paused and event in ("toggle", "cancel"):
             log.info("Ignoring %s while paused", event)
             if event == "toggle":
@@ -684,6 +692,38 @@ class _Daemon:
         if self.tray is not None:
             self.tray.limit_changed()
 
+    # -- Hotkey ------------------------------------------------------------------
+
+    async def _suspend_hotkey(self, suspend: bool) -> None:
+        """Keep the hotkey from dictating while the hotkey window records keys; once it closes, use what it saved."""
+        self.hotkey_suspended = suspend
+        if suspend:
+            if self.state is State.RECORDING:
+                await self._cancel()  # started just as the window opened: nothing could stop it now
+            return
+        self._reload_hotkey()
+
+    def _reload_hotkey(self) -> None:
+        """Re-read [hotkey] at once, so a key saved in the window works the moment it closes."""
+        try:
+            new = load_config(self.config.config_path or DEFAULT_CONFIG_PATH)
+        except ConfigError as e:
+            log.warning("Couldn't read the hotkey settings: %s", e)
+            return
+        self._apply_hotkey(new)
+
+    def _apply_hotkey(self, new: Config) -> None:
+        """Listen for the [hotkey] settings in ``new`` if they changed. A pynput listener can't restart,
+        so a fresh one replaces it; it applies at once, also during a recording, which the new key then stops."""
+        config = self.config
+        settings = (new.hotkey, new.hotkey_fallback, new.double_tap_timeout_ms)
+        if settings == (config.hotkey, config.hotkey_fallback, config.double_tap_timeout_ms):
+            return
+        config.hotkey, config.hotkey_fallback, config.double_tap_timeout_ms = settings
+        self.hotkey.stop()
+        self.hotkey = HotkeyListener(config, self.loop, self.queue)
+        self.hotkey.start()  # logs "Hotkey listener started (key=…, fallback=…)"
+
     # -- Notices and input devices --------------------------------------------
 
     def _update_notice(self, *, mic_silent: bool | None = None, partly_transcribed: bool | None = None) -> None:
@@ -958,12 +998,17 @@ def _file_stamp(path: Path) -> tuple[int, int, int] | None:
     return st.st_mtime_ns, st.st_size, st.st_ino
 
 
-async def _config_reloader(config: Config, recorder: Recorder, tray: TrayManager | None = None) -> None:
-    """Poll config.toml every couple of seconds and apply the settings that can change while Vox runs.
+async def _config_reloader(
+    config: Config,
+    recorder: Recorder,
+    tray: TrayManager | None = None,
+    apply_hotkey: Callable[[Config], None] | None = None,
+) -> None:
+    """Poll config.toml every couple of seconds and apply what changed, with no restart.
 
-    Hotkey settings are read once at startup and need a restart. While config.config_error is set,
-    the file is tried on every poll, and the first version that loads (or its deletion, which means
-    the defaults) is applied and clears it, so Vox records again.
+    ``apply_hotkey`` gets each version that loads, and swaps the hotkey listener when [hotkey] changed.
+    While config.config_error is set, the file is tried on every poll, and the first version that
+    loads (or its deletion, which means the defaults) is applied and clears it, so Vox records again.
     """
     path = config.config_path
     if path is None:
@@ -1013,6 +1058,8 @@ async def _config_reloader(config: Config, recorder: Recorder, tray: TrayManager
                 file_audio = new_file_audio
                 config.audio_device, config.sample_rate, config.channels = new_file_audio
                 recorder.reconfigure(config)  # waits for a recording in progress to end
+            if apply_hotkey is not None:
+                apply_hotkey(new_config)
 
             if config.config_error is not None:
                 config.config_error = None
@@ -1020,9 +1067,6 @@ async def _config_reloader(config: Config, recorder: Recorder, tray: TrayManager
                     log.info("%s is gone: Vox Transfer is using the default settings and records again", path)
                 else:
                     log.info("%s loads again: Vox Transfer is using its settings and records again", path)
-                hotkey = (new_config.hotkey, new_config.hotkey_fallback, new_config.double_tap_timeout_ms)
-                if hotkey != (config.hotkey, config.hotkey_fallback, config.double_tap_timeout_ms):
-                    log.warning("The hotkey settings in %s take effect when Vox Transfer restarts", path)
             else:
                 log.info("Config reloaded from %s", path)
             if tray is not None:

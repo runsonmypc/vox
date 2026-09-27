@@ -42,6 +42,17 @@ _ALIASES = {
 }
 
 
+def resolve_key(name: str) -> str:
+    """Normalize a configured key name to the name the listener reports: "Right Shift" -> "right_shift"."""
+    name = name.strip().lower().replace(" ", "_")
+    return _ALIASES.get(name, name)
+
+
+def parse_combo(combo: str) -> set[str]:
+    """Parse 'ctrl+space' into a set of key names."""
+    return {resolve_key(part) for part in combo.split("+")}
+
+
 class HotkeyListener:
     """Listens for the toggle hotkey and posts events to an asyncio queue.
 
@@ -59,7 +70,7 @@ class HotkeyListener:
             )
         self._loop = loop
         self._queue = queue
-        self._hotkey_name = self._resolve_key(config.hotkey)
+        self._hotkey_name = resolve_key(config.hotkey)
         self._fallback = config.hotkey_fallback
         self._double_tap_timeout_ms = config.double_tap_timeout_ms
         self._listener: keyboard.Listener | None = None
@@ -75,7 +86,7 @@ class HotkeyListener:
         self._debounce_ms = 50
         self._min_hold_ms = 30  # filter out synthetic/phantom key events (< 30ms) while keeping quick taps responsive
 
-        self._fallback_keys = self._parse_combo(self._fallback) if self._fallback else None
+        self._fallback_keys = parse_combo(self._fallback) if self._fallback else None
         self._combo_state: set[str] = set()
 
     def start(self) -> None:
@@ -178,17 +189,6 @@ class HotkeyListener:
 
         # Remove from combo state
         self._combo_state.discard(key_name)
-
-    @staticmethod
-    def _resolve_key(name: str) -> str:
-        """Normalize a configured key name to the name _key_name() reports: "Right Shift" -> "right_shift"."""
-        name = name.strip().lower().replace(" ", "_")
-        return _ALIASES.get(name, name)
-
-    @staticmethod
-    def _parse_combo(combo: str) -> set[str]:
-        """Parse 'ctrl+space' into a set of key names."""
-        return {HotkeyListener._resolve_key(part) for part in combo.split("+")}
 
     @staticmethod
     def _key_name(key: keyboard.Key | keyboard.KeyCode | None) -> str:

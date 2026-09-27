@@ -359,6 +359,20 @@ def update_max_recording_seconds(path: Path, seconds: int) -> None:
     _write_document(path, doc)
 
 
+def update_hotkey(path: Path, key: str, fallback: str) -> None:
+    """Persist ``[hotkey] key``, and ``fallback`` or its removal when empty, keeping comments and layout."""
+    if not key.strip():
+        raise ValueError("The hotkey can't be empty")
+    doc = _read_document(path)
+    hotkey = _edited_table(doc, "hotkey")
+    hotkey["key"] = key
+    if fallback:
+        hotkey["fallback"] = fallback
+    elif "fallback" in hotkey:
+        del hotkey["fallback"]
+    _write_document(path, doc)
+
+
 def read_api_key_setting(path: Path) -> str:
     """The key in a legacy ``[api] openai_api_key`` setting, or "". Vox no longer reads keys from here."""
     try:
