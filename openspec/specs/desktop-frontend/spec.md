@@ -188,13 +188,22 @@ The system SHALL provide "Set Hotkey…" in the tray menu, right after "Set API 
 
 #### Scenario: A typing key is refused
 - **WHEN** the Hotkey field records and the user presses a key that types or edits text, such as a letter, a digit, Space, Return, Tab, an arrow or Caps Lock
-- **THEN** the window says that Vox Transfer needs a key you don't type with (Shift, Control, Option or Command on either side, or F1 to F20 on macOS; Shift, Ctrl, Alt or Super on either side, AltGr, or F1 to F20 on Linux), keeps the old key, and keeps recording, so the next key can be pressed at once
+- **THEN** the window says that Vox Transfer needs a key you don't type with (Shift, Control, Option or Command on either side, fn (Globe), or F1 to F20 on macOS; Shift, Ctrl, Alt or Super on either side, AltGr, Pause, Scroll Lock, or F1 to F20 on Linux), keeps the old key, and keeps recording, so the next key can be pressed at once
 - **AND** pressing two keys together in the Hotkey field says that the hotkey is a single key and points to Key combination
-- **AND** on macOS the window ignores fn, so holding fn and pressing a function key records that function key
+
+#### Scenario: Pause and Scroll Lock on Linux
+- **WHEN** the Hotkey field records on Linux and the user taps Pause or Scroll Lock
+- **THEN** the key is saved as `pause` or `scroll_lock` and shown as Pause or Scroll Lock, with no warning
+
+#### Scenario: fn on macOS
+- **WHEN** the Hotkey field records on macOS and the user taps fn (Globe) on its own
+- **THEN** the key is saved as `fn` and shown as "fn (Globe)"
+- **AND** holding fn and pressing another key, such as a function key or Right Command, records only that other key, because Mac laptops need fn for the function keys
 
 #### Scenario: An unusable combination is refused
-- **WHEN** the Key combination field records Shift with Space, a modifier with a letter, modifiers alone, a function key alone, or AltGr with Space
+- **WHEN** the Key combination field records Shift with Space, a modifier with a letter, modifiers alone, a function key alone, AltGr with Space, fn tapped on its own, or a modifier with Pause or Scroll Lock
 - **THEN** the window says that a combination holds Control, Option or Command (Ctrl, Alt or Super on Linux) and ends with Space or F1 to F20, and keeps recording
+- **AND** fn held while a combination is pressed is left out of it, so holding Control and fn and pressing F5 records `ctrl+f5`
 
 #### Scenario: A combination that includes the hotkey
 - **WHEN** the key combination includes the tap-alone key, such as Left Control with `ctrl+space`
@@ -229,5 +238,5 @@ The system SHALL provide "Set Hotkey…" in the tray menu, right after "Set API 
 - **THEN** the window closes and writes nothing, so no `config.toml` is created for a user who has none
 
 #### Scenario: Warnings
-- **WHEN** the tap-alone key is F1 to F12, or on Linux the left Super key or an Alt key
-- **THEN** the window shows an orange warning (on macOS, that most keyboards send F1 to F12 only while fn is held unless the standard-function-keys setting is on; on Linux, that apps receive F1 to F12 too, that GNOME and KDE open their overview on a Super tap, or that some apps show their menu bar on an Alt tap), and saving is still allowed
+- **WHEN** the tap-alone key is F1 to F12, fn on macOS, or on Linux the left Super key or an Alt key
+- **THEN** the window shows an orange warning (on macOS, that most keyboards send F1 to F12 only while fn is held unless the standard-function-keys setting is on, or for fn, that macOS acts on fn too, so System Settings > Keyboard > "Press 🌐 key to" (or "Press fn key to") should be "Do Nothing" and a Dictation shortcut that presses 🌐 or fn twice should be changed; on Linux, that apps receive F1 to F12 too, that GNOME and KDE open their overview on a Super tap, or that some apps show their menu bar on an Alt tap), and saving is still allowed
