@@ -10,6 +10,7 @@ pytest.importorskip("pystray")
 
 from vox.config import Config
 from vox.history import HistoryDB
+from vox.modes import LABELS
 from vox.ui.icons import IconState, make_icon
 from vox.ui.tray import (
     CONFIG_ERROR,
@@ -211,6 +212,19 @@ def test_transcription_submenu_shows_modes_and_availability():
     ]
 
 
+def test_transcription_submenu_follows_vox_modes():
+    problems = {"batch": "Broken setup", "streaming": "Set an OpenAI API key first", "whisper_cpp": None}
+    _, icon = make_tray(Config(mode="batch", openai_api_key="test"))
+    with patch("vox.ui.tray.mode_problem", side_effect=lambda config, mode: problems[mode]) as problem:
+        modes = items(find(icon.menu, "Transcription").submenu)
+        assert [(item.text, item.enabled) for item in modes] == [
+            (LABELS["batch"], True),  # the current mode stays clickable: picking it again retries its setup
+            (LABELS["streaming"], False),
+            (LABELS["whisper_cpp"], True),
+        ]
+    assert {call.args[1] for call in problem.call_args_list} == {"streaming", "whisper_cpp"}
+
+
 @pytest.mark.anyio
 async def test_transcription_menu_sends_mode_to_daemon():
     tray, icon = make_tray(Config(openai_api_key="test"))
@@ -364,6 +378,16 @@ def test_selected_device_resolution():
     linux = [(0, "HDA Intel PCH: ALC257 Analog (hw:0,0)"), (1, "sysdefault"), (2, "pulse"), (3, "default")]
     assert _selected_device("default", linux) == 3
     assert _selected_device("Default ", linux) == 3
+
+
+@pytest.mark.parametrize("spec", ["default", "Default ", "pulse", "usb audio", "USB Audio", "USB Audio 2", "alc257"])
+def test_checked_device_is_the_one_the_recorder_opens(spec):
+    from vox.audio import resolve_input_device
+
+    names = ["HDA Intel PCH: ALC257 Analog (hw:0,0)", "sysdefault", "pulse", "default", "USB Audio 2", "USB Audio"]
+    with patch("vox.audio.sd.query_devices", return_value=[{"name": n, "max_input_channels": 2} for n in names]):
+        recorded = resolve_input_device(spec)
+    assert _selected_device(spec, list(enumerate(names))) == recorded
 
 
 @pytest.mark.anyio

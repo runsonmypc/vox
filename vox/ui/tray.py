@@ -20,10 +20,10 @@ import threading
 from collections.abc import Callable
 from typing import Any
 
+from ..audio import match_input_device
 from ..config import DEFAULT_CONFIG_PATH, RECORDING_LIMIT_CHOICES, Config
-from ..errors import ConfigError
 from ..history import HistoryDB, HistoryRecord
-from ..whisper_cpp import WhisperCppTranscriber
+from ..modes import LABELS, mode_problem
 from .icons import IconState, is_template, make_icon
 
 log = logging.getLogger(__name__)
@@ -472,11 +472,7 @@ class TrayManager:
 
     def _transcription_items(self):
         Item = self._pystray.MenuItem
-        for label, mode in (
-            ("OpenAI (batch)", "batch"),
-            ("OpenAI (streaming)", "streaming"),
-            ("Local (whisper.cpp)", "whisper_cpp"),
-        ):
+        for mode, label in LABELS.items():
             yield Item(
                 label, self._mode_setter(mode),
                 checked=lambda _, mode=mode: self._config.mode == mode,
@@ -487,15 +483,8 @@ class TrayManager:
     def _can_select_mode(self, mode: str) -> bool:
         if self._state is not IconState.IDLE:
             return False
-        if mode == self._config.mode:
-            return True
-        if mode != "whisper_cpp":
-            return bool(self._config.openai_api_key)
-        try:
-            WhisperCppTranscriber(self._config)
-        except ConfigError:
-            return False
-        return True
+        # The current mode stays clickable: picking it again retries a setup that failed
+        return mode == self._config.mode or mode_problem(self._config, mode) is None
 
     def _mode_setter(self, mode: str):
         def action(icon, item):
@@ -620,15 +609,12 @@ def _device_label(spec: int | str) -> str:
 def _selected_device(spec: int | str | None, devices: list[tuple[int, str]]) -> int | None:
     """Index of the configured input device among ``devices``, or None for the system default.
 
-    A name matches exactly (ignoring case) before it matches part of a longer name, the rule
-    audio.resolve_input_device must share so the checked device is the one that records.
+    Names resolve as the recorder resolves them, so the checked device is the one that records.
     """
     if isinstance(spec, int):
         return spec if any(i == spec for i, _ in devices) else None
     if isinstance(spec, str):
-        needle = spec.lower().strip()
-        exact = next((i for i, name in devices if name.lower().strip() == needle), None)
-        return exact if exact is not None else next((i for i, name in devices if needle in name.lower()), None)
+        return match_input_device(spec, devices)
     return None
 
 
