@@ -1,6 +1,7 @@
 """Tests for the vox command's startup checks."""
 
 import importlib.metadata
+import logging
 import os
 import stat
 from unittest.mock import patch
@@ -14,6 +15,13 @@ from vox.config import Config
 from vox.errors import DependencyError
 
 KEY = "sk-test-dummy-0001"
+clear_big_log = cli._clear_big_log
+
+
+@pytest.fixture(autouse=True)
+def _keep_the_test_log(monkeypatch):
+    """pytest captures stderr in a file, which main() must not empty."""
+    monkeypatch.setattr(cli, "_clear_big_log", lambda: None)
 
 
 def test_instance_lock_is_exclusive_until_released(tmp_path):
@@ -91,12 +99,48 @@ def test_second_instance_exits_cleanly_before_config_and_permission_prompt(monke
     monkeypatch.setattr("sys.argv", ["vox"])
     with (
         patch.object(cli, "_acquire_instance_lock", return_value=None),
+        patch.object(cli, "_clear_big_log") as clear_log,
         patch("vox.config.load_config") as load_config,
         patch("vox.injector.check_accessibility_permission") as prompt,
     ):
         cli.main()  # returns instead of sys.exit(1)
     load_config.assert_not_called()
     prompt.assert_not_called()
+    clear_log.assert_not_called()  # the log belongs to the Vox that is running
+
+
+def test_a_log_file_over_10_mib_is_cleared(tmp_path):
+    log_file = tmp_path / "vox.log"
+    log_file.write_bytes(b"old line\n")
+    os.truncate(log_file, 10 * 1024 * 1024 + 1)
+    fd = os.open(log_file, os.O_WRONLY | os.O_APPEND)  # how launchd opens it
+    try:
+        assert clear_big_log(fd) == 10 * 1024 * 1024 + 1
+        os.write(fd, b"new line\n")
+    finally:
+        os.close(fd)
+    assert log_file.read_bytes() == b"new line\n"
+
+
+def test_a_small_log_file_a_pipe_or_a_terminal_is_left_alone(tmp_path):
+    log_file = tmp_path / "vox.log"
+    log_file.write_bytes(b"x" * 100)
+    fd = os.open(log_file, os.O_WRONLY | os.O_APPEND)
+    read_end, write_end = os.pipe()  # journald's stream is a socket, which is no regular file either
+    try:
+        assert clear_big_log(fd, limit=100) is None
+        assert clear_big_log(write_end, limit=0) is None
+    finally:
+        for descriptor in (fd, read_end, write_end):
+            os.close(descriptor)
+    assert log_file.stat().st_size == 100
+
+
+def test_clearing_the_log_is_logged(monkeypatch, caplog):
+    caplog.set_level(logging.INFO, logger="vox")
+    monkeypatch.setattr(cli, "_clear_big_log", lambda: 12 * 1024 * 1024)
+    start(Config(), monkeypatch)
+    assert "Cleared the log file, which had grown to 12 MiB" in caplog.text
 
 
 def test_whisper_cpp_starts_without_openai_key(monkeypatch):

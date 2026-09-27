@@ -6,6 +6,7 @@ import argparse
 import importlib.metadata
 import logging
 import os
+import stat
 import sys
 from pathlib import Path
 
@@ -13,6 +14,9 @@ from pathlib import Path
 # restart Vox on it unless their files opt out: RestartPreventExitStatus=78 in vox.service, and on macOS,
 # where launchd has no such setting, a plist wrapper that turns 78 into a clean exit.
 EXIT_CANNOT_START = os.EX_CONFIG
+
+# launchd appends Vox's output to one log file for good; past this size, a new start begins it afresh
+_LOG_LIMIT_BYTES = 10 * 1024 * 1024
 
 
 def _lock_dir() -> Path:
@@ -44,6 +48,22 @@ def _acquire_instance_lock(directory: Path) -> int | None:
         os.close(fd)
         raise
     return fd
+
+
+def _clear_big_log(fd: int = 2, limit: int = _LOG_LIMIT_BYTES) -> int | None:
+    """Empty the log file ``fd`` (stderr) writes to when it has grown past ``limit``; returns the size it had.
+
+    Only a regular file is touched, such as the LaunchAgent's ~/Library/Logs/Vox/vox.log; journald is not.
+    """
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_size <= limit:
+            return None
+        os.ftruncate(fd, 0)
+        os.lseek(fd, 0, os.SEEK_SET)  # launchd appends anyway; a plain redirection would leave a hole
+    except OSError:
+        return None
+    return info.st_size
 
 
 def _version() -> str:
@@ -106,6 +126,9 @@ def main() -> None:
     if lock is None:
         log.info("Vox is already running.")
         return
+    cleared = _clear_big_log()  # only now: a second Vox must not empty the running one's log
+    if cleared is not None:
+        log.info("Cleared the log file, which had grown to %.0f MiB", cleared / 1024 / 1024)
 
     from .config import load_config
     from .errors import ConfigError, DependencyError
