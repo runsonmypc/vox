@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import logging
 import shutil
+import sys
 import tempfile
 import time
 import wave
@@ -18,6 +19,15 @@ from .transcribe import build_prompt, is_prompt_hallucination
 from .window import AppContext
 
 log = logging.getLogger(__name__)
+
+
+def uses_screen_hints() -> bool:
+    """Whether the whisper-cli prompt may carry window-title and screen words.
+
+    Not on Linux: the prompt is a command-line argument, and other local accounts can read those
+    in the process list there. The dictionary, which the user chose to write down, still goes.
+    """
+    return not sys.platform.startswith("linux")
 
 
 def _configured_path(value: str, config: Config) -> Path:
@@ -75,7 +85,7 @@ class WhisperCppTranscriber:
         config = self._config
         binary = _resolve_binary(config)
         model = _resolve_model(config)
-        prompt = build_prompt(config, context)
+        prompt = build_prompt(config, context if uses_screen_hints() else None)
 
         with tempfile.TemporaryDirectory(prefix="vox-whisper-") as directory:
             input_path = Path(directory) / "input.wav"

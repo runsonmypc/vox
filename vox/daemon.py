@@ -36,7 +36,7 @@ from .modes import mode_problem
 from .sounds import SoundPlayer, sound_playing_until
 from .streaming import StreamingTranscriber
 from .transcribe import PartialTranscriptionError, Transcriber
-from .whisper_cpp import WhisperCppTranscriber
+from .whisper_cpp import WhisperCppTranscriber, uses_screen_hints
 from .window import AppContext, detect_active_window, start_screen_capture
 
 if TYPE_CHECKING:
@@ -394,8 +394,10 @@ class _Daemon:
 
         # 4. Window context, and the screen capture that runs while the user speaks. Streaming sends
         #    its keywords when it connects, before any capture could finish, so it doesn't start one.
+        #    Local mode on Linux leaves screen words out of its prompt, so it doesn't capture either.
         context = await asyncio.to_thread(detect_active_window, config)
-        if config.context_screen and session.mode != "streaming":
+        local_without_hints = session.mode == "whisper_cpp" and not uses_screen_hints()
+        if config.context_screen and session.mode != "streaming" and not local_without_hints:
             session.screen_future = start_screen_capture(context)
 
         # 5. If streaming mode, initiate streaming connection and chunk worker

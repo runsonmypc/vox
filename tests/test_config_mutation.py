@@ -329,7 +329,9 @@ async def test_ui_edits_hot_reload_into_running_daemon(cfg):
 
     batch = MagicMock()
     batch.transcribe = AsyncMock(return_value="Sign off.")
-    with patch("vox.daemon.has_speech", return_value=True), patch("vox.daemon.paste") as paste:
+    # Pin the focused window: on a Linux desktop the paste would otherwise look up the real one
+    with patch("vox.daemon.has_speech", return_value=True), patch("vox.daemon.paste") as paste, \
+         patch("vox.daemon.detect_active_window", return_value=AppContext("mail", "Mail", AppType.EMAIL)):
         await _process(
             wav_data=b"", config=config, batch_transcriber=batch, streaming_transcriber=None,
             stream_task=None, sounds=MagicMock(), queue=asyncio.Queue(),

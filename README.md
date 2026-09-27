@@ -176,8 +176,8 @@ Screen hints help the transcriber spell names and terms that are on screen. With
 default), Vox reads text from the focused window only, never the whole screen or other windows:
 
 - **macOS**: the text of the tmux pane when the focused app is a terminal running tmux in its only
-  session (one window, one tab, no splits), so the pane is the one on screen; otherwise a
-  screenshot of the focused window, read with Apple's on-device text recognition.
+  session (one window and one tab, not split by the terminal itself), so the pane is the one on
+  screen; otherwise a screenshot of the focused window, read with Apple's on-device text recognition.
 - **Linux**: the window's text through the accessibility interface (AT-SPI). If that finds little,
   a screenshot of the window read with `tesseract` when `maim` and `tesseract` are installed, or,
   in a terminal running tmux in its only session, the pane text.

@@ -9,7 +9,7 @@ import threading
 import wave
 from typing import TYPE_CHECKING, Any
 
-from .audio import has_speech, upload_wavs
+from .audio import is_silent, upload_wavs
 from .config import Config
 from .errors import TranscriptionError
 from .window import AppContext
@@ -61,8 +61,8 @@ _PASSWORD_VALUE_RE = re.compile(
 _URL_USERINFO_RE = re.compile(r"(?<=://)[^\s/]*@")
 # A command-line argument, quoted or not
 _ARG = r"""(?:"[^"\n]*"|'[^'\n]*'|\S+)"""
-# A password given on a command line: "--password VALUE", "--pass=VALUE" and mysql's "-pVALUE"
-_PASSWORD_ARG_RE = re.compile(rf"(?<!\S)(--pass(?:w(?:or)?d)?)(?:=|\s+){_ARG}|(?<!\S)(-p){_ARG}")
+# A password given on a command line: "--password VALUE", "--pass=VALUE", "--passphrase VALUE", mysql -pVALUE
+_PASSWORD_ARG_RE = re.compile(rf"(?<!\S)(--pass(?:w(?:or)?d|phrase)?)(?:=|\s+){_ARG}|(?<!\S)(-p){_ARG}")
 # curl's "-u user:password" and "--user=user:password"
 _USER_ARG_RE = re.compile(r"""(?<!\S)(-u|--user)(?:=|\s*)(?:"[^"\n]*:[^"\n]*"|'[^'\n]*:[^'\n]*'|[^\s"':]*:\S*)""")
 # A PEM or OpenSSH key block, whose last line can be too short for the run rule below
@@ -245,12 +245,13 @@ class Transcriber:
             log.debug("Transcription prompt: %d chars", len(echo))
         if len(parts) > 1:
             log.info("Recording is over the upload limit; sending it in %d parts", len(parts))
-            # The daemon checked the whole recording for speech; a long one can still end in a
-            # silent part (a recording left running until the limit), which would be billed for nothing
-            speech = await asyncio.to_thread(lambda: [part for part in parts if has_speech(part)])
-            if len(speech) < len(parts):
-                log.info("Skipped %d of %d parts with no speech", len(parts) - len(speech), len(parts))
-            parts = speech
+            # A long recording can end in a silent part (one left running until the limit), which
+            # would be billed for nothing. Only a part with nothing audible in any second is
+            # skipped: the VAD can miss a few quiet words, and a skipped part is lost for good.
+            audible = await asyncio.to_thread(lambda: [part for part in parts if not is_silent(part)])
+            if len(audible) < len(parts):
+                log.info("Skipped %d of %d parts that are silent", len(parts) - len(audible), len(parts))
+            parts = audible
 
         texts: list[str] = []
         for number, part in enumerate(parts, 1):

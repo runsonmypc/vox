@@ -246,6 +246,30 @@ def is_digital_silence(wav_bytes: bytes) -> bool:
     return len(samples) > 0 and not samples.any()
 
 
+def is_silent(wav_bytes: bytes) -> bool:
+    """Whether no second of the audio is louder than the silence threshold: nothing audible in it.
+
+    Stricter than has_speech, whose whole-recording average and VAD can call a long stretch
+    with a few quiet words silent. Use it where skipping audio would lose those words for good.
+    """
+    try:
+        samples, rate, channels = read_wav(wav_bytes)
+    except (EOFError, ValueError, wave.Error):
+        return False
+    window = max(1, rate * channels)  # one second
+    step = max(window, _ENERGY_BLOCK // window * window)
+    floor = _MIN_RMS_ENERGY**2
+    for i in range(0, len(samples), step):
+        block = samples[i : i + step].astype(np.float32)
+        whole = len(block) // window * window
+        if whole and (np.square(block[:whole]).reshape(-1, window).mean(axis=1) >= floor).any():
+            return False
+        tail = block[whole:]
+        if len(tail) and float(np.dot(tail, tail)) / len(tail) >= floor:
+            return False
+    return True
+
+
 def _rms(samples: np.ndarray) -> float:
     total = 0.0
     for i in range(0, len(samples), _ENERGY_BLOCK):

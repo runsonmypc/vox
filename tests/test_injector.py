@@ -200,6 +200,45 @@ class ObservingPasteboard:
 
 
 @darwin_only
+@pytest.mark.parametrize(("clipboard", "host_only"), [
+    ({"public.utf8-plain-text": b"hunter2", "org.nspasteboard.ConcealedType": b""}, True),
+    ({"public.utf8-plain-text": b"an ordinary copy"}, False),
+])
+def test_macos_restores_a_password_managers_copy_for_this_mac_only(pasteboard, clipboard, host_only):
+    """Written back as an ordinary copy, Universal Clipboard would offer the password to other devices."""
+    import AppKit
+
+    _write_items(pasteboard.pb, clipboard)
+    observed = ObservingPasteboard(pasteboard.pb)
+    with patch.object(injector, "_general_pasteboard", return_value=observed):
+        injector.paste("dictated", AppType.BROWSER)
+
+    assert _items(pasteboard.pb) == [clipboard]
+    clears = [c for c in observed.calls if c[0] in ("clearContents", "prepareForNewContentsWithOptions_")]
+    restore = clears[-1]  # the first is the dictation's own host-only write
+    if host_only:
+        assert restore == ("prepareForNewContentsWithOptions_", AppKit.NSPasteboardContentsCurrentHostOnly)
+    else:
+        assert restore == ("clearContents",)
+
+
+@darwin_only
+def test_macos_text_only_restore_keeps_a_password_concealed(pasteboard):
+    """When the full restore is refused, the text goes back host-only and marked before it appears."""
+    import AppKit
+
+    _write_items(pasteboard.pb, {"public.utf8-plain-text": b"hunter2", "org.nspasteboard.ConcealedType": b""})
+    observed = ObservingPasteboard(RefusingPasteboard(pasteboard.pb))
+    with patch.object(injector, "_general_pasteboard", return_value=observed):
+        injector.paste("dictated", AppType.BROWSER)
+
+    assert pasteboard.pb.stringForType_(AppKit.NSPasteboardTypeString) == "hunter2"
+    with_text = [types for types in observed.states[-2:] if AppKit.NSPasteboardTypeString in types]
+    assert with_text and all("org.nspasteboard.ConcealedType" in types for types in with_text)
+    assert observed.calls[-3] == ("prepareForNewContentsWithOptions_", AppKit.NSPasteboardContentsCurrentHostOnly)
+
+
+@darwin_only
 def test_macos_dictation_is_never_on_the_clipboard_without_its_markers(pasteboard):
     """A clipboard manager polling at any moment of the write sees the text only with the transient markers."""
     import AppKit
@@ -594,6 +633,22 @@ def test_linux_restores_the_most_useful_target(x11, clipboard, restored):
     x11.clipboard = clipboard
     injector.paste("dictated", AppType.EDITOR)
     assert x11.writes == [restored]
+
+
+def test_linux_password_managers_secret_is_not_put_back(x11):
+    """xclip can't restore KeePassXC's mark with the text, and unmarked a clipboard history would keep it."""
+    x11.clipboard = {"UTF8_STRING": b"hunter2", "x-kde-passwordManagerHint": b"secret"}
+
+    injector.paste("dictated", AppType.EDITOR)
+
+    assert x11.writes == []
+    assert x11.owner.terminated  # stopping the paste's owner leaves the clipboard empty
+
+
+def test_linux_a_password_hint_that_is_not_secret_restores_as_usual(x11):
+    x11.clipboard = {"UTF8_STRING": b"shown", "x-kde-passwordManagerHint": b"public"}
+    injector.paste("dictated", AppType.EDITOR)
+    assert x11.writes == [("UTF8_STRING", b"shown")]
 
 
 def test_linux_empty_clipboard_is_left_empty(x11):

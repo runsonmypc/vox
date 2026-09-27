@@ -14,6 +14,7 @@ from vox.audio import (
     Resampler,
     has_speech,
     is_digital_silence,
+    is_silent,
     pcm16_wav,
     read_wav,
     resolve_input_device,
@@ -595,6 +596,19 @@ def test_is_digital_silence_flags_only_all_zero_audio():
     assert not is_digital_silence(_wav(np.r_[np.zeros(1599), 1], 16000))
     assert not is_digital_silence(_wav([], 16000))
     assert not is_digital_silence(b"")
+
+
+@pytest.mark.parametrize(("rate", "channels"), [(16000, 1), (44100, 2)])
+def test_is_silent_needs_every_second_to_be_quiet(rate, channels):
+    frames = rate * 90  # long enough to span several energy blocks
+    hiss = np.random.default_rng(1).normal(0, 5, frames * channels)
+    assert is_silent(_wav(hiss, rate, channels))
+    # Half a second of soft sound anywhere, even at the very end, makes it audible
+    for start in (0, frames * channels // 2, frames * channels - rate * channels // 2):
+        loud = hiss.copy()
+        loud[start : start + rate * channels // 2] += 60
+        assert not is_silent(_wav(loud, rate, channels)), start
+    assert not is_silent(b"not a wav")
 
 
 def test_read_wav_returns_a_view_of_vox_s_own_wavs():

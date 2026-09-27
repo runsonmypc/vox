@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import numpy as np
 import pytest
 
+from vox import whisper_cpp
 from vox.audio import to_16k_mono
 from vox.config import Config
 from vox.daemon import _process
@@ -30,6 +31,12 @@ def _wav(rate=48000, channels=2):
         output.setsampwidth(2)
         output.writeframes(np.arange(rate // 10 * channels, dtype="<i2").tobytes())
     return buffer.getvalue()
+
+
+@pytest.fixture
+def screen_hints(monkeypatch):
+    """The macOS behavior, where the prompt may carry title and screen words, on any test machine."""
+    monkeypatch.setattr(whisper_cpp, "uses_screen_hints", lambda: True)
 
 
 def _config(tmp_path, script):
@@ -50,7 +57,7 @@ def _config(tmp_path, script):
 
 
 @pytest.mark.anyio
-async def test_local_cli_receives_converted_audio_prompt_and_model(tmp_path):
+async def test_local_cli_receives_converted_audio_prompt_and_model(tmp_path, screen_hints):
     script = '''import json, sys, wave
 from pathlib import Path
 a = sys.argv
@@ -187,7 +194,7 @@ async def test_local_run_logs_timings_at_debug_and_text_never_at_info(tmp_path, 
 
 
 @pytest.mark.anyio
-async def test_local_prompt_never_carries_secrets_from_the_screen(tmp_path):
+async def test_local_prompt_never_carries_secrets_from_the_screen(tmp_path, screen_hints):
     config = _config(tmp_path, _COPY_INPUT)
     context = AppContext(
         "code", "settings.env", AppType.EDITOR,
@@ -200,7 +207,7 @@ async def test_local_prompt_never_carries_secrets_from_the_screen(tmp_path):
 
 
 @pytest.mark.anyio
-async def test_local_prompt_never_carries_passwords_from_urls_or_command_lines(tmp_path):
+async def test_local_prompt_never_carries_passwords_from_urls_or_command_lines(tmp_path, screen_hints):
     config = _config(tmp_path, _COPY_INPUT)
     screen = "\n".join([
         "DATABASE_URL=postgres://app:Xy7pQ9zRw2@db.internal:5432/prod",
@@ -215,6 +222,26 @@ async def test_local_prompt_never_carries_passwords_from_urls_or_command_lines(t
     for secret in ["Xy7pQ9zRw2", "S3cr3tRoot", "S3cretPass", "Horse", "Staple", "Hunter2Xyz"]:
         assert secret not in argv
     assert "DATABASE_URL" in argv and "DeploymentConfig" in argv
+
+
+
+def test_screen_hints_stay_out_of_the_prompt_only_on_linux(monkeypatch):
+    for platform, hints in (("linux", False), ("darwin", True)):
+        monkeypatch.setattr(whisper_cpp.sys, "platform", platform)
+        assert whisper_cpp.uses_screen_hints() is hints
+
+
+@pytest.mark.anyio
+async def test_local_prompt_on_linux_holds_only_the_dictionary(tmp_path, monkeypatch):
+    """Other local accounts can read the whisper-cli arguments in the Linux process list."""
+    monkeypatch.setattr(whisper_cpp, "uses_screen_hints", lambda: False)
+    config = _config(tmp_path, _COPY_INPUT)
+    context = AppContext("mail", "Re: Offer letter for Jane Doe", AppType.EMAIL, screen_text="AcmePayroll salary")
+    await WhisperCppTranscriber(config).transcribe(_wav(), context)
+    argv = (tmp_path / "bin" / "argv.txt").read_text()
+    assert "FastAPI" in argv and "Kubernetes" in argv
+    for word in ["Offer", "Jane", "AcmePayroll"]:
+        assert word not in argv
 
 
 @pytest.mark.anyio

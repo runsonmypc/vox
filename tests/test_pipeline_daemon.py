@@ -801,6 +801,22 @@ async def test_a_screen_capture_that_never_finishes_does_not_hold_up_the_dictati
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("hints", [True, False])
+async def test_local_mode_captures_the_screen_only_where_its_prompt_may_use_it(hints):
+    """On Linux the whisper-cli prompt leaves screen words out, so capturing them would be wasted."""
+    local = MagicMock()
+    local.transcribe = AsyncMock(return_value="local text")
+    with patch("vox.daemon.uses_screen_hints", return_value=hints):
+        async with running(Config(mode="whisper_cpp"), cpp={"return_value": local}) as h:
+            h.send("toggle")
+            await until(lambda: h.state is State.RECORDING)
+            h.send("toggle")
+            await until(lambda: h.paste.called)
+            assert h.capture.called == hints
+            h.paste.assert_called_once_with("local text", AppType.EDITOR)
+
+
+@pytest.mark.anyio
 async def test_streaming_recording_starts_no_screen_capture():
     async with running(openai_config(mode="streaming")) as h:
         h.send("toggle")

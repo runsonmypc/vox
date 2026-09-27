@@ -438,6 +438,7 @@ def test_mac_launcher_updates_its_own_launcher_in_place(home):
     assert not (home / "Applications").exists()
 
 
+@pytest.mark.skipif(os.geteuid() == 0, reason="root can write to a read-only folder")
 def test_mac_launcher_goes_to_the_users_applications_when_the_shared_folder_is_read_only(home):
     fake_venv(home)
     shared = home / "SystemApplications"
