@@ -569,6 +569,16 @@ def test_gtk_records_a_combination_and_offers_to_clear_it(gtk, gtk_window):
     assert window.combination_field.get_label() == "None"
 
 
+def test_gtk_records_alt_pressed_after_shift(gtk, gtk_window):
+    window = gtk_window()
+    window.combination_field.emit("clicked")
+    assert press(window, gtk.Gdk.KEY_Shift_L) is True
+    assert press(window, gtk.Gdk.KEY_Meta_L) is True  # what X reports for Alt while Shift is held
+    assert press(window, gtk.Gdk.KEY_space) is True
+    assert window.model.combination == "alt+shift+space"
+    assert window.combination_field.get_label() == "Left Alt + Left Shift + Space"
+
+
 def test_gtk_refuses_a_typing_key_and_keeps_recording(gtk, gtk_window):
     window = gtk_window()
     window.key_field.emit("clicked")

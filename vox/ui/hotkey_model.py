@@ -69,6 +69,7 @@ MAC_KEYS = {
 LINUX_KEYS = {
     "Shift_R": "right_shift", "Shift_L": "shift", "Control_R": "right_ctrl", "Control_L": "ctrl",
     "Alt_R": "right_alt", "Alt_L": "alt", "Super_R": "cmd_r", "Super_L": "cmd",
+    "Meta_R": "right_alt", "Meta_L": "alt",  # Alt pressed while Shift is held
     # Right Alt on layouts that type with it (AltGr): pynput has no Key for it, so the listener names its keysym
     "ISO_Level3_Shift": "vk_65027",
     "space": "space", **{f"F{n}": f"f{n}" for n in range(1, 21)},

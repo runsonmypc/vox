@@ -313,6 +313,35 @@ async def test_hotkey_fallback_combo_accepts_left_modifier_names():
     assert await queue.get() == "toggle"
 
 
+META_L, META_R = keyboard.KeyCode.from_vk(0xFFE7), keyboard.KeyCode.from_vk(0xFFE8)  # X11: Alt with Shift held
+
+
+@pytest.mark.anyio
+async def test_alt_with_shift_held_is_still_alt():
+    queue: asyncio.Queue[str] = asyncio.Queue()
+    config = Config(hotkey="right_shift", hotkey_fallback="alt+space")
+    listener = HotkeyListener(config, asyncio.get_running_loop(), queue)
+
+    # Alt let go while Shift is still down doesn't stay held, so a later Space alone does nothing
+    listener._on_press(keyboard.Key.alt_l)
+    listener._on_press(keyboard.Key.shift)
+    listener._on_release(META_L)
+    listener._on_release(keyboard.Key.shift)
+    listener._on_press(keyboard.Key.space)
+    listener._on_release(keyboard.Key.space)
+    await asyncio.sleep(0)
+    assert queue.empty()
+
+    # and Alt pressed after Shift completes a combination that holds both
+    listener = HotkeyListener(Config(hotkey_fallback="alt+shift+space"), asyncio.get_running_loop(), queue)
+    listener._on_press(keyboard.Key.shift)
+    listener._on_press(META_L)
+    listener._on_press(keyboard.Key.space)
+    await asyncio.sleep(0)
+    assert await queue.get() == "toggle"
+    assert HotkeyListener._key_name(META_R) == "right_alt"
+
+
 @pytest.mark.anyio
 async def test_missing_keyboard_backend_is_a_clear_dependency_error():
     with patch("vox.hotkey.keyboard", None), \

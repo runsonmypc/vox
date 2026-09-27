@@ -42,3 +42,22 @@ The system SHALL apply every edit to `config.toml` while running, a few seconds 
 #### Scenario: Invalid edit while running
 - **WHEN** a `config.toml` that loaded is edited into an invalid state while Vox runs
 - **THEN** Vox logs a warning naming the file and the setting and keeps the settings it has
+
+### Requirement: Hotkey Names
+The system SHALL accept the hotkey names users naturally write and SHALL match them to the key that was actually pressed. Without a usable keyboard backend it SHALL exit with a clear message.
+
+#### Scenario: Spellings
+- **WHEN** `[hotkey] key` is `right_shift`, `"Right Shift"`, `right_ctrl`, `right_alt`, `left_shift`, `left_ctrl` or `left_alt`, or `fallback` is a combination such as `"left_ctrl+space"`
+- **THEN** each names the intended key
+
+#### Scenario: Left and right modifiers
+- **WHEN** the hotkey is `left_shift`
+- **THEN** it fires on the left Shift key and not on the right one
+
+#### Scenario: Alt with Shift held on Linux
+- **WHEN** an Alt key is pressed or released while Shift is held, which X11 reports as Meta
+- **THEN** it is still named `alt` or `right_alt`, so `alt+shift+space` fires whichever of Alt and Shift goes down first, and an Alt let go after Shift never stays counted as held
+
+#### Scenario: No keyboard backend
+- **WHEN** global hotkeys cannot be set up, for example with no X11 display on Linux
+- **THEN** Vox logs that global hotkeys are unavailable, with the reason in a few words (such as "no X display: DISPLAY is not set"), and that it needs an X11 display, and exits with status 1 instead of a traceback

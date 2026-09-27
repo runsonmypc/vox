@@ -40,6 +40,9 @@ _ALIASES = {
     "shift_l": "shift", "ctrl_l": "ctrl", "alt_l": "alt",
     **_KEY_NAMES,
 }
+# X11 reports the Alt keys as Meta_L and Meta_R while Shift is held; naming them Alt
+# keeps an Alt released after Shift from staying down in a combination
+_META_KEYSYMS = {0xFFE7: "alt", 0xFFE8: "right_alt"}
 
 
 def resolve_key(name: str) -> str:
@@ -202,5 +205,5 @@ class HotkeyListener:
             if key.char:
                 return key.char.lower()
             if key.vk:
-                return f"vk_{key.vk}"
+                return _META_KEYSYMS.get(key.vk, f"vk_{key.vk}")
         return ""

@@ -3,6 +3,7 @@ The change is on branch `vt/hotkey`, which starts from `vt/rename` (6cf8436). Ev
 ## 1. Listener and config
 
 - [x] 1.1 Make `resolve_key` and `parse_combo` public functions of `vox/hotkey.py`, with the same bodies, and use them in `HotkeyListener`; verified by `test_hotkey_spellings_match_the_key_pynput_reports`, `test_hotkey_fallback_combo_accepts_left_modifier_names` and `test_recorded_names_read_back_unchanged`
+- [x] 1.3 Name `Meta_L` and `Meta_R`, which X11 reports for the Alt keys while Shift is held, `alt` and `right_alt` in the listener and in `LINUX_KEYS`; verified by `test_alt_with_shift_held_is_still_alt`, `test_linux_key_names_name_the_keys_the_listener_reports` (Linux) and `test_gtk_records_alt_pressed_after_shift` (Linux, under Xvfb)
 - [x] 1.2 Add `update_hotkey(path, key, fallback)` to `vox/config.py`: set `key`, set `fallback` or remove it when empty, refuse an empty key, and write through the existing atomic writer; verified by `test_hotkey_is_saved_in_the_hotkey_section`, `test_clearing_the_combination_removes_fallback`, `test_hotkey_update_creates_a_private_file` and `test_a_section_that_is_not_a_table_is_a_config_error_not_a_crash`
 
 ## 2. Daemon

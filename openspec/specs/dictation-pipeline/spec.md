@@ -275,6 +275,10 @@ The system SHALL accept the hotkey names users naturally write and SHALL match t
 - **WHEN** the hotkey is `left_shift`
 - **THEN** it fires on the left Shift key and not on the right one
 
+#### Scenario: Alt with Shift held on Linux
+- **WHEN** an Alt key is pressed or released while Shift is held, which X11 reports as Meta
+- **THEN** it is still named `alt` or `right_alt`, so `alt+shift+space` fires whichever of Alt and Shift goes down first, and an Alt let go after Shift never stays counted as held
+
 #### Scenario: No keyboard backend
 - **WHEN** global hotkeys cannot be set up, for example with no X11 display on Linux
 - **THEN** Vox logs that global hotkeys are unavailable, with the reason in a few words (such as "no X display: DISPLAY is not set"), and that it needs an X11 display, and exits with status 1 instead of a traceback
