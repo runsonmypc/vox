@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import numpy as np
 import pytest
 
+from vox.audio import to_16k_mono
 from vox.config import Config
 from vox.daemon import _process
 from vox.errors import ConfigError, TranscriptionError
@@ -140,22 +141,28 @@ Path(a[a.index("-of") + 1] + ".txt").write_text("my private note")
 
 
 @pytest.mark.anyio
-async def test_local_input_is_16k_mono_and_matches_the_recording(tmp_path):
+@pytest.mark.parametrize("rate", [48000, 44100])
+async def test_local_input_is_16k_mono_and_matches_the_recording(tmp_path, rate):
     config = _config(tmp_path, _COPY_INPUT)
-    ramp = (np.arange(4800) % 3000).astype("<i2")
+    t = np.arange(rate // 2) / rate
+    # A voice-band tone, plus a 12 kHz one that plain decimation would fold down to 4 kHz
+    audio = (np.sin(2 * np.pi * 1000 * t) * 8000 + np.sin(2 * np.pi * 12000 * t) * 8000).astype("<i2")
     buffer = io.BytesIO()
     with wave.open(buffer, "wb") as output:
-        output.setframerate(48000)
+        output.setframerate(rate)
         output.setnchannels(1)
         output.setsampwidth(2)
-        output.writeframes(ramp.tobytes())
+        output.writeframes(audio.tobytes())
 
     await WhisperCppTranscriber(config).transcribe(buffer.getvalue())
 
     with wave.open(str(tmp_path / "bin" / "input-copy.wav"), "rb") as sent:
-        assert (sent.getframerate(), sent.getnchannels()) == (16000, 1)
+        assert (sent.getframerate(), sent.getnchannels(), sent.getnframes()) == (16000, 1, 8000)
         samples = np.frombuffer(sent.readframes(sent.getnframes()), dtype="<i2")
-    np.testing.assert_array_equal(samples, ramp[::3])
+    np.testing.assert_array_equal(samples, to_16k_mono(audio, rate))  # the same conversion as uploads
+    spectrum = np.abs(np.fft.rfft(samples * np.hanning(len(samples))))
+    bins = np.fft.rfftfreq(len(samples), 1 / 16000)
+    assert spectrum[bins == 4000] < spectrum[bins == 1000] / 100
 
 
 @pytest.mark.anyio

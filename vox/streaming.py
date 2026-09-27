@@ -11,6 +11,7 @@ from typing import Any
 
 import websockets
 
+from .audio import STREAM_RATE
 from .config import Config
 from .errors import StreamingError
 from .transcribe import api_keywords, is_prompt_hallucination
@@ -49,7 +50,7 @@ def build_session_update(config: Config, context: AppContext | None = None) -> d
             "type": "transcription",
             "audio": {
                 "input": {
-                    "format": {"type": "audio/pcm", "rate": 24000},
+                    "format": {"type": "audio/pcm", "rate": STREAM_RATE},
                     "transcription": transcription_cfg,
                     "turn_detection": None,
                 }
