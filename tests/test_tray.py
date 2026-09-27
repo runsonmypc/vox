@@ -1,6 +1,7 @@
 """Unit tests for the menu bar TrayManager using a fake pystray icon."""
 
 import asyncio
+import subprocess
 import sys
 from unittest.mock import MagicMock, patch
 
@@ -443,7 +444,7 @@ def test_history_window_launch_is_single_instance(tmp_path):
     launcher, focus = MagicMock(side_effect=procs), MagicMock()
     tray, icon = make_tray(launcher=launcher, focus=focus)
     tray.attach(MagicMock(), MagicMock(), history, MagicMock())
-    command = [sys.executable, "-m", HISTORY_WINDOW, "--db", str(history.path)]
+    command = [sys.executable, "-P", "-m", HISTORY_WINDOW, "--db", str(history.path)]
 
     find(icon.menu, "Search History…")(icon)
     launcher.assert_called_once_with(command)
@@ -466,7 +467,7 @@ def test_vocab_window_gets_config_path(tmp_path):
     launcher = MagicMock(return_value=_fake_proc())
     _, icon = make_tray(config, launcher=launcher)
     find(icon.menu, "Vocabulary & Snippets…")(icon)
-    launcher.assert_called_once_with([sys.executable, "-m", VOCAB_WINDOW, "--config", str(tmp_path / "config.toml")])
+    launcher.assert_called_once_with([sys.executable, "-P", "-m", VOCAB_WINDOW, "--config", str(tmp_path / "config.toml")])
 
 
 def test_open_windows_are_closed_when_tray_exits(tmp_path):
@@ -601,7 +602,7 @@ def test_key_window_closing_tells_the_daemon_to_reread_the_key():
     tray.attach(loop, queue, None, MagicMock())
     with patch("vox.ui.tray.threading.Thread") as thread:
         find(icon.menu, SET_KEY)(icon)
-    launcher.assert_called_once_with([sys.executable, "-m", KEY_WINDOW])
+    launcher.assert_called_once_with([sys.executable, "-P", "-m", KEY_WINDOW])
     kwargs = thread.call_args.kwargs
     target, args = kwargs["target"], kwargs["args"]
     target(*args)  # what the thread runs: wait for the window, then tell the daemon
@@ -614,7 +615,7 @@ def test_daemon_can_open_the_key_window():
     tray, _ = make_tray(Config(mode="batch"), launcher=launcher)
     with patch("vox.ui.tray.threading.Thread"):
         tray.open_key_window()
-    launcher.assert_called_once_with([sys.executable, "-m", KEY_WINDOW])
+    launcher.assert_called_once_with([sys.executable, "-P", "-m", KEY_WINDOW])
 
 
 # -- Status line problems -----------------------------------------------------------
@@ -670,6 +671,20 @@ def test_a_long_problem_is_shortened_to_one_line():
 
 
 # -- Window processes ---------------------------------------------------------------
+
+
+def test_windows_ignore_a_vox_folder_in_the_working_directory(tmp_path):
+    (tmp_path / "vox").mkdir()
+    (tmp_path / "vox" / "__init__.py").write_text("raise SystemExit('shadowed by the working directory')\n")
+    launcher = MagicMock(return_value=_fake_proc())
+    _, icon = make_tray(launcher=launcher)
+    find(icon.menu, "Vocabulary & Snippets…")(icon)
+    command = launcher.call_args.args[0]
+    interpreter = command[: command.index("-m")]  # the interpreter and its flags, as the window runs them
+    probe = subprocess.run(
+        [*interpreter, "-c", "import vox"], cwd=tmp_path, capture_output=True, text=True, timeout=60,
+    )
+    assert probe.returncode == 0, probe.stderr
 
 
 def test_every_window_process_is_waited_on_so_none_lingers(tmp_path):

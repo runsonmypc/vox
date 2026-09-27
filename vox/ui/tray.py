@@ -543,7 +543,8 @@ class TrayManager:
     # -- Plumbing ----------------------------------------------------------
 
     def _open_window(self, module: str, *args: str, on_exit: Callable[[], None] | None = None) -> None:
-        command = [sys.executable, "-m", module, *args]
+        # -P: a vox/ directory in the working directory must not shadow the installed package
+        command = [sys.executable, "-P", "-m", module, *args]
         proc = self._windows.get(module)
         if proc is not None and proc.poll() is None:
             log.info("%s is already open; bringing it forward", module)
