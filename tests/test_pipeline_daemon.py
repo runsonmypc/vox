@@ -535,6 +535,20 @@ async def test_batch_recording_captures_the_screen_only_when_screen_context_is_o
 
 
 @pytest.mark.anyio
+async def test_a_screen_capture_that_never_finishes_does_not_hold_up_the_dictation():
+    never = asyncio.get_running_loop().create_future()
+    with patch("vox.daemon._SCREEN_WAIT_SECONDS", 0.01):
+        async with running(openai_config()) as h:
+            h.capture.return_value = never
+            h.send("toggle")
+            await until(lambda: h.state is State.RECORDING)
+            h.send("toggle")
+            await until(lambda: h.paste.called)
+    assert h.batch.transcribe.call_args.args[1].screen_text == ""
+    assert never.cancelled()
+
+
+@pytest.mark.anyio
 async def test_streaming_recording_starts_no_screen_capture():
     async with running(openai_config(mode="streaming")) as h:
         h.send("toggle")

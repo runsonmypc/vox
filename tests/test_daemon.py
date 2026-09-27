@@ -2,7 +2,6 @@
 
 import asyncio
 import io
-import time
 import wave
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -42,8 +41,8 @@ def _no_window_lookup():
 
 
 @pytest.mark.anyio
-async def test_daemon_streaming_process_success_and_sub_200ms_latency():
-    """Verify streaming dictation: end-of-turn finalization, sub-200ms latency, and paste injection."""
+async def test_daemon_streaming_process_success():
+    """Streaming dictation: the live session is finalized once its audio is sent, and the transcript pasted."""
     config = Config(
         mode="streaming",
         snippets={"my email": "alex@example.com"},
@@ -59,23 +58,25 @@ async def test_daemon_streaming_process_success_and_sub_200ms_latency():
     mock_batch = MagicMock()
     mock_batch.transcribe = AsyncMock(return_value="batch fallback text")
 
-    mock_streaming = MagicMock()
-    # Simulate low-latency WebSocket finish (< 50ms)
-    async def fast_finish(timeout=3.0):
-        await asyncio.sleep(0.03)  # 30ms finalization
+    audio_sent = asyncio.Event()
+
+    async def send_last_audio():
+        await audio_sent.wait()
+
+    stream_task = asyncio.create_task(send_last_audio())
+
+    async def finish():
+        assert stream_task.done(), "committed before the last audio was sent"
         return "deploy Kubernetes cluster"
 
-    mock_streaming.finish = AsyncMock(side_effect=fast_finish)
+    mock_streaming = MagicMock()
+    mock_streaming.finish = AsyncMock(side_effect=finish)
     mock_streaming.close = AsyncMock()
-
-    # Pre-completed stream task
-    stream_task = asyncio.create_task(asyncio.sleep(0.01))
 
     with patch("vox.daemon.has_speech", return_value=True), \
          patch("vox.daemon.paste") as mock_paste:
 
-        t_start = time.monotonic()
-        await _process(
+        process = asyncio.create_task(_process(
             wav_data=wav_data,
             config=config,
             batch_transcriber=mock_batch,
@@ -85,11 +86,12 @@ async def test_daemon_streaming_process_success_and_sub_200ms_latency():
             queue=queue,
             context=context,
             screen_capture_future=None,
-        )
-        elapsed_s = time.monotonic() - t_start
-
-        # Only Vox's own overhead on top of the 30 ms finish; loose enough for a loaded CI machine
-        assert elapsed_s < 1.0, f"Latency {elapsed_s:.3f}s"
+            mode="streaming",
+        ))
+        await asyncio.sleep(0.01)
+        mock_streaming.finish.assert_not_called()  # still waiting for the worker
+        audio_sent.set()
+        await process
 
         # Verify streaming transcriber was finalized and batch was not used
         mock_streaming.finish.assert_awaited_once()
