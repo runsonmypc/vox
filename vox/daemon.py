@@ -317,7 +317,7 @@ class _Daemon:
             return
 
         # 2. Play start audio feedback non-blocking
-        self.sounds.play("start", blocking=False)
+        self.sounds.play("start")
 
         # 3. Attenuate volume
         if config.attenuation_enabled:
@@ -343,7 +343,7 @@ class _Daemon:
     async def _stop_recording(self) -> None:
         await self._restore_volume()
         self.set_state(State.PROCESSING)
-        self.sounds.play("stop", blocking=False)
+        self.sounds.play("stop")
         log.info("Processing...")
 
         await asyncio.sleep(_POST_ROLL_SECONDS)

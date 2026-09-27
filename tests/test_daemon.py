@@ -352,7 +352,7 @@ async def test_daemon_cancel_during_recording():
         await queue.put("toggle")
         await until(lambda: mock_streaming.connect.await_count == 1)
 
-        mock_sounds.play.assert_any_call("start", blocking=False)
+        mock_sounds.play.assert_any_call("start")
         mock_set_volume.assert_called_with(0.4)  # 0.8 * 0.5
         assert mock_recorder.start.call_args.kwargs["stream"] is True
         # Streaming sends its keywords when it connects, before a capture could finish: none is started
@@ -375,7 +375,7 @@ async def test_daemon_cancel_during_recording():
         mock_sounds.reset_mock()
         await queue.put("toggle")
         await until(lambda: mock_sounds.play.call_count >= 1)
-        mock_sounds.play.assert_any_call("start", blocking=False)
+        mock_sounds.play.assert_any_call("start")
 
         main_task.cancel()
         try:
@@ -450,7 +450,7 @@ async def test_daemon_cancel_during_processing():
         mock_sounds.reset_mock()
         await queue.put("toggle")
         await until(lambda: mock_sounds.play.call_count >= 1)
-        mock_sounds.play.assert_any_call("start", blocking=False)
+        mock_sounds.play.assert_any_call("start")
 
         main_task.cancel()
         try:
