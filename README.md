@@ -134,7 +134,7 @@ lists in System Settings.
 ### Linux
 
 Linux has no permission prompts. Vox needs an X11 session (see [Wayland](#wayland)), `xdotool`
-and `xclip` for pasting, and on GNOME the
+and `xclip` for pasting, `xprop` (x11-utils) to tell terminals from other windows, and on GNOME the
 [AppIndicator extension](https://extensions.gnome.org/extension/615/appindicator-support/) for its
 tray icon. The installer enables that extension, or asks GNOME to install it; click **Install** in
 the dialog that appears.
@@ -346,6 +346,9 @@ dictation, in this order:
   python3.12), check the Input Device menu, and try `vox --list-devices`.
 - **A paste did not arrive.** Vox plays the error sound and still saves the text in history: open
   **Search History…** to copy it.
+- **Nothing pastes into a terminal (Linux).** Install `xprop` (x11-utils on Debian and Ubuntu).
+  Without it Vox cannot tell a terminal from other windows and presses Ctrl+V instead of
+  Ctrl+Shift+V; the log warns about it when Vox starts.
 - **No tray icon on GNOME.** Enable "AppIndicator and KStatusNotifierItem Support" in the Extensions
   app, or run the installer again. Vox keeps working without the icon.
 - **Vox does not start at login (Linux).** The installer adds both a systemd user service and an

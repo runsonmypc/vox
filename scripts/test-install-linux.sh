@@ -38,6 +38,9 @@ as_user() { sudo -u "$user" -H "$@"; }
 
 as_user bash "$home/vox/install.sh" --no-service
 [ "$(readlink "$home/.local/bin/vox")" = "$venv/bin/vox" ] || die "install.sh did not link ~/.local/bin/vox"
+for tool in xdotool xclip xprop; do
+    command -v "$tool" >/dev/null || die "install.sh did not install $tool"
+done
 as_user "$home/.local/bin/vox" --help >/dev/null
 as_user "$venv/bin/python" -c 'import gi, vox.ui.tray'
 

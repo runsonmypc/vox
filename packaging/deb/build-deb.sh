@@ -81,7 +81,7 @@ Version: $version
 Architecture: $arch
 Maintainer: Alex <45095641+runsonmypc@users.noreply.github.com>
 Installed-Size: $(du -sk --exclude=DEBIAN "$root" | cut -f1)
-Depends: python3 (>= 3.12), python3 (<< 3.13), python3-gi, gir1.2-gtk-4.0, gir1.2-adw-1, gir1.2-ayatanaappindicator3-0.1, libportaudio2, xdotool, xclip
+Depends: python3 (>= 3.12), python3 (<< 3.13), python3-gi, gir1.2-gtk-4.0, gir1.2-adw-1, gir1.2-ayatanaappindicator3-0.1, libportaudio2, xdotool, xclip, x11-utils
 Suggests: tesseract-ocr, maim, gir1.2-atspi-2.0
 Section: sound
 Priority: optional

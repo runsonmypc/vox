@@ -30,6 +30,10 @@ for file in "$unit" /usr/share/applications/vox.desktop "$autostart" \
     /usr/share/icons/hicolor/256x256/apps/vox.png /usr/share/doc/vox/copyright; do
     [ -f "$file" ] || die "the package did not install $file"
 done
+# Paste, and telling terminals from other windows
+for tool in xdotool xclip xprop; do
+    command -v "$tool" >/dev/null || die "the package's dependencies did not install $tool"
+done
 grep -qx 'ExecStart=/usr/bin/vox' "$unit" || die "$unit does not run /usr/bin/vox"
 [ "$(systemctl --global is-enabled vox.service)" = enabled ] || die "vox.service does not start at login"
 [ -L "$login_link" ] || die "postinst did not create $login_link"

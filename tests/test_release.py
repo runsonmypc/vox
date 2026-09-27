@@ -205,3 +205,21 @@ def test_a_manual_release_run_publishes_nothing():
     assert re.search(r"^    if: github.event_name == 'push'$", jobs["publish"], flags=re.MULTILINE)
     assert "gh release create" in jobs["publish"]
     assert not any("gh release" in lines for job, lines in jobs.items() if job != "publish")
+
+
+def deb_depends() -> set[str]:
+    control = re.search(r"^Depends: (.+)$", (REPO / "packaging/deb/build-deb.sh").read_text(), flags=re.MULTILINE)
+    return {dependency.split()[0] for dependency in control.group(1).split(",")}
+
+
+def install_sh_packages() -> set[str]:
+    """The Debian packages install.sh's linux_deps checks for."""
+    body = (REPO / "install.sh").read_text().split("\nlinux_deps() {\n", 1)[1].split("\n}\n", 1)[0]
+    return {package for group in re.findall(r"missing\+=\(([^)]+)\)", body) for package in group.split()}
+
+
+def test_deb_and_install_sh_need_the_same_system_packages():
+    # xprop tells terminals, which paste with Ctrl+Shift+V, from other windows
+    assert "x11-utils" in deb_depends() and "x11-utils" in install_sh_packages()
+    # The .deb ships its virtualenv, so only install.sh needs python3-venv
+    assert install_sh_packages() - {"python3-venv"} <= deb_depends()

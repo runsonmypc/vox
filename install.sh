@@ -149,6 +149,7 @@ describe_package() {
     gir1.2-gtk-4.0) echo "GTK 4 introspection data" ;;
     gir1.2-adw-1) echo "libadwaita 1.5+ introspection data" ;;
     gir1.2-ayatanaappindicator3-0.1) echo "Ayatana AppIndicator introspection data" ;;
+    x11-utils) echo "xprop (X11 utilities)" ;;
     *) echo "$1" ;;
     esac
 }
@@ -158,6 +159,8 @@ linux_deps() {
     local py=$1 missing=() pkg
     command -v xdotool >/dev/null || missing+=(xdotool)
     command -v xclip >/dev/null || missing+=(xclip)
+    # Without xprop every window looks like an ordinary app, so terminals get Ctrl+V and nothing pastes
+    command -v xprop >/dev/null || missing+=(x11-utils)
     "$py" -c 'import ctypes.util, sys; sys.exit(not ctypes.util.find_library("portaudio"))' || missing+=(libportaudio2)
     "$py" -c 'import ensurepip' 2>/dev/null || missing+=(python3-venv)
     "$py" -c 'import gi' 2>/dev/null || missing+=(python3-gi)

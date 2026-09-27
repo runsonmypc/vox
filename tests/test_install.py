@@ -202,6 +202,34 @@ def test_non_debian_systems_get_a_readable_package_list(home):
     assert "sudo" not in result.stderr
 
 
+@pytest.mark.parametrize("has_xprop", [True, False])
+def test_linux_deps_install_xprop(home, has_xprop):
+    """Without xprop every terminal looks like an ordinary window and gets Ctrl+V, which does not paste there."""
+    hide = "xprop() { :; }" if has_xprop else 'command() { [ "$2" != xprop ] && builtin command "$@"; }'
+    script = f"""
+        xdotool() {{ :; }}; xclip() {{ :; }}
+        {hide}
+        apt-get() {{ :; }}
+        sudo() {{ echo "$*" >>"$HOME/calls"; }}
+        linux_deps /nonexistent/python3
+    """
+    result = bash(home, script)
+    assert result.returncode == 0, result.stderr
+    installed = (home / "calls").read_text().split()
+    assert ("x11-utils" in installed) is not has_xprop
+    assert "xdotool" not in installed and "libportaudio2" in installed
+
+
+def test_other_distributions_are_told_to_install_xprop(home):
+    script = """
+        command() { [ "$2" != apt-get ] && [ "$2" != xprop ] && builtin command "$@"; }
+        linux_deps /nonexistent/python3
+    """
+    result = bash(home, script)
+    assert result.returncode == 1
+    assert "xprop (X11 utilities) (Debian/Ubuntu: x11-utils)" in result.stderr
+
+
 def test_apt_refreshes_its_package_lists_when_install_fails(home):
     script = """
         apt-get() { :; }
