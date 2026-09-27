@@ -156,22 +156,31 @@ telemetry or update checks.
 The spelling hints are your dictionary words plus, when screen hints are on, up to 10 words from
 the focused window's title and up to 25 words from the text visible in it: at most 40 words in
 total. Streaming mode sends its hints as it connects, before the window's text could be read, so
-it uses only the dictionary and the title. Words that look like passwords, tokens or API keys (for
-example `sk-…`, `ghp_…`, `AKIA…`, JSON web tokens, long random strings, or the value after a name
-such as `API_KEY=` or `password:`) are removed before anything is sent. Your API key goes to OpenAI
-with each request, as any OpenAI client's does. OpenAI's API terms and data usage policies apply to
-what it receives.
+it uses only the dictionary and the title. Words that look like passwords, tokens or API keys are
+removed before anything is sent, and before they reach whisper.cpp:
+
+- keys and tokens such as `sk-…`, `ghp_…`, `AKIA…`, JSON web tokens, and long random strings;
+- the value after a name such as `API_KEY=`, `token:`, `DB_PASS=`, `MYSQL_PWD=` or `password:`,
+  and for a password the rest of its line when the value is not in quotes;
+- the user name and password in a URL, as in `postgres://user:password@host` (the host stays);
+- passwords on a command line, as in `--password VALUE`, `--pass=VALUE`, `-pVALUE` and
+  `-u user:VALUE`.
+
+The filter works from patterns and cannot catch every password, so turn screen hints off while
+secrets are on screen. Your API key goes to OpenAI with each request, as any OpenAI client's does.
+OpenAI's API terms and data usage policies apply to what it receives.
 
 ### Screen hints (`[context] screen`)
 
 Screen hints help the transcriber spell names and terms that are on screen. With them on (the
 default), Vox reads text from the focused window only, never the whole screen or other windows:
 
-- **macOS**: the pane text of tmux when the focused app is a terminal running it; otherwise a
+- **macOS**: the text of the tmux pane when the focused app is a terminal running tmux in its only
+  session (one window, one tab, no splits), so the pane is the one on screen; otherwise a
   screenshot of the focused window, read with Apple's on-device text recognition.
 - **Linux**: the window's text through the accessibility interface (AT-SPI). If that finds little,
   a screenshot of the window read with `tesseract` when `maim` and `tesseract` are installed, or,
-  in a terminal running tmux, the pane text.
+  in a terminal running tmux in its only session, the pane text.
 
 Screenshots are never kept: on macOS the temporary file is deleted as soon as it is read, and on
 Linux the image goes straight from `maim` to `tesseract`. Text recognition runs on your computer,
