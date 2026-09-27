@@ -5,11 +5,15 @@ Defines how Vox is installed, updated, removed and released on macOS and Linux: 
 ## ADDED Requirements
 
 ### Requirement: Self-Contained Per-User Installation
-The system SHALL provide one install script for macOS and Linux that installs Vox and its tray support for the current user, without keeping the source checkout and without a compiler. The installer SHALL NOT ask for, copy, or store the OpenAI API key, and SHALL refuse to run as root.
+The system SHALL provide one install script for macOS and Linux that installs Vox and its tray support for the current user, without keeping the source checkout and without a compiler. The installer SHALL NOT ask for, copy, or store the OpenAI API key, SHALL refuse to run as root, and on macOS SHALL never write into or delete an app bundle it did not create.
 
 #### Scenario: Fresh install
 - **WHEN** the user runs `./install.sh`
-- **THEN** Vox is installed into its own virtualenv (`~/.local/share/vox/venv`) from exactly the hash-pinned packages in `requirements.lock`, with a `~/.local/bin/vox` link; missing system packages are installed; Vox starts at login whether or not an OpenAI API key is set; and a Vox launcher is added to the system's applications
+- **THEN** Vox is installed into its own virtualenv (`~/.local/share/vox/venv`) from exactly the hash-pinned packages in `requirements.lock`, with a `~/.local/bin/vox` link; missing system packages are installed (on Linux including `xdotool`, `xclip` and `xprop` from x11-utils); Vox starts at login whether or not an OpenAI API key is set; a Vox launcher is added to the system's applications; and it ends by naming the full path of the `vox` command (`~/.local/bin/vox`), warning when that folder is not on `PATH`
+
+#### Scenario: Another app named Vox (macOS)
+- **WHEN** `/Applications` already holds an app at `Vox.app` (`VOX.app` on the case-insensitive default volume) that is not this user's own Vox launcher (its `Info.plist` is not owned by the user or lacks `com.runsonmypc.vox.launcher`)
+- **THEN** the installer never writes into it: it puts the launcher at `~/Applications/Vox.app` under the same rule, or, when neither place is free, skips the launcher with a warning and still finishes; and `--uninstall` removes only this user's own launcher
 
 #### Scenario: Start after Quit
 - **WHEN** the user has quit Vox from the tray and opens the Vox launcher (the Applications folder or Spotlight on macOS, the applications list on Linux)
@@ -25,7 +29,7 @@ The system SHALL provide one install script for macOS and Linux that installs Vo
 
 #### Scenario: Update
 - **WHEN** the user runs `./install.sh` again from a newer checkout or release
-- **THEN** the new virtualenv is built where the old one was while the old one is kept aside, the new one must import Vox and run `vox --help` before it replaces the old one, existing configuration and history are kept, and the running service is restarted
+- **THEN** the new virtualenv is built where the old one was while the old one is kept aside, the new one must import Vox (with `python -P` from `/`, so the check tests the installed code and not a source tree) and run `vox --help` before it replaces the old one, existing configuration and history are kept, and the running service is restarted
 
 #### Scenario: Failed or interrupted update
 - **WHEN** building the new virtualenv, its smoke test, or the installer itself fails or is interrupted
@@ -79,10 +83,10 @@ The system SHALL remove a per-user install with `install.sh --uninstall`, keepin
 
 #### Scenario: Uninstalling on macOS
 - **WHEN** the user runs `install.sh --uninstall` on macOS
-- **THEN** the LaunchAgent is booted out and deleted, only the `Vox.app` launcher that Vox created is removed, the virtualenv and the `vox` link are removed, and settings, history, `~/Library/Logs/Vox` and the Keychain item are kept
+- **THEN** the LaunchAgent is booted out and deleted, only the `Vox.app` launcher this user's installer created is removed (in `/Applications` or `~/Applications`), the virtualenv and the `vox` link are removed, and settings, history, `~/Library/Logs/Vox` and the Keychain item are kept; a launcher that cannot be deleted is reported and does not stop the rest of the uninstall
 
 ### Requirement: Debian Package
-The system SHALL publish a `vox_<version>_<arch>.deb` for Ubuntu 24.04 and its derivatives, for amd64 and arm64, that installs Vox into `/opt/vox` with `/usr/bin/vox`, depends on the system packages Vox needs, and starts Vox at login for every user.
+The system SHALL publish a `vox_<version>_<arch>.deb` for Ubuntu 24.04 and its derivatives, for amd64 and arm64, that installs Vox into `/opt/vox` with `/usr/bin/vox`, depends on the system packages Vox needs (including `x11-utils` for `xprop`, as `install.sh` requires), and starts Vox at login for every user.
 
 #### Scenario: First install
 - **WHEN** an administrator installs the package
@@ -142,7 +146,7 @@ The project SHALL check every push to `main` and every pull request with GitHub 
 
 #### Scenario: Checks on a pull request
 - **WHEN** a pull request is opened or updated
-- **THEN** CI runs ruff, the lock check, a syntax check and shellcheck of every shell script (with maintainer scripts checked as POSIX sh), the Linux tests under Xvfb with the GTK 4 window tests in their own process and required rather than skipped, the macOS tests, `install.sh` in a clean Ubuntu 24.04 container without a compiler, and an amd64 `.deb` build installed, upgraded and removed in a clean container
+- **THEN** CI runs ruff, the lock check, a syntax check and shellcheck of every shell script (with maintainer scripts checked as POSIX sh), the Linux tests under Xvfb with the GTK 4 window tests in their own process and required rather than skipped, the macOS tests, `install.sh` in a clean Ubuntu 24.04 container without a compiler, and an amd64 `.deb` build installed, upgraded and removed in a clean container, whose smoke test checks that `xdotool`, `xclip` and `xprop` are present and imports the packaged Vox from `/opt/vox` (with `python -P` from `/`), never the checkout it runs from
 
 #### Scenario: Supply chain
 - **WHEN** a workflow uses a third-party action

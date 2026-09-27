@@ -91,7 +91,7 @@ The system SHALL persist every non-empty transcript, and its metadata, into a lo
 
 #### Scenario: Long recording fails partway
 - **WHEN** a recording sent in parts fails after some parts were transcribed
-- **THEN** the text of those parts is stored and the error sound plays
+- **THEN** the text of those parts is stored and the error sound plays; when history cannot store it (history unavailable or the save fails), the text is pasted instead of being dropped
 
 #### Scenario: Provider that produced the text
 - **WHEN** a streaming recording falls back to batch transcription
@@ -135,6 +135,21 @@ The system SHALL provide a lightweight window or popover allowing users to searc
 #### Scenario: Recent list after changes
 - **WHEN** the history window closes
 - **THEN** the tray re-reads its recent dictations, so deleted ones disappear from the menu
+
+### Requirement: Visual Custom Vocabulary and Snippet Management
+The system SHALL provide a management interface to view, add, and remove custom dictionary words and snippet expansions, synchronizing changes to the configuration file. While the configuration file cannot be loaded, the interface SHALL change nothing in it.
+
+#### Scenario: Adding custom vocabulary term
+- **WHEN** the user submits a new word in the vocabulary manager
+- **THEN** the term is appended to the configuration dictionary and immediately hot-reloaded into the running transcription context
+
+#### Scenario: Adding a snippet expansion
+- **WHEN** the user submits a trigger phrase and expansion text
+- **THEN** the snippet mapping is saved to the configuration file and active snippet replacement recognizes the new trigger
+
+#### Scenario: Settings file fails to load
+- **WHEN** `config.toml` cannot be parsed or fails validation
+- **THEN** the vocabulary window says it couldn't read the file, disables adding words and New Snippet, and refuses every change (adding or removing words, and saving or deleting snippets) with a "Couldn't Save" message that names the problem, leaving the file unchanged
 
 ## REMOVED Requirements
 

@@ -107,7 +107,9 @@ dictate before saving one. You can also choose **Set API Key…** from its menu 
 goes into the macOS Keychain or your Linux login keyring (GNOME Keyring, KWallet), never into a
 file Vox writes in plain text, unless your Linux system has no keyring at all, in which case it
 goes into `~/.config/vox/.env`, readable only by you. An `OPENAI_API_KEY` environment variable
-overrides the stored key.
+overrides the stored key. The key window refuses a key with an invisible or typographic character,
+such as a zero-width space or a curly quote, which copying from a web page or a chat can pick up;
+copy the key again.
 
 ## Permissions
 
@@ -156,15 +158,19 @@ telemetry or update checks.
 The spelling hints are your dictionary words plus, when screen hints are on, up to 10 words from
 the focused window's title and up to 25 words from the text visible in it: at most 40 words in
 total. Streaming mode sends its hints as it connects, before the window's text could be read, so
-it uses only the dictionary and the title. Words that look like passwords, tokens or API keys are
-removed before anything is sent, and before they reach whisper.cpp:
+it uses only the dictionary and the title. On Linux, Local (whisper.cpp) mode uses only the
+dictionary: whisper.cpp gets its hints and your `prompt` setting on its command line, which other
+accounts on the computer can see, so Vox gives it no window or screen words there and does not
+capture the screen for it. Those accounts can still see your dictionary and `prompt`, so keep
+secrets out of them. Words that look like passwords, tokens or API keys are removed before
+anything is sent, and before they reach whisper.cpp:
 
 - keys and tokens such as `sk-…`, `ghp_…`, `AKIA…`, JSON web tokens, and long random strings;
 - the value after a name such as `API_KEY=`, `token:`, `DB_PASS=`, `MYSQL_PWD=` or `password:`,
   and for a password the rest of its line when the value is not in quotes;
 - the user name and password in a URL, as in `postgres://user:password@host` (the host stays);
-- passwords on a command line, as in `--password VALUE`, `--pass=VALUE`, `-pVALUE` and
-  `-u user:VALUE`.
+- passwords on a command line, as in `--password VALUE`, `--pass=VALUE`, `--passphrase VALUE`,
+  `-pVALUE` and `-u user:VALUE`.
 
 The filter works from patterns and cannot catch every password, so turn screen hints off while
 secrets are on screen. Your API key goes to OpenAI with each request, as any OpenAI client's does.
@@ -178,9 +184,9 @@ default), Vox reads text from the focused window only, never the whole screen or
 - **macOS**: the text of the tmux pane when the focused app is a terminal running tmux in its only
   session (one window and one tab, not split by the terminal itself), so the pane is the one on
   screen; otherwise a screenshot of the focused window, read with Apple's on-device text recognition.
-- **Linux**: the window's text through the accessibility interface (AT-SPI). If that finds little,
-  a screenshot of the window read with `tesseract` when `maim` and `tesseract` are installed, or,
-  in a terminal running tmux in its only session, the pane text.
+- **Linux** (not in Local mode, see above): the window's text through the accessibility interface
+  (AT-SPI). If that finds little, a screenshot of the window read with `tesseract` when `maim` and
+  `tesseract` are installed, or, in a terminal running tmux in its only session, the pane text.
 
 Screenshots are never kept: on macOS the temporary file is deleted as soon as it is read, and on
 Linux the image goes straight from `maim` to `tesseract`. Text recognition runs on your computer,
@@ -202,13 +208,19 @@ which app has focus, locally, to pick the right paste shortcut.
   example in a screen share, can read them.
 - **Logs**: `~/Library/Logs/Vox/vox.log` on macOS (readable only by you, and emptied when Vox starts
   if it has grown past 10 MiB), the user journal on Linux (`journalctl --user -u vox`). They record
-  events, lengths and errors, not what you said. Only `vox -v` (verbose) logs transcripts and
-  snippet expansions.
+  events, lengths and errors, not what you said. Only `vox -v` (verbose) logs transcripts,
+  snippet expansions and the titles of the windows you dictate into. Your API key is never logged.
 - **Settings**: `~/.config/vox/config.toml`, which holds your dictionary and snippets.
 - **Clipboard**: Vox pastes through the clipboard and then puts back what was there before. On
   macOS that includes images, files and rich text, and Vox marks its temporary copy so clipboard
   managers and Universal Clipboard ignore it. On Linux one form comes back: copied files, otherwise
   plain text, otherwise an image or HTML, so rich text copied from a browser returns as plain text.
+  Vox cannot mark its temporary copy on Linux, so a clipboard manager there may keep each
+  dictation in its history. A password that a password manager marks as one when you copy it is
+  treated differently. On Linux (KeePassXC marks it this way) Vox does not put it back, and the
+  clipboard is empty after the paste: the password could only come back without its mark, and a
+  clipboard history would then keep it. On macOS it comes back for this Mac only, so Universal
+  Clipboard does not offer it to your other devices.
 
 ## Using Vox
 
@@ -220,7 +232,10 @@ which app has focus, locally, to pick the right paste shortcut.
 
 Pressing Shift together with another key, as when typing a capital letter, does nothing. A
 recording that reaches the recording limit (15 minutes unless you change it) stops and is
-transcribed as if you had tapped the key.
+transcribed as if you had tapped the key. In batch mode a recording longer than about 13 minutes
+is uploaded in parts, split at pauses; a part with nothing audible in it is not uploaded, and if a
+part fails, the text of the parts before it is kept in history (or pasted, if history cannot
+store it).
 
 The Vox menu, from the menu bar icon on macOS or the tray icon on Linux:
 
@@ -235,7 +250,9 @@ The Vox menu, from the menu bar icon on macOS or the tray icon on Linux:
 - **Recent dictations**: click one to copy it.
 - **Search History…**, **Vocabulary & Snippets…**, **Set API Key…**
 - **Quit Vox**. To start it again, open Vox from Applications or Spotlight (macOS) or your
-  applications list (Linux).
+  applications list (Linux). Vox quits the same way when its login service stops (for example
+  `systemctl --user stop vox` on Linux), when you log out, or during an update, so a volume
+  lowered for a recording is restored.
 
 The transcription mode and recording limit you choose are saved in `~/.config/vox/config.toml`. The
 input device you choose lasts until Vox quits; set `[audio] device` to keep one.
@@ -279,8 +296,10 @@ If the file has an error when Vox starts (a typo, or a value of the wrong kind s
 `level = "0.5"`), Vox starts anyway but does not record: the menu shows **Settings file has an
 error**, the log names the file and the setting, and the hotkey plays the error sound. Vox does
 not fall back to defaults for dictation, since they might send audio to OpenAI when you chose local
-transcription. Save a fixed file and Vox picks it up within a few seconds. An error in an edit
-while Vox is running is logged and ignored, and the previous settings stay in effect.
+transcription. Save a fixed file and Vox picks it up within a few seconds. While the file has an
+error, the Vocabulary & Snippets window shows the problem and changes nothing; fix the file, then
+reopen the window. An error in an edit while Vox is running is logged and ignored, and the
+previous settings stay in effect.
 
 ### Sounds
 
@@ -317,8 +336,10 @@ not find keep the built-in sound. `[sounds] enabled = false` turns all of them o
 3. Choose **Local (whisper.cpp)** from the Transcription menu.
 
 If the whisper.cpp setup later breaks (a moved model, say), Vox still starts, shows the problem in
-its menu, and lets you switch back to an OpenAI mode. Each hotkey press checks the setup again, so
-once you fix it, dictation works without restarting Vox.
+its menu, and lets you switch back to an OpenAI mode. Each hotkey press checks the setup again
+before recording: while it is broken, Vox plays the error sound and records nothing, and once you
+fix it, dictation works without restarting Vox. An edit to `[whisper_cpp]` or the mode in
+`config.toml` updates the menu's first line within a few seconds.
 
 ## Wayland
 
@@ -339,7 +360,7 @@ dictation, in this order:
 | --- | --- |
 | Settings file has an error | Fix `~/.config/vox/config.toml`; the log names the setting. Vox does not record until then. |
 | API key needed | Choose **Set API Key…**, or switch to Local (whisper.cpp). |
-| Can’t read the keyring | Unlock your login keychain or keyring; Vox tries again on the next hotkey press. |
+| Can’t read the keyring | Unlock your login keychain or keyring; Vox tries again on the next hotkey press. Without a keyring, **Set API Key…** says why `~/.config/vox/.env` can’t be read; it must be owned by you, readable (`chmod 600`) and plain UTF-8 text. |
 | A whisper.cpp problem, such as a missing model | Fix `[whisper_cpp]`, or choose an OpenAI mode. |
 | Accessibility access needed | macOS: allow python3.12 under Accessibility, then quit and reopen Vox. |
 | Microphone is silent: check its permission | Allow the microphone (macOS: Microphone for python3.12) and check the Input Device menu. |
@@ -373,7 +394,8 @@ often not on your `PATH`. With the `.deb`, use `/usr/bin/vox`.
   newer Pythons, and building them would need a compiler.
 - **Something else.** Read the log (`~/Library/Logs/Vox/vox.log` on macOS,
   `journalctl --user -u vox -e` on Linux). For more detail, quit Vox and run
-  `~/.local/bin/vox -v` in a terminal; note that verbose logs include what you dictate.
+  `~/.local/bin/vox -v` in a terminal; note that verbose logs include what you dictate and the
+  titles of your windows.
 
 ## Uninstall
 

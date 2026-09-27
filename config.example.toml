@@ -45,6 +45,8 @@
 # The spoken language, as an ISO code: unset detects it automatically. For example:
 #   language = "en"
 # Text that primes the transcriber in every mode, such as names or a writing style.
+# On Linux, Local (whisper.cpp) mode passes this and the dictionary on whisper-cli's command line,
+# which other accounts on the computer can see.
 # prompt = ""
 
 [whisper]
@@ -69,7 +71,8 @@
 # Screen hints: send words from the focused window (its title and visible text) to the transcriber
 # as spelling hints. Text that looks like a password, token or API key is left out. Capturing the
 # window's text needs the Screen Recording permission on macOS. Set to false to send no window
-# words at all and never capture the screen.
+# words at all and never capture the screen. On Linux, Local (whisper.cpp) mode uses no window
+# words and captures nothing either way.
 # screen = true
 
 [sounds]

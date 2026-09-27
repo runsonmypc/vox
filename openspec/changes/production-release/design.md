@@ -2,10 +2,11 @@
 
 See proposal.md for why this round exists, and the delta specs for the resulting behavior.
 
-The round started from commit 2d928cf on `production-ready`. A full review produced verified findings in five areas: the dictation pipeline, platform code, configuration and persistence, the desktop UI, and release. Two waves of parallel groups fixed them. Each group owned a fixed set of files and worked in its own worktree.
+The round started from commit 2d928cf on `production-ready`. A full review produced verified findings in five areas: the dictation pipeline, platform code, configuration and persistence, the desktop UI, and release. Three waves of parallel groups fixed them. Each group owned a fixed set of files and worked in its own worktree.
 
 - Wave 1 had five groups: A (pipeline), B (platform), C (config and persistence), D (desktop UI) and E (release). Its merged result is commit 1a05778, with 727 tests passing on macOS, and 670 plus 26 GTK tests passing on Linux under Xvfb.
-- Wave 2 implements the decisions the orchestrator took on wave 1's open questions (DECISIONS2.md). It has six groups: G1 (audio), G2 (core), G3 (UI), G4 (release and docs), G5 (these specs) and G6 (read-only verification on the Linux test PC).
+- Wave 2 implements the decisions the orchestrator took on wave 1's open questions (DECISIONS2.md). It has six groups: G1 (audio), G2 (core), G3 (UI), G4 (release and docs), G5 (these specs) and G6 (read-only verification on the Linux test PC). With G6's Linux findings fixed (9929c7a), 841 tests passed on macOS, and 776 plus 26 GTK tests on Linux.
+- Wave 3 fixes the findings of a final adversarial review (DECISIONS3.md, D1 to D20). It has five groups: F1 (core), F2 (audio and the secret filter), F3 (platform), F4 (UI windows) and F5 (release and README), merged from 87b49d4 to b604a8a. The owner then decided the two privacy questions wave 3 left open, and 5011b11 implements them with the last review follow-ups. At 5011b11, 955 tests pass on macOS (30 skipped), and 891 plus 28 GTK tests on Linux under Xvfb, where a live SIGTERM of the tray daemon and a real X11 password-manager clipboard were also checked.
 
 Constraints that shaped every decision (DECISIONS.md, "Hard rules"):
 - Tests never call OpenAI or any paid API, and never touch the real keychain, config, history or installed Vox.
@@ -51,6 +52,7 @@ Constraints that shaped every decision (DECISIONS.md, "Hard rules"):
 - Rejected: keeping streaming's raw `Window:` / `Screen:` prompt lines. They sent the window title verbatim, with no filtering, while the OCR that streaming ran never reached the session.
 - The filter works on whole tokens before words are split. Otherwise a base64 key cut at `/`, `+` and `=` would leave pieces too short to look random.
 - The filter errs toward dropping. Long identifiers that contain digits are never sent as hints, since nobody dictates them.
+- Local mode on Linux starts no capture either, since its prompt never carries screen words (owner decision B below).
 - Streaming starts no capture. Its keywords are sent when the socket opens, before any OCR could finish, so a capture at that point only cost time and Screen Recording exposure. A fallback to batch captures when it starts instead. It reads the window that was focused when the recording started, found again by the window ID and process detected then, and does not look up which window has focus at fallback time.
 
 **5. The recording limit auto-stops, at a new default of 900 s.** The tray offers 5 to 60 minutes. Uploads are 16 kHz mono PCM16. A recording over about 24 MB is split at pauses.
@@ -67,11 +69,12 @@ Constraints that shaped every decision (DECISIONS.md, "Hard rules"):
 
 **7. Clipboard: restore everything, and keep Vox's own write out of clipboard history.**
 - On macOS, every item and type is snapshotted and written back. The dictation write is current-host-only and carries the `org.nspasteboard` transient and auto-generated markers. The user's own Copy (from the tray or the history window) stays a normal copy.
+  - Wave 3 (D12): the text and both markers go in one `NSPasteboardItem`, markers set first, with a single `writeObjects_`. The pasteboard publishes an item's types in the order they were set, so separate writes, or the text set first, let a polling clipboard manager record the dictation unmarked. A refused write raises before Command+V.
 - macOS gives no notice when the target has read the pasteboard, so the restore waits 0.5 s, and skips the restore if `changeCount` moved in the meantime. 50 ms was too short for a busy app, which then pasted the old clipboard.
 - The Command+V keycode is looked up in the current keyboard layout on every paste. A non-Latin layout used to send keycode 0, which is Cmd+A. When a layout has no "v", Vox falls back to the ANSI V key, as macOS does.
 - X11 restores one target. xclip can own only one, so the order is: copied files (`text/uri-list` of `file://` URIs), then plain text, then PNG, then HTML, then other images, then a list of web links when nothing else is offered. Text beats HTML because restoring HTML alone would leave terminals and plain text fields with nothing to paste.
   - Rejected: owning the X selection directly through python-xlib, including INCR transfers, to restore every target losslessly. It is a larger change that could not be checked on X11 during this round.
-- On X11 the dictation is served by a foreground `xclip -quiet`, and Vox counts the requests it reports, so the restore happens only after the target has fetched the text. It waits at most about 1 s for that first fetch, then 0.1 s for a second.
+- On X11 the dictation is served by a foreground `xclip -quiet`, and Vox counts the requests it reports, so the restore happens only after the target has fetched the text. It waits at most about 1 s for that first fetch, then 0.5 s for a second (xclip also counts a refused request for a target it does not offer). When xclip's output closes, Vox takes the selection as lost to a newer copy even before the process is reaped, so that copy is never overwritten.
   - Rejected: `xclip -l N` loops. A clipboard manager that reads the new contents early would use up the count before the paste.
 - Paste runs on a worker thread behind one lock, so a cancelled paste still finishes restoring before the next paste takes its snapshot. Every local tool has a timeout. A transcript that cannot be put on the clipboard sends no keystroke.
 
@@ -95,7 +98,7 @@ Constraints that shaped every decision (DECISIONS.md, "Hard rules"):
 - Rejected: exiting 78, which was wave 1's choice. systemd would then stop the service, and the user would have to start it again by hand after the fix. On macOS, launchd has no `RestartPreventExitStatus`, so it would restart Vox every 10 s.
 - Rejected: recording with the defaults. The user's real settings are unknown. If they chose local-only whisper.cpp, recording on the defaults would send their audio to OpenAI.
 - Rejected: coercing bad values, such as `"0.5"` to 0.5 or 50 to 1.0. Coercion hides mistakes, and wave 1 chose rejection.
-- The status line reports the key problem, then the settings problem, then the mode problem, then a notice.
+- The status line reports the settings problem first, then the key problem, then the mode problem, then a notice. Until the file loads, the mode, and so whether a key is needed at all, is only the default's (changed from key-first after the Linux verification, 9929c7a).
 
 **3. Custom sounds come from `~/.config/vox/sounds/<name>.wav`,** and the repository's empty `sounds/` directory is deleted.
 - Rejected: WAVs next to the package. They worked only from a macOS development checkout, and users could not edit them.
@@ -116,8 +119,10 @@ Constraints that shaped every decision (DECISIONS.md, "Hard rules"):
 **7. A split upload that fails partway** saves the transcribed parts to history, plays the error sound, and shows "Last dictation only partly transcribed: see History" until the next successful dictation.
 - Rejected: pasting the partial text. The user might not notice the missing end.
 - Rejected: discarding it. Those parts are already billed.
+- Wave 3 (D2): the text is saved first, and the notice shows only when the save worked. When history is unavailable or the save fails, the text is pasted through the normal paste path instead, since billed text is never dropped.
 
 **8. `mode_error` keeps wave 1's behavior.** Each toggle retries building the transcriber, so fixing the whisper.cpp setup needs no restart and no menu visit.
+- Wave 3 (D1): in whisper.cpp mode every press builds the transcriber again, which is a PATH lookup and a stat, so a setup that broke while Vox ran is caught before recording instead of after the user has spoken. The config reloader recomputes `mode_error` for the mode the file now selects, so switching the file to an OpenAI mode clears a whisper.cpp problem.
 
 **9. Dead API removed:** the `WhisperTranscriber` alias, `SoundPlayer.play(blocking=)`, and `Config.styles` with its reload.
 - `[styles]` had no effect since LLM post-processing was removed, and a table that is no longer read is simply ignored.
@@ -127,6 +132,38 @@ Constraints that shaped every decision (DECISIONS.md, "Hard rules"):
 **11. Mode rules live in `vox.modes`,** as `LABELS` and `mode_problem`. The tray's enabled state, its labels, the daemon's mode switch and the startup check all use them. The tray and the daemon had duplicate rules, and those had drifted apart.
 
 **12. Out of scope:** HTTP keep-alive, a resident whisper-server, and a pre-upload delay for double-tap cancel.
+
+### Wave 3 decisions (DECISIONS3.md)
+
+**D3. SIGTERM quits the way Quit does.** systemd, launchd, logout, `install.sh` and the `.deb` scripts stop Vox with SIGTERM, which nothing handled, so a stop during a recording left the volume lowered. Headless, the event loop cancels the main task. With a tray, the GUI loop that owns the main thread runs the handler (a GLib signal source on Linux, PyObjC `MachSignals` on macOS) and asks the tray to quit. The first SIGTERM restores the default action, as does the tray loop ending, so a second SIGTERM or one after the GUI loop has ended still ends Vox.
+
+**D4. A long Linux sound finishes before the device rescan.** Restarting PortAudio stops a sound sounddevice is playing, so the return-to-idle rescan waits until 0.1 s after the sound Vox last started ends. The rescan itself never waits for a sound, so a hotkey press is not held up.
+
+**D5. `websockets` stays at WARNING with `-v`,** like `httpx`, `httpcore` and `openai`. At DEBUG it logs every handshake header, including the streaming session's Authorization header.
+
+**D7. The secret filter also drops passwords.** URL user info (`scheme://user:pass@host` keeps `scheme://host`), the value after `--password`, `--passwd`, `--pass` or (5011b11) `--passphrase`, an attached `-p<value>`, `user:pass` after `-u` or `--user`, and values after names containing pass, pwd or credential. After a password-like name an unquoted value runs to the end of its line, so a multi-word password goes whole; Vision OCR now keeps one line per recognized line, as tmux and tesseract text already did, so that rule stops at the line. Command-line values are removed first, so the rest of the command still gives hints. Names are matched from the start of a word, since trying every position was quadratic in a word's length.
+
+**D8. A split recording does not upload its silent parts.** Only parts of a recording over the upload limit are checked, off the event loop; a recording sent in one part is not checked here (the daemon's speech check covers batch and local recordings, and a streaming fallback is sent as it is).
+- 5011b11: a part is skipped only when no second of it is louder than the silence threshold (`audio.is_silent`), not by the whole-recording speech check. Its average and voice detection can call a long part with a few quiet words silent, and a skipped part is lost for good.
+
+**D11. A tmux pane is read only when the terminal app has a single session.** Every window and tab of a terminal app shares its process, so the one tmux client under it may be in a tab the user is not looking at. Every process in the app's tree that has a controlling terminal must be on the tmux client's tty. Otherwise macOS reads the focused window with Vision OCR, and Linux keeps AT-SPI and OCR without the tmux fallback.
+
+**D13 and D14. Missing or unreadable local pieces do not stop Vox.** An unreadable or non-UTF-8 `~/.config/vox/.env` is a keystore error that the tray and key window report, not a crash that the service would restart in a loop. A missing `xprop` is one startup warning, not a status-78 failure, and `install.sh` and the `.deb` now require it (x11-utils).
+
+**D15 and D16. The windows refuse input that cannot work.** The key window refuses a key with a character outside printable ASCII, even with the check off: such a key was saved and then failed every dictation. The vocabulary window refuses every write while `config.toml` fails to load: it shows no snippets then, so a new snippet could replace one with the same trigger without the clash warning.
+
+**D17 to D19. The installer never touches an app it did not create,** tells the user the full path of the `vox` command, and tests the installed code in its smoke tests. A `Vox.app` (or `VOX.app`, the same path on the default case-insensitive volume) is written into or deleted only when its `Info.plist` is the user's and carries Vox's launcher id.
+
+### Owner decisions after wave 3 (5011b11)
+
+These answer the password-manager open question from wave 2 and the `whisper-cli` finding (XSEC-4 and XSEC-5), which wave 3 left for the owner.
+
+**A. A clipboard a password manager marks as a password is never put back where it could leak.**
+- Linux: when the clipboard offers `x-kde-passwordManagerHint` with the value `secret` (KeePassXC and similar), or a hint Vox cannot read, Vox does not snapshot it, and after the paste the clipboard is left empty, as the password manager's own clear would leave it. xclip serves one target, so the password could only come back without its mark, and a clipboard history would then record it.
+- macOS: a clipboard marked `org.nspasteboard.ConcealedType` is restored with its markers for this Mac only (`prepareForNewContentsWithOptions_` with `NSPasteboardContentsCurrentHostOnly`), so Universal Clipboard does not offer it to other devices. The text-only fallback sets the concealed marker before the text.
+- Other clipboards are restored as before on both platforms.
+
+**B. Local mode on Linux passes no screen words on the command line.** The `whisper-cli --prompt` there carries only the configured prompt and the dictionary words, never window titles or screen text, because other local accounts can read a process's arguments in the process list. Vox does not capture the screen for local mode on Linux at all. macOS is unchanged.
 
 ### Technical choices made while implementing (wave 1)
 
@@ -146,7 +183,8 @@ Constraints that shaped every decision (DECISIONS.md, "Hard rules"):
 
 - [X11 restores a single clipboard target] Rich text copied from a browser comes back as plain text. → Documented in the README. The lossless python-xlib selection owner is left to the owner.
 - [macOS restore delay] An app slower than 0.5 s pastes the old clipboard. → The restore is skipped if the clipboard changed meanwhile. The constant is internal, and a setting would be the owner's call.
-- [Password-manager clipboards] Restoring a clipboard marked `ConcealedType` puts back the same bytes and markers, but the new `changeCount` can stop the password manager's auto-clear. → Open question below.
+- [Password-manager clipboards] On macOS the restored concealed clipboard gets a new `changeCount`, which can stop the password manager's auto-clear. On Linux a marked password is not restored, so after a dictation the user copies it again. → Owner decision A: the password stays on this Mac, and is never put back unmarked on Linux.
+- [Local mode on Linux] Window-title and screen words no longer help whisper.cpp spell names there. → Owner decision B: the dictionary still goes, and `[transcription] prompt` still applies.
 - [Secret filter limits] Short secrets and unfamiliar formats can pass. Long identifiers that contain digits are dropped as hints even when harmless. → `[context] screen = false` sends dictionary words only. The filter drops rather than keeps when unsure.
 - [Denied microphone in streaming] All-zero audio is streamed live before the stop-time check abandons the session without a commit. Whether Realtime bills streamed input without a commit is not verified. → The session is abandoned without a commit. Checking permission up front would need the AVFoundation dependency that decision 9 rules out.
 - [Double-tap during a batch recording] The first tap starts processing, so audio may be uploaded before the cancel arrives. → An owner decision (Non-Goals). Local mode is not affected.
@@ -159,7 +197,7 @@ Constraints that shaped every decision (DECISIONS.md, "Hard rules"):
 
 ## Migration Plan
 
-1. Merge the wave-2 branches (`prod2/G1` to `prod2/G5`) into `production-ready`. Run `uv run --frozen pytest -q` and `uv run --frozen ruff check vox tests` on macOS, the Linux suite under Xvfb (without GTK first, then GTK in its own process), and `openspec validate production-release --strict`. Then apply G6's Linux findings.
+1. Merge the wave-2 branches (`prod2/G1` to `prod2/G5`) into `production-ready`. Run `uv run --frozen pytest -q` and `uv run --frozen ruff check vox tests` on macOS, the Linux suite under Xvfb (without GTK first, then GTK in its own process), and `openspec validate production-release --strict`. Then apply G6's Linux findings. Merge wave 3 (`prod3/F1` to `prod3/F5`) and the owner's privacy decisions, and run the same checks again.
 2. The owner accepts the uv 0.12.19 lock, enables private vulnerability reporting, sets the real date in `CHANGELOG.md`, makes the repository public, and pushes tag `v1.0.0`. The release workflow publishes the tarball, both `.deb` files, `install.sh` and `SHA256SUMS`.
 3. For existing installs, run the new `install.sh` (or `curl … | bash` once the release exists). On first start, Vox tightens the history database's permissions. The installer writes the new LaunchAgent and deletes the old `/tmp` logs the user owns. Custom sounds must be copied to `~/.config/vox/sounds/`.
 4. Rollback: a failed update keeps the previous virtualenv automatically. To go back a version, run the previous release's `install.sh`, or `apt install` the previous `.deb`. The history schema and `config.toml` format are unchanged, except that `[styles]` is ignored.
@@ -169,7 +207,6 @@ Constraints that shaped every decision (DECISIONS.md, "Hard rules"):
 
 These are owner questions whose answers change neither these specs nor the approach. Each would become its own follow-up change.
 - HTTP keep-alive for the OpenAI client (performance-6). A custom `http_client` would need a chosen expiry.
-- Whether to leave the clipboard empty after pasting over a concealed or transient clipboard from a password manager, instead of restoring it.
 - Whether to shorten the 1.5 s screen-capture wait, and whether the 0.5 s macOS restore delay should be tunable.
 - On Linux without a keyring, whether to move a `config.toml` `[api] openai_api_key` into the 0600 fallback file (platform-bugs-16). This would change `api-key`, "Moving Plain-Text Keys".
 - Whether the `limit:<seconds>` tray event should accept only `RECORDING_LIMIT_CHOICES`. Today it accepts any positive integer, so hand-edited values keep working.

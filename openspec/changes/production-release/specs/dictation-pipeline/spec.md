@@ -1,6 +1,6 @@
 ## Purpose
 
-Defines what happens to a dictation from the hotkey to the pasted text in every transcription mode: how long a recording may run, how its audio is converted and uploaded, how requests and failures are handled without losing billed work, how the paste restores the clipboard, what the logs may contain, and what stops dictation while a setting, the microphone or an input device needs attention.
+Defines what happens to a dictation from the hotkey to the pasted text in every transcription mode: how long a recording may run, how its audio is converted and uploaded, how requests and failures are handled without losing billed work, how the paste restores the clipboard, what the logs may contain, what stops dictation while a setting, the microphone or an input device needs attention, and how Vox quits when its service is stopped.
 
 ## ADDED Requirements
 
@@ -57,7 +57,7 @@ Every path that lowers the sample rate, which covers the batch upload, the speec
 - **THEN** speech detection, the 16 kHz upload, the whisper.cpp input and the 24 kHz stream all work from it
 
 ### Requirement: Long Recordings Sent in Parts
-When a recording's upload file would exceed about 24 MB (roughly 13 minutes at 16 kHz), the system SHALL split it at pauses into parts under that size, transcribe the parts one after another in order, and join their texts with a single space.
+When a recording's upload file would exceed about 24 MB (roughly 13 minutes at 16 kHz), the system SHALL split it at pauses into parts under that size, transcribe the parts one after another in order, and join their texts with a single space. It SHALL NOT upload a part in which nothing is audible, and SHALL NOT lose the text of parts already transcribed when a later part fails.
 
 #### Scenario: Long recording
 - **WHEN** a recording's 16 kHz upload would be larger than the limit
@@ -67,9 +67,13 @@ When a recording's upload file would exceed about 24 MB (roughly 13 minutes at 1
 - **WHEN** one part's transcript only repeats the hints
 - **THEN** that part is left out and the others are joined
 
+#### Scenario: A silent part
+- **WHEN** a recording is sent in more than one part and no second of a part is louder than the silence threshold (the energy floor of the speech check, with no voice detection), such as the quiet tail of a recording left running until the limit
+- **THEN** that part is not uploaded, the other parts are transcribed and joined, and the log says how many parts were skipped; a part with even a few quiet words in it is still uploaded, and a recording sent as one part is not checked by this rule
+
 #### Scenario: A part fails
 - **WHEN** a part fails after earlier parts were transcribed
-- **THEN** no later part is sent, the text transcribed so far is saved to history (not pasted), the error sound plays, and the tray shows "Last dictation only partly transcribed: see History" until the next successful dictation
+- **THEN** no later part is sent, the text transcribed so far is saved to history (not pasted), the error sound plays, and the tray shows "Last dictation only partly transcribed: see History" until the next successful dictation; if history is unavailable or the save fails, that text is pasted instead, the error sound plays, and no History notice is shown
 
 #### Scenario: The first part fails
 - **WHEN** the first part fails
@@ -110,7 +114,7 @@ The system SHALL paste the transcript into the focused app through the clipboard
 - **THEN** the error is logged, the error sound plays, the transcript is still saved to history, and the recording is not transcribed again
 
 ### Requirement: Clipboard Restore After Paste
-After pasting, the system SHALL restore what was on the clipboard before, for every kind of app. Vox's temporary dictation write SHALL be hidden from clipboard history where the platform allows it, while an explicit Copy by the user SHALL stay a normal copy.
+After pasting, the system SHALL restore what was on the clipboard before, for every kind of app. Vox's temporary dictation write SHALL be hidden from clipboard history where the platform allows it, while an explicit Copy by the user SHALL stay a normal copy. A clipboard that a password manager marks as a password (`org.nspasteboard.ConcealedType` on macOS, `x-kde-passwordManagerHint` = `secret` on X11) SHALL NOT be put back without that mark, and SHALL NOT be offered to the user's other devices.
 
 #### Scenario: Restore on macOS
 - **WHEN** a paste finishes on macOS
@@ -128,16 +132,24 @@ After pasting, the system SHALL restore what was on the clipboard before, for ev
 - **WHEN** the clipboard was empty before the paste
 - **THEN** it is empty again afterwards, so the dictation does not linger on it
 
+#### Scenario: Password manager's copy on Linux (X11)
+- **WHEN** the clipboard offers `x-kde-passwordManagerHint` with the value `secret` (as KeePassXC and similar password managers mark a copied password), or a hint Vox cannot read, when a paste starts
+- **THEN** Vox does not save that clipboard, so after the paste the clipboard is left empty instead of holding the password again without its mark, which a clipboard history would record; a hint with another value is restored as usual
+
+#### Scenario: Password manager's copy on macOS
+- **WHEN** the saved clipboard carries `org.nspasteboard.ConcealedType`
+- **THEN** it is restored with its markers for this Mac only, so Universal Clipboard does not offer it to the user's other devices, and when only its plain text can be put back, the concealed marker is set on the clipboard before the text; other clipboards are restored as before
+
 #### Scenario: Temporary dictation on macOS
 - **WHEN** Vox puts a dictation on the macOS clipboard only to paste it
-- **THEN** the write is marked `org.nspasteboard.TransientType` and `org.nspasteboard.AutoGeneratedType` and kept to this Mac, so clipboard managers and Universal Clipboard ignore it
+- **THEN** the text and both markers (`org.nspasteboard.TransientType` and `org.nspasteboard.AutoGeneratedType`, set before the text) go onto the clipboard as one item in a single write kept to this Mac, so no clipboard manager ever sees the dictation without the markers and Universal Clipboard ignores it; if the pasteboard refuses that write, the paste fails before Command+V is sent
 
 #### Scenario: Explicit Copy
 - **WHEN** the user copies a dictation from the tray's recent list or the history window
 - **THEN** it is a normal clipboard copy that clipboard managers and Universal Clipboard see
 
 ### Requirement: Logging Without Dictated Text
-The system SHALL keep what the user said out of its normal logs. At INFO and above, Vox's log messages SHALL record events, lengths, modes, timings and errors, and SHALL NOT contain transcript text or snippet expansions. That text SHALL appear only at DEBUG level (`vox -v`), as do the window titles Vox detects.
+The system SHALL keep what the user said out of its normal logs. At INFO and above, Vox's log messages SHALL record events, lengths, modes, timings and errors, and SHALL NOT contain transcript text or snippet expansions. That text SHALL appear only at DEBUG level (`vox -v`), as do the window titles Vox detects. The OpenAI API key SHALL NOT appear in the log at any level.
 
 #### Scenario: Normal logging
 - **WHEN** a dictation is transcribed and pasted with default logging
@@ -149,7 +161,7 @@ The system SHALL keep what the user said out of its normal logs. At INFO and abo
 
 #### Scenario: Verbose logging
 - **WHEN** Vox runs with `-v`
-- **THEN** transcripts, dropped echoes, snippet matches and window titles are logged at DEBUG
+- **THEN** transcripts, dropped echoes, snippet matches and window titles are logged at DEBUG, and the OpenAI API key never is: the `httpx`, `httpcore`, `openai` and `websockets` loggers stay at WARNING even with `-v`, so the streaming session's handshake headers are not logged
 
 ### Requirement: Configuration File Errors
 The system SHALL check the type and range of every setting in `config.toml`. When the file cannot be parsed or validated at startup, it SHALL log the error naming the file and the setting, start on the default settings, and refuse to record until the file loads, because the user's real settings, such as local-only transcription, are unknown. It SHALL NOT exit, so the login service does not restart it in a loop.
@@ -169,6 +181,10 @@ The system SHALL check the type and range of every setting in `config.toml`. Whe
 #### Scenario: Permanent startup failure
 - **WHEN** a required system tool is missing (for example `xdotool` or `xclip` on Linux) or the lock directory cannot be created
 - **THEN** Vox logs what is missing and exits with status 78, which the Linux login service does not retry
+
+#### Scenario: xprop missing on Linux
+- **WHEN** `xprop` (package x11-utils) is not installed on Linux
+- **THEN** Vox starts and logs one warning that it cannot tell terminals from other windows, so terminals get `Ctrl+V` and `[window_classes]` does not apply; this is not a status-78 startup failure
 
 ### Requirement: Settings Reload
 The system SHALL apply edits to `config.toml` while running, a few seconds after a save, except for settings that need a restart.
@@ -190,11 +206,19 @@ The system SHALL apply edits to `config.toml` while running, a few seconds after
 - **THEN** Vox logs a warning naming the file and the setting and keeps the settings it has
 
 ### Requirement: Transcription Mode Problems
-The system SHALL start even when the configured transcription mode cannot run, such as whisper.cpp with a missing binary or model, and SHALL retry the mode's setup on every hotkey press, so fixing it needs no restart.
+The system SHALL start even when the configured transcription mode cannot run, such as whisper.cpp with a missing binary or model, and SHALL retry the mode's setup on every hotkey press, so fixing it needs no restart. In local whisper.cpp mode it SHALL check the binary and model again on every hotkey press before recording, even when the setup worked before, and after a settings reload the status line SHALL report the problem of the mode the file now selects.
 
 #### Scenario: Mode cannot run at startup
 - **WHEN** Vox starts in a mode whose setup is broken
 - **THEN** it logs the error, keeps running, and shows the problem in the tray's status line
+
+#### Scenario: Setup breaks while running
+- **WHEN** Vox runs in local whisper.cpp mode, its binary or model goes away (for example a moved model, or a `config.toml` edit that points to a missing file), and the user presses the hotkey
+- **THEN** the error sound plays, the reason is logged and shown in the status line, and no recording starts
+
+#### Scenario: Settings file changes the mode or the setup
+- **WHEN** `config.toml` is edited to another mode or changes the whisper.cpp paths
+- **THEN** after the reload the status line reflects the mode the file now selects: a whisper.cpp problem clears when the file selects an OpenAI mode, and is shown at once when the file's whisper.cpp setup cannot run
 
 #### Scenario: Hotkey while the mode cannot run
 - **WHEN** the user presses the hotkey and the mode's setup is still broken
@@ -223,7 +247,7 @@ The system SHALL treat a recording whose samples are all exactly zero as a micro
 The system SHALL rescan the audio input devices so the tray can offer devices connected after Vox started, without disturbing a recording or delaying the hotkey.
 
 #### Scenario: Startup and return to idle
-- **WHEN** Vox starts, or returns to idle after a dictation (after a short delay so its sounds finish)
+- **WHEN** Vox starts, or returns to idle after a dictation (at least 1 second later, and never before 0.1 seconds after a sound still playing through the audio system has ended, such as a long custom sound on Linux)
 - **THEN** it re-initialises the audio system, lists the input devices, and sends the list to the tray only if it differs from the last one sent
 
 #### Scenario: Periodic rescan on macOS
@@ -251,7 +275,7 @@ The system SHALL accept the hotkey names users naturally write and SHALL match t
 
 #### Scenario: No keyboard backend
 - **WHEN** global hotkeys cannot be set up, for example with no X11 display on Linux
-- **THEN** Vox logs that global hotkeys are unavailable, with the reason, and that it needs an X11 display, and exits with status 1 instead of a traceback
+- **THEN** Vox logs that global hotkeys are unavailable, with the reason in a few words (such as "no X display: DISPLAY is not set"), and that it needs an X11 display, and exits with status 1 instead of a traceback
 
 ### Requirement: Audio Feedback Sounds
 The system SHALL play a short sound for start, stop, error, busy, cancel, pause and resume while `[sounds] enabled` is on, SHALL follow changes to that setting without a restart, and SHALL let the user replace any of these sounds.
@@ -262,8 +286,19 @@ The system SHALL play a short sound for start, stop, error, busy, cancel, pause 
 
 #### Scenario: Custom sound
 - **WHEN** `~/.config/vox/sounds/<name>.wav` exists for one of the sound names (`start`, `stop`, `error`, `busy`, `cancel`, `pause`, `resume`)
-- **THEN** Vox plays that file instead of the built-in sound
+- **THEN** Vox plays that file instead of the built-in sound, and the device rescan on returning to idle does not cut it short (see "Input Device Rescan")
 
 #### Scenario: Sounds turned off
 - **WHEN** `[sounds] enabled = false`, including after an edit while Vox runs
 - **THEN** no sound plays
+
+### Requirement: Quitting on a Stop Signal
+The system SHALL quit on SIGTERM, which a service stop or restart, a logout, `install.sh` updating Vox and the `.deb`'s upgrade or removal all send, the same way it quits from the tray's Quit Vox: on macOS and Linux, with or without a tray, a lowered output volume SHALL be restored and the microphone released.
+
+#### Scenario: Service stop during a recording
+- **WHEN** Vox receives SIGTERM while it records with the output volume lowered, even while the volume is still being lowered
+- **THEN** the recording is not transcribed, the output volume returns to its level before the recording, and Vox exits through the same path as Quit Vox
+
+#### Scenario: Second SIGTERM
+- **WHEN** a second SIGTERM arrives while Vox is shutting down, or after the tray's event loop has ended
+- **THEN** Vox ends at once
