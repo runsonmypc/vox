@@ -58,8 +58,8 @@ _F_KEY_WARNING = (
 _SUPER_WARNING = "GNOME and KDE open their overview when Super is tapped on its own."
 _ALT_WARNING = "Some apps, such as Firefox, show their menu bar when Alt is tapped on its own."
 _FN_WARNING = (
-    "macOS acts on fn too. In System Settings > Keyboard, set “Press 🌐 key to” to “Do Nothing”, "
-    "and if the Dictation shortcut is to press 🌐 twice, choose another."
+    "macOS acts on fn too. In System Settings > Keyboard, set “Press 🌐 key to” (or “Press fn key to”) "
+    "to “Do Nothing”, and if the Dictation shortcut is to press 🌐 or fn twice, choose another."
 )
 
 # NSEvent key codes -> the names the listener reports for those keys on macOS (pynput's darwin Key values)

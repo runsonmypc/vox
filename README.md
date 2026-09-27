@@ -265,8 +265,8 @@ The Vox Transfer menu, from the menu bar icon on macOS or the tray icon on Linux
   and stops dictation (press it twice quickly to cancel; the app you're in receives it too).
   **Use Default** goes back to right Shift. The new hotkey works as soon as you click Save, and
   while the window is open the hotkey does not dictate. macOS acts on fn too: to use it, set
-  **Press 🌐 key to** to **Do Nothing** in System Settings > Keyboard, and if the Dictation
-  shortcut there is to press 🌐 twice, choose another.
+  **Press 🌐 key to** (or **Press fn key to**) to **Do Nothing** in System Settings > Keyboard, and
+  if the Dictation shortcut there is to press 🌐 or fn twice, choose another.
 - **Quit Vox Transfer**. To start it again, open Vox Transfer from Applications or Spotlight (macOS)
   or your applications list (Linux). Vox Transfer quits the same way when its login service stops
   (for example `systemctl --user stop vox` on Linux), when you log out, or during an update, so a

@@ -358,6 +358,23 @@ async def test_pause_and_scroll_lock_toggle_when_tapped(configured, name):
     assert await queue.get() == "toggle"
 
 
+@pytest.mark.anyio
+@pytest.mark.skipif(not hasattr(keyboard.Key, "pause"), reason="Mac keyboards have no Pause or Scroll Lock")
+@pytest.mark.parametrize(("name", "events"), [("pause", ["toggle"]), ("scroll_lock", [])])
+async def test_a_pause_tap_counts_however_short_it_is(name, events):
+    """PS/2 keyboards send Pause's press and release together; other keys still need a 30 ms hold."""
+    queue: asyncio.Queue[str] = asyncio.Queue()
+    listener = HotkeyListener(Config(hotkey=name), asyncio.get_running_loop(), queue)
+    key = getattr(keyboard.Key, name)
+
+    with patch("vox.hotkey.monotonic", return_value=100.0):
+        listener._on_press(key)
+        listener._on_release(key)
+
+    await asyncio.sleep(0)
+    assert [queue.get_nowait() for _ in range(queue.qsize())] == events
+
+
 def test_globe_is_another_name_for_fn():
     assert resolve_key("globe") == resolve_key("Globe") == resolve_key(" FN ") == "fn"
 
@@ -463,6 +480,53 @@ async def test_fn_held_for_a_function_key_keeps_a_combination_working(fn):
     listener._on_press(keyboard.Key.ctrl)
     fn(listener, down=True)
     listener._on_press(keyboard.Key.f5)
+
+    assert await _events(queue) == ["toggle"]
+
+
+@macos
+@pytest.mark.anyio
+@pytest.mark.parametrize("config", [Config(hotkey="f5"), Config(hotkey_fallback="ctrl+f5")])
+async def test_fn_let_go_between_two_presses_of_f5_leaves_the_double_tap_cancel(fn, config):
+    """A Mac laptop needs fn held for F5. fn, not the hotkey here, must not restart the double-tap."""
+    clock = ControlledClock()
+    queue: asyncio.Queue[str] = asyncio.Queue()
+    listener = HotkeyListener(config, asyncio.get_running_loop(), queue)
+    held = [keyboard.Key.ctrl] if config.hotkey_fallback else []
+
+    with patch("vox.hotkey.monotonic", side_effect=clock.time):
+        for _ in range(2):  # fn+F5, or Control+fn+F5, with every key let go between the two
+            for key in held:
+                listener._on_press(key)
+            fn(listener, down=True)
+            listener._on_press(keyboard.Key.f5)
+            clock.advance(0.1)
+            listener._on_release(keyboard.Key.f5)
+            fn(listener, down=False)
+            for key in held:
+                listener._on_release(key)
+            clock.advance(0.1)
+
+    assert await _events(queue) == ["toggle", "cancel"]
+
+
+@macos
+@pytest.mark.anyio
+async def test_a_combination_pressed_while_fn_is_held_is_not_also_an_fn_tap(fn):
+    clock = ControlledClock()
+    queue: asyncio.Queue[str] = asyncio.Queue()
+    listener = HotkeyListener(Config(hotkey="fn", hotkey_fallback="ctrl+f5"), asyncio.get_running_loop(), queue)
+
+    with patch("vox.hotkey.monotonic", side_effect=clock.time):
+        listener._on_press(keyboard.Key.ctrl)  # Control, then fn for F5 on a Mac laptop
+        clock.advance(0.1)
+        fn(listener, down=True)
+        clock.advance(0.1)
+        listener._on_press(keyboard.Key.f5)
+        clock.advance(0.1)
+        listener._on_release(keyboard.Key.f5)
+        fn(listener, down=False)
+        listener._on_release(keyboard.Key.ctrl)
 
     assert await _events(queue) == ["toggle"]
 

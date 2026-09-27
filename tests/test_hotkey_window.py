@@ -253,6 +253,7 @@ def test_fn_warns_that_macos_acts_on_it_too_and_pause_and_scroll_lock_do_not(mod
     if MAC:
         model.record_key(("fn",))
         assert "“Do Nothing”" in model.warning and "Dictation" in model.warning
+        assert "“Press 🌐 key to”" in model.warning and "“Press fn key to”" in model.warning  # Globe and fn keyboards
         assert model.status(None, None) == (model.warning, "warning")
     else:
         for name in ("pause", "scroll_lock"):

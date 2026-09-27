@@ -103,7 +103,9 @@ class HotkeyListener:
         self._last_release_time: float = 0.0
         self._last_fallback_time: float = 0.0
         self._debounce_ms = 50
-        self._min_hold_ms = 30  # filter out synthetic/phantom key events (< 30ms) while keeping quick taps responsive
+        # filter out synthetic/phantom key events (< 30ms) while keeping quick taps responsive; PS/2 keyboards
+        # send Pause's press and release together, so a Pause tap has no hold to measure
+        self._min_hold_ms = 0 if self._hotkey_name == "pause" else 30
 
         self._fallback_keys = parse_combo(self._fallback) if self._fallback else None
         self._combo_state: set[str] = set()
@@ -156,6 +158,8 @@ class HotkeyListener:
             if self._fallback_keys <= self._combo_state:
                 now = monotonic()
                 with self._lock:
+                    if self._modifier_pressed:
+                        self._other_key_pressed = True  # the tap-alone key was held for this combination
                     if self._last_fallback_time > 0 and (now - self._last_fallback_time) * 1000 <= self._double_tap_timeout_ms:
                         self._last_fallback_time = 0.0
                         is_cancel = True
@@ -180,8 +184,10 @@ class HotkeyListener:
 
     def _on_release(self, key: keyboard.Key | keyboard.KeyCode | None) -> None:
         key_name = self._key_name(key)
-        if key_name == "fn" and _fn_down():
-            self._on_press(key)  # pynput reports fn going down as a release too
+        # pynput reports fn going down as a release too. Unless fn is the hotkey, its events are left alone:
+        # Mac laptops hold fn for the function keys, and fn as another key would break an F-key double-tap
+        if key_name == "fn" and self._hotkey_name == "fn" and _fn_down():
+            self._on_press(key)
             return
 
         if key_name == self._hotkey_name:
