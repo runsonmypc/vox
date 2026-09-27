@@ -726,7 +726,7 @@ async def _process(
     """Transcribe a finished recording (finish the live stream, else batch), paste it, and keep it in history.
 
     ``mode`` is the mode the recording started in; a config reload may change config.mode meanwhile.
-    Returns how the transcription went, or None when it gave no text.
+    Returns how the transcription went, or None when it failed or gave no text.
     """
     use_streaming = streaming_transcriber is not None  # only a streaming recording has one
     provider = mode  # what history records: a live session that failed hands the recording to batch
@@ -792,12 +792,17 @@ async def _process(
         raise
     except PartialTranscriptionError as e:
         # The parts that did transcribe are billed: keep them where the user can copy them
-        log.error("Transcription failed partway (%s); the parts transcribed so far are saved in history", e)
         sounds.play("error")
         if history is not None and await _record_history(history, e.text, context, wav_data, provider):
+            log.error("Transcription failed partway (%s); the parts transcribed so far are saved in history", e)
             if tray is not None:
                 tray.history_changed()
             return Outcome.PARTIAL  # the tray points to History until a dictation succeeds
+        log.error(
+            "Transcription failed partway (%s) and history is unavailable, so the parts transcribed so far "
+            "are pasted", e,
+        )
+        await _paste(e.text, context, config)
     except Exception as e:
         log.error("Processing error: %s", e, exc_info=not isinstance(e, VoxError))
         sounds.play("error")

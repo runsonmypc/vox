@@ -865,7 +865,7 @@ async def test_history_records_batch_when_a_streaming_recording_fell_back_to_it(
 
 
 @pytest.mark.anyio
-async def test_a_partial_transcription_is_kept_in_history(tmp_path, speech):
+async def test_a_partial_transcription_is_kept_in_history(tmp_path, speech, caplog):
     history = HistoryDB(tmp_path / "history.db")
     tray = MagicMock()
     kwargs = process_kwargs(history=history, tray=tray)
@@ -879,8 +879,35 @@ async def test_a_partial_transcription_is_kept_in_history(tmp_path, speech):
     [rec] = history.search()
     assert rec.text == "the first ten minutes"
     tray.history_changed.assert_called_once()
+    assert "the parts transcribed so far are saved in history" in caplog.text
     assert kwargs["queue"].get_nowait() == "process_done"
     history.close()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("history_works", [False, True])
+async def test_a_partial_transcription_that_history_cannot_keep_is_pasted(tmp_path, speech, caplog, history_works):
+    history = None
+    if history_works:  # it opened, but the insert fails (a full disk, say)
+        history = HistoryDB(tmp_path / "history.db")
+        history.insert = MagicMock(side_effect=OSError("disk full"))
+    tray = MagicMock()
+    kwargs = process_kwargs(history=history, tray=tray)
+    kwargs["batch_transcriber"].transcribe.side_effect = PartialTranscriptionError(
+        "part 2 of 3 failed: rate limited", "the first ten minutes",
+    )
+    with patch("vox.daemon.paste") as paste:
+        outcome = await _process(**kwargs)
+
+    paste.assert_called_once_with("the first ten minutes", AppType.EDITOR)  # billed text is never dropped
+    kwargs["sounds"].play.assert_called_once_with("error")
+    assert outcome is None  # not a success, and nothing in History for the notice to point to
+    tray.history_changed.assert_not_called()
+    assert "saved in history" not in caplog.text
+    assert "history is unavailable, so the parts transcribed so far are pasted" in caplog.text
+    assert kwargs["queue"].get_nowait() == "process_done"
+    if history is not None:
+        history.close()
 
 
 @pytest.mark.anyio
