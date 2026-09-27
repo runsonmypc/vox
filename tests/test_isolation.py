@@ -52,6 +52,7 @@ async def test_mode_switch_without_a_config_path_stays_in_the_test(tmp_path):
     assert (home_config.read_bytes() if home_config.exists() else None) == before
 
 
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="only the Linux backends load GTK 3")
 def test_pystray_uses_the_dummy_backend():
     pytest.importorskip("pystray")
     assert "pystray._dummy" in sys.modules

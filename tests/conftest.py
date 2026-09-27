@@ -18,8 +18,9 @@ os.environ["HOME"] = _HOME
 atexit.register(shutil.rmtree, _HOME, ignore_errors=True)
 
 # pystray's Linux backends load GTK 3, after which GTK 4 can no longer load in the same process.
-# The tray tests use fake icons, so the dummy backend is enough everywhere.
-os.environ.setdefault("PYSTRAY_BACKEND", "dummy")
+# The tray tests use fake icons there, so the dummy backend is enough. macOS keeps its real backend.
+if sys.platform.startswith("linux"):
+    os.environ.setdefault("PYSTRAY_BACKEND", "dummy")
 
 
 def pytest_configure(config):
