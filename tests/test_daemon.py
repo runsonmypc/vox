@@ -137,6 +137,7 @@ async def test_daemon_streaming_snippet_expansion():
             queue=queue,
             context=context,
             screen_capture_future=None,
+            mode="streaming",
         )
 
         # Verify expansion was pasted
@@ -178,6 +179,7 @@ async def test_daemon_streaming_fallback_to_batch():
             queue=queue,
             context=context,
             screen_capture_future=None,
+            mode="streaming",
         )
 
         # Streaming should have been attempted, failed, and batch called
@@ -220,6 +222,7 @@ async def test_daemon_explicit_batch_mode():
             queue=queue,
             context=context,
             screen_capture_future=None,
+            mode="batch",
         )
 
         mock_batch.transcribe.assert_awaited_once_with(wav_data, context)
@@ -499,6 +502,7 @@ async def test_process_cancellation_suppresses_paste_and_cleans_resources():
             queue=queue,
             context=context,
             screen_capture_future=screen_capture_future,
+            mode="streaming",
         ))
 
         await finish_started.wait()
@@ -535,7 +539,7 @@ async def test_process_cancelled_while_the_stream_worker_drains():
         process_task = asyncio.create_task(_process(
             wav_data=_make_dummy_wav(0.5), config=config, batch_transcriber=MagicMock(),
             streaming_transcriber=mock_streaming, stream_task=stream_task, sounds=MagicMock(),
-            queue=queue, context=context, screen_capture_future=None,
+            queue=queue, context=context, screen_capture_future=None, mode="streaming",
         ))
         await sending.wait()
         await asyncio.sleep(0.01)
@@ -619,6 +623,7 @@ async def test_streaming_bypasses_vad_gate():
             queue=queue,
             context=context,
             screen_capture_future=None,
+            mode="streaming",
         )
 
         mock_vad.assert_not_called()
@@ -649,6 +654,7 @@ async def test_process_records_injected_text_in_history(tmp_path):
             queue=asyncio.Queue(),
             context=context,
             screen_capture_future=None,
+            mode="batch",
             history=history,
         )
 
@@ -680,6 +686,7 @@ async def test_process_skips_history_for_empty_transcript(tmp_path, transcript):
             queue=asyncio.Queue(),
             context=AppContext(wm_class="code", window_title="VSCode", app_type=AppType.EDITOR),
             screen_capture_future=None,
+            mode="batch",
             history=history,
         )
 
@@ -711,6 +718,7 @@ async def test_process_keeps_history_when_paste_fails(tmp_path):
             queue=asyncio.Queue(),
             context=AppContext(wm_class="code", window_title="VSCode", app_type=AppType.EDITOR),
             screen_capture_future=None,
+            mode="batch",
             history=history,
         )
 
@@ -740,6 +748,7 @@ async def test_history_write_failure_does_not_play_error(tmp_path):
             queue=asyncio.Queue(),
             context=AppContext(wm_class="code", window_title="VSCode", app_type=AppType.EDITOR),
             screen_capture_future=None,
+            mode="batch",
             history=history,
         )
 

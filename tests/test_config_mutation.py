@@ -319,7 +319,7 @@ async def test_ui_edits_hot_reload_into_running_daemon(cfg):
         await _process(
             wav_data=b"", config=config, batch_transcriber=batch, streaming_transcriber=None,
             stream_task=None, sounds=MagicMock(), queue=asyncio.Queue(),
-            context=AppContext("mail", "Mail", AppType.EMAIL), screen_capture_future=None,
+            context=AppContext("mail", "Mail", AppType.EMAIL), screen_capture_future=None, mode="batch",
         )
     paste.assert_called_once_with("Best,\nAlex", AppType.EMAIL)
     recorder.reconfigure.assert_not_called()

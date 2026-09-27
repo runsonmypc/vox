@@ -19,6 +19,7 @@ from vox import daemon as daemon_module
 from vox.config import Config, load_config
 from vox.daemon import (
     ACCESSIBILITY_NOTICE,
+    PARTIAL_NOTICE,
     SILENT_MIC_NOTICE,
     WAYLAND_NOTICE,
     State,
@@ -531,6 +532,36 @@ async def test_a_silent_microphone_shows_a_notice_until_audio_returns():
         assert tray.set_notice.call_count == 2
 
 
+@pytest.mark.anyio
+async def test_a_partly_transcribed_dictation_is_noticed_until_the_next_one_succeeds(tmp_path):
+    history = HistoryDB(tmp_path / "history.db")
+    tray = MagicMock()
+    async with running(openai_config(), tray, history=history) as h:
+        h.batch.transcribe.side_effect = PartialTranscriptionError("part 2 of 2 failed: 500", "the first part")
+        h.send("toggle")
+        await until(lambda: h.state is State.RECORDING)
+        h.send("toggle")
+        await until(lambda: tray.set_notice.called)
+        tray.set_notice.assert_called_once_with(PARTIAL_NOTICE)
+        assert h.played("error")
+        assert history.recent(1)[0].text == "the first part"
+
+        h.batch.transcribe.side_effect = TranscriptionError("Transcription API failed: 500")
+        h.send("toggle")
+        await until(lambda: h.state is State.RECORDING)
+        h.send("toggle")
+        await until(lambda: h.batch.transcribe.await_count == 2 and h.state is State.IDLE)
+        assert tray.set_notice.call_count == 1  # a failed dictation is no reason to drop the notice
+
+        h.batch.transcribe.side_effect = None
+        h.send("toggle")
+        await until(lambda: h.state is State.RECORDING)
+        h.send("toggle")
+        await until(lambda: tray.set_notice.call_count == 2)
+        tray.set_notice.assert_called_with(None)  # back to the platform notice, here none
+    history.close()
+
+
 @pytest.mark.parametrize(
     ("env", "notice"),
     [
@@ -660,7 +691,7 @@ def process_kwargs(**overrides):
         "wav_data": SPEECH, "config": Config(mode="batch"), "batch_transcriber": batch,
         "streaming_transcriber": None, "stream_task": None, "sounds": MagicMock(),
         "queue": asyncio.Queue(), "context": AppContext("code", "main.py", AppType.EDITOR),
-        "screen_capture_future": None,
+        "screen_capture_future": None, "mode": "batch",
     }
     kwargs.update(overrides)
     return kwargs
@@ -725,6 +756,24 @@ async def test_history_records_the_mode_the_recording_started_in(tmp_path, speec
     paste.assert_called_once_with("streamed text", AppType.EDITOR)
     [rec] = history.search()
     assert rec.transcription_mode == "streaming"
+    history.close()
+
+
+@pytest.mark.anyio
+async def test_history_records_batch_when_a_streaming_recording_fell_back_to_it(tmp_path, speech):
+    history = HistoryDB(tmp_path / "history.db")
+    streaming = fake_streaming()
+    streaming.finish.side_effect = StreamingError("Connection closed before the transcript completed")
+    kwargs = process_kwargs(
+        config=Config(mode="streaming", context_screen=False), streaming_transcriber=streaming,
+        history=history, mode="streaming",
+    )
+    with patch("vox.daemon.detect_active_window", return_value=AppContext("", "", AppType.OTHER)), \
+         patch("vox.daemon.paste") as paste:
+        await _process(**kwargs)
+    paste.assert_called_once_with("hello world", AppType.EDITOR)
+    [rec] = history.search()
+    assert rec.transcription_mode == "batch"
     history.close()
 
 
@@ -795,7 +844,7 @@ async def test_a_failed_live_session_falls_back_to_batch(handler):
         stream_task = asyncio.create_task(asyncio.sleep(0))
         kwargs = process_kwargs(
             config=Config(mode="streaming", openai_api_key=KEY, context_screen=False),
-            streaming_transcriber=transcriber, stream_task=stream_task,
+            streaming_transcriber=transcriber, stream_task=stream_task, mode="streaming",
         )
         kwargs["batch_transcriber"].transcribe.return_value = "from the batch fallback"
         with patch("vox.daemon.paste") as paste, \

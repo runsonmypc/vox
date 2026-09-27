@@ -45,6 +45,7 @@ log = logging.getLogger(__name__)
 WAYLAND_NOTICE = "Wayland: hotkey and paste only work in X11 apps"
 SILENT_MIC_NOTICE = "Microphone is silent: check its permission"
 ACCESSIBILITY_NOTICE = "Accessibility access needed"
+PARTIAL_NOTICE = "Last dictation only partly transcribed: see History"
 
 # Trailing audio kept after the stop key, so the last syllable isn't cut off
 _POST_ROLL_SECONDS = 0.12
@@ -62,6 +63,13 @@ class State(Enum):
     IDLE = "IDLE"
     RECORDING = "RECORDING"
     PROCESSING = "PROCESSING"
+
+
+class Outcome(Enum):
+    """How the transcription of a finished recording went, when it produced text."""
+
+    TRANSCRIBED = "transcribed"
+    PARTIAL = "partial"  # a recording sent in parts failed partway; the parts before are in history
 
 
 # Keep references so fire-and-forget tasks aren't garbage-collected mid-flight
@@ -195,7 +203,9 @@ class _Daemon:
         self.session: _Session | None = None  # the recording in progress
         self.inflight: _Session | None = None  # the recording being transcribed
         self.process_task: asyncio.Task | None = None
+        # What the tray's notice says, most pressing first; the platform's notice shows when neither is set
         self.mic_silent = False
+        self.partly_transcribed = False
 
         self.batch_transcriber: Transcriber | WhisperCppTranscriber | None = None
         self.transcriber_local = False
@@ -282,7 +292,11 @@ class _Daemon:
             await self._cancel()
         elif event == "process_done":
             # A cancelled task's late event must not end a newer task's processing
-            if self.state is State.PROCESSING and (self.process_task is None or self.process_task.done()):
+            task = self.process_task
+            if self.state is State.PROCESSING and (task is None or task.done()):
+                outcome = task.result() if task is not None and not task.cancelled() else None
+                if outcome is not None:
+                    self._update_notice(partly_transcribed=outcome is Outcome.PARTIAL)
                 self._end_processing()
                 self.set_state(State.IDLE)
                 log.info("Processing complete, ready")
@@ -363,10 +377,10 @@ class _Daemon:
                 "The microphone delivered only silence (every sample zero), which usually means Vox may not use it. "
                 "On macOS, allow it in System Settings > Privacy & Security > Microphone."
             )
-            self._show_mic_notice(True)
+            self._update_notice(mic_silent=True)
             self._abandon_recording()
             return
-        self._show_mic_notice(False)
+        self._update_notice(mic_silent=False)
 
         # Re-detect window at stop time (user may have switched focus)
         stop_context = await asyncio.to_thread(detect_active_window, self.config)
@@ -600,12 +614,18 @@ class _Daemon:
 
     # -- Notices and input devices --------------------------------------------
 
-    def _show_mic_notice(self, silent: bool) -> None:
-        if silent == self.mic_silent:
+    def _update_notice(self, *, mic_silent: bool | None = None, partly_transcribed: bool | None = None) -> None:
+        """Note what the last recording showed, and give the tray the most pressing notice if that changed it."""
+        state = (
+            self.mic_silent if mic_silent is None else mic_silent,
+            self.partly_transcribed if partly_transcribed is None else partly_transcribed,
+        )
+        if state == (self.mic_silent, self.partly_transcribed):
             return
-        self.mic_silent = silent
+        self.mic_silent, self.partly_transcribed = state
         if self.tray is not None:
-            self.tray.set_notice(SILENT_MIC_NOTICE if silent else _platform_notice())
+            notice = SILENT_MIC_NOTICE if self.mic_silent else PARTIAL_NOTICE if self.partly_transcribed else None
+            self.tray.set_notice(notice or _platform_notice())
 
     def _scan_devices_while_idle(self) -> None:
         """Where a re-scan is cheap, keep one scheduled while idle, so a new microphone shows up without a recording."""
@@ -680,16 +700,17 @@ async def _process(
     queue: asyncio.Queue[str],
     context: AppContext,
     screen_capture_future: asyncio.Future | None,
+    mode: str,
     history: HistoryDB | None = None,
     tray: TrayManager | None = None,
-    mode: str | None = None,
-) -> None:
+) -> Outcome | None:
     """Transcribe a finished recording (finish the live stream, else batch), paste it, and keep it in history.
 
     ``mode`` is the mode the recording started in; a config reload may change config.mode meanwhile.
+    Returns how the transcription went, or None when it gave no text.
     """
-    mode = mode or config.mode
     use_streaming = streaming_transcriber is not None  # only a streaming recording has one
+    provider = mode  # what history records: a live session that failed hands the recording to batch
     try:
         t0 = time.monotonic()
 
@@ -715,6 +736,8 @@ async def _process(
                 screen_capture_future = start_screen_capture(context)
 
         if text is None:
+            if use_streaming:
+                provider = "batch"
             if screen_capture_future is not None:
                 context.screen_text = await _screen_text(screen_capture_future)
                 screen_capture_future = None
@@ -731,12 +754,13 @@ async def _process(
             sounds.play("error")  # the text is still in history
 
         if history is not None:
-            saved = await _record_history(history, text, context, wav_data, mode)
+            saved = await _record_history(history, text, context, wav_data, provider)
             if saved and tray is not None:
                 tray.history_changed()
 
         if pasted:
-            log.info("Done in %.3fs (%s)", time.monotonic() - t0, mode)
+            log.info("Done in %.3fs (%s)", time.monotonic() - t0, provider)
+        return Outcome.TRANSCRIBED
 
     except asyncio.CancelledError:
         log.info("Processing task cancelled")
@@ -751,13 +775,16 @@ async def _process(
         # The parts that did transcribe are billed: keep them where the user can copy them
         log.error("Transcription failed partway (%s); the parts transcribed so far are saved in history", e)
         sounds.play("error")
-        if history is not None and await _record_history(history, e.text, context, wav_data, mode) and tray is not None:
-            tray.history_changed()
+        if history is not None and await _record_history(history, e.text, context, wav_data, provider):
+            if tray is not None:
+                tray.history_changed()
+            return Outcome.PARTIAL  # the tray points to History until a dictation succeeds
     except Exception as e:
         log.error("Processing error: %s", e, exc_info=not isinstance(e, VoxError))
         sounds.play("error")
     finally:
         queue.put_nowait("process_done")
+    return None
 
 
 async def _finish_streaming(transcriber: StreamingTranscriber, stream_task: asyncio.Task | None) -> str | None:
