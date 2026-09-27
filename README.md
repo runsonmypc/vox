@@ -42,9 +42,9 @@ Vox is free software under the GNU GPL, version 3.
 ## Install
 
 Vox installs for your user only: its own virtualenv in `~/.local/share/vox/venv`, a `vox` command
-in `~/.local/bin`, a login service that starts it when you log in, and a Vox launcher in your
-applications. Run the installer as yourself, not with `sudo`; it asks for `sudo` only to install
-missing Linux packages.
+in `~/.local/bin` (the installer tells you when that folder is not on your `PATH`), a login service
+that starts it when you log in, and a Vox launcher in your applications. Run the installer as
+yourself, not with `sudo`; it asks for `sudo` only to install missing Linux packages.
 
 On macOS the launcher is `/Applications/Vox.app`, or `~/Applications/Vox.app` when you cannot
 write to `/Applications` or another app there is already called Vox (or VOX). The installer never
@@ -339,11 +339,14 @@ dictation, in this order:
 
 ### Common problems
 
+The commands below use `~/.local/bin/vox`, where the installer puts Vox, since `~/.local/bin` is
+often not on your `PATH`. With the `.deb`, use `/usr/bin/vox`.
+
 - **The hotkey does nothing (macOS).** Check that python3.12 is allowed under Accessibility and
   Input Monitoring in System Settings > Privacy & Security, then quit and reopen Vox. After an
   update that changed Python, remove the old entries and allow the new ones.
 - **Recordings come back empty.** Allow the microphone (macOS: Microphone permission for
-  python3.12), check the Input Device menu, and try `vox --list-devices`.
+  python3.12), check the Input Device menu, and try `~/.local/bin/vox --list-devices`.
 - **A paste did not arrive.** Vox plays the error sound and still saves the text in history: open
   **Search History…** to copy it.
 - **Nothing pastes into a terminal (Linux).** Install `xprop` (x11-utils on Debian and Ubuntu).
@@ -352,16 +355,16 @@ dictation, in this order:
 - **No tray icon on GNOME.** Enable "AppIndicator and KStatusNotifierItem Support" in the Extensions
   app, or run the installer again. Vox keeps working without the icon.
 - **Vox does not start at login (Linux).** The installer adds both a systemd user service and an
-  autostart entry. On a bare window manager that runs neither, start `vox` from your session startup
-  file. If Vox starts but cannot reach the display, run
+  autostart entry. On a bare window manager that runs neither, start `~/.local/bin/vox` from your
+  session startup file. If Vox starts but cannot reach the display, run
   `systemctl --user import-environment DISPLAY XAUTHORITY` in your session startup first.
 - **Local (whisper.cpp) is greyed out.** Set `[whisper_cpp] model`, and `binary` as a full path.
   Once whisper.cpp is the selected mode, the menu's first line shows what is missing.
 - **"Vox needs Python 3.12 or 3.13".** Some of Vox's dependencies do not yet publish packages for
   newer Pythons, and building them would need a compiler.
 - **Something else.** Read the log (`~/Library/Logs/Vox/vox.log` on macOS,
-  `journalctl --user -u vox -e` on Linux). For more detail, quit Vox and run `vox -v` in a terminal;
-  note that verbose logs include what you dictate.
+  `journalctl --user -u vox -e` on Linux). For more detail, quit Vox and run
+  `~/.local/bin/vox -v` in a terminal; note that verbose logs include what you dictate.
 
 ## Uninstall
 

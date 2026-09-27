@@ -272,6 +272,28 @@ def test_linux_uninstall_removes_vox_and_keeps_settings_and_history(home):
     assert "~/.config/vox" in result.stdout
 
 
+def install_script(repo: Path) -> str:
+    return f"""
+        uname() {{ echo Linux; }}
+        linux_install() {{ :; }}
+        install_vox {shlex.quote(str(repo))} 0
+    """
+
+
+def test_install_ends_with_the_full_command_path(home, tmp_path):
+    """~/.local/bin is not on macOS's default PATH, so a bare `vox` is often "command not found"."""
+    result = bash(home, install_script(tmp_path))
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines()[-1] == f"==> Done. Run '{home}/.local/bin/vox --help' for options."
+    assert f"{home}/.local/bin is not on your PATH" in result.stderr
+
+
+def test_install_says_nothing_about_path_when_the_command_is_on_it(home, tmp_path):
+    result = bash(home, install_script(tmp_path), PATH=f"{home}/.local/bin:{os.environ['PATH']}")
+    assert result.returncode == 0, result.stderr
+    assert "PATH" not in result.stderr
+
+
 def test_vox_service_restarts_on_crashes_but_not_on_config_errors():
     unit = configparser.ConfigParser(interpolation=None, strict=True)
     unit.optionxform = str

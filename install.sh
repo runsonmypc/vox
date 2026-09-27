@@ -443,6 +443,16 @@ mac_service() {
 
 # --- Install and uninstall -------------------------------------------------------------------
 
+# macOS's default PATH lacks ~/.local/bin, and Ubuntu's adds it only at a login after it exists
+path_warning() {
+    local dir
+    dir=$(dirname "$BIN")
+    case ":$PATH:" in
+    *":$dir:"*) ;;
+    *) warn "$dir is not on your PATH, so a plain 'vox' is not found; run $BIN, or add $dir to PATH" ;;
+    esac
+}
+
 install_vox() {
     local repo=$1 service=$2
     # setuptools packs whatever is left in build/lib into the wheel, including modules deleted since
@@ -463,7 +473,8 @@ install_vox() {
     fi
     say "Vox asks for your OpenAI API key when it needs one; change it later with Set API Key… in its menu"
     wayland_warning
-    say "Done. Run 'vox --help' for options."
+    path_warning
+    say "Done. Run '$BIN --help' for options."
 }
 
 uninstall_vox() {

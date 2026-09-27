@@ -223,3 +223,11 @@ def test_deb_and_install_sh_need_the_same_system_packages():
     assert "x11-utils" in deb_depends() and "x11-utils" in install_sh_packages()
     # The .deb ships its virtualenv, so only install.sh needs python3-venv
     assert install_sh_packages() - {"python3-venv"} <= deb_depends()
+
+
+def test_readme_troubleshooting_gives_the_full_command_path():
+    """~/.local/bin is not on macOS's default PATH, so a bare `vox` is often "command not found"."""
+    readme = (REPO / "README.md").read_text()
+    troubleshooting = readme.split("\n## Troubleshooting\n", 1)[1].split("\n## ", 1)[0]
+    assert not re.search(r"`vox[ `]", troubleshooting)
+    assert "`~/.local/bin/vox -v`" in troubleshooting and "`/usr/bin/vox`" in troubleshooting
