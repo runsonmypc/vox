@@ -56,15 +56,15 @@ def test_example_config_shows_the_real_defaults(tmp_path):
     assert DOCUMENTED <= found
 
 
-def readme_settings() -> dict[tuple[str | None, str], str]:
-    """The README's settings table as {(table, key): default}, without tables of pairs such as [snippets]."""
-    readme = (REPO / "README.md").read_text()
-    rows = re.findall(r"^\| `(?:\[(\w+)\] )?(\w+)`(?: \(top level\))? \| ([^|]+) \|", readme, flags=re.MULTILINE)
+def documented_settings() -> dict[tuple[str | None, str], str]:
+    """The settings table in docs/settings.md as {(table, key): default}, without tables of pairs such as [snippets]."""
+    page = (REPO / "docs" / "settings.md").read_text()
+    rows = re.findall(r"^\| `(?:\[(\w+)\] )?(\w+)`(?: \(top level\))? \| ([^|]+) \|", page, flags=re.MULTILINE)
     return {(table or None, key): default.strip() for table, key, default in rows}
 
 
-def test_readme_documents_every_setting_at_its_default(tmp_path):
-    documented = readme_settings()
+def test_the_settings_page_documents_every_setting_at_its_default(tmp_path):
+    documented = documented_settings()
     unset = {("audio", "device"), ("transcription", "language")}
     assert set(documented) == DOCUMENTED | unset
     assert Config().audio_device is None and Config().whisper_language is None
@@ -292,9 +292,8 @@ def test_relock_runs_the_pinned_uv_from_a_private_directory(tmp_path):
     assert len(shims) == 2  # a new directory each time, not a fixed path
 
 
-def test_readme_troubleshooting_gives_the_full_command_path():
+def test_troubleshooting_gives_the_full_command_path():
     """~/.local/bin is not on macOS's default PATH, so a bare `vox` is often "command not found"."""
-    readme = (REPO / "README.md").read_text()
-    troubleshooting = readme.split("\n## Troubleshooting\n", 1)[1].split("\n## ", 1)[0]
+    troubleshooting = (REPO / "docs" / "troubleshooting.md").read_text()
     assert not re.search(r"`vox[ `]", troubleshooting)
     assert "`~/.local/bin/vox -v`" in troubleshooting and "`/usr/bin/vox`" in troubleshooting
