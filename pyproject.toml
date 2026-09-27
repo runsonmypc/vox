@@ -1,12 +1,30 @@
 [build-system]
-requires = ["setuptools>=68.0"]
+requires = ["setuptools>=77.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "vox"
-version = "0.1.0"
-description = "Voice-to-text daemon for Linux"
-requires-python = ">=3.12"
+version = "1.0.0"
+description = "Voice dictation for macOS and Linux"
+readme = "README.md"
+license = "GPL-3.0-only"
+license-files = ["LICENSE"]
+authors = [{ name = "Alex", email = "45095641+runsonmypc@users.noreply.github.com" }]
+# webrtcvad-wheels publishes wheels for CPython 3.12 and 3.13 only; 3.14 would need a compiler
+requires-python = ">=3.12,<3.14"
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Environment :: MacOS X",
+    "Environment :: X11 Applications :: GTK",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+]
 dependencies = [
     "pynput>=1.7.6",
     "sounddevice>=0.4.6",
@@ -24,11 +42,21 @@ dependencies = [
     "pyobjc-framework-ApplicationServices; sys_platform == 'darwin'",
 ]
 
+[project.urls]
+Homepage = "https://github.com/runsonmypc/vox"
+Source = "https://github.com/runsonmypc/vox"
+Issues = "https://github.com/runsonmypc/vox/issues"
+Changelog = "https://github.com/runsonmypc/vox/blob/main/CHANGELOG.md"
+
 [dependency-groups]
 dev = [
     "pytest>=8",
     "anyio>=4",
     "ruff>=0.13",
+]
+# The build backend, locked with hashes so installs build Vox without fetching an unpinned setuptools
+build = [
+    "setuptools>=77.0",
 ]
 
 [tool.pytest.ini_options]

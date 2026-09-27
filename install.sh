@@ -1,29 +1,160 @@
 #!/usr/bin/env bash
-# Install or update Vox for the current user on macOS or Linux.
+# Install, update or remove Vox for the current user on macOS or Linux.
 #
-#   ./install.sh               install, run Vox at login, and add a Vox launcher to start it after Quit
-#   ./install.sh --no-service  install only
+#   ./install.sh               install or update, start Vox at login, and add a Vox launcher
+#   ./install.sh --no-service  install or update only
+#   ./install.sh --uninstall   remove Vox, keeping its settings and dictation history
 #
-# Vox gets its own virtualenv in ~/.local/share/vox/venv and a ~/.local/bin/vox
-# link, so this checkout can be deleted afterwards. Re-run to update.
+# Run from a source tree, it installs that tree. Run on its own (for example
+# `curl -fsSL https://github.com/runsonmypc/vox/releases/latest/download/install.sh | bash`),
+# it downloads the latest release, checks it against the release's SHA256SUMS and installs it.
+#
+# Vox gets its own virtualenv in ~/.local/share/vox/venv and a ~/.local/bin/vox link, so the
+# source tree can be deleted afterwards. Re-run to update.
 set -euo pipefail
 
-REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_URL=https://github.com/runsonmypc/vox
+LABEL=com.runsonmypc.vox
 VENV="$HOME/.local/share/vox/venv"
+VENV_OLD="$VENV.old"
 BIN="$HOME/.local/bin/vox"
-SERVICE=1
-case "${1:-}" in
-"") ;;
---no-service) SERVICE=0 ;;
-*) sed -n '2,8s/^# \{0,1\}//p' "$0"; exit 2 ;;
-esac
+APPLICATIONS=/Applications
+MAC_LOGS="$HOME/Library/Logs/Vox"
+# Where launchd wrote Vox's logs before 1.0, readable by every account
+LEGACY_LOGS=(/tmp/vox.stdout.log /tmp/vox.stderr.log)
+# Directories launchd's minimal PATH lacks: Homebrew's whisper-cli and tmux live there
+MAC_PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+BOOTSTRAP_DIR=""
 
 say() { printf '==> %s\n' "$*"; }
+warn() { printf 'warning: %s\n' "$*" >&2; }
 die() { printf 'error: %s\n' "$*" >&2; exit 1; }
+
+usage() {
+    cat <<'EOF'
+Usage: install.sh [--no-service | --uninstall]
+
+  (no option)    install or update Vox, start it at login, and add a Vox launcher
+  --no-service   install or update Vox only
+  --uninstall    remove Vox, keeping its settings and dictation history
+EOF
+}
+
+# --- Source or release -------------------------------------------------------------------
+
+# The source tree this script is part of; fails when it runs from a pipe or a lone download
+source_tree() {
+    local script=${BASH_SOURCE[0]:-} dir
+    [ -n "$script" ] && [ -f "$script" ] || return 1
+    dir=$(cd "$(dirname "$script")" && pwd)
+    [ -f "$dir/pyproject.toml" ] && [ -f "$dir/requirements.lock" ] && [ -d "$dir/vox" ] || return 1
+    printf '%s\n' "$dir"
+}
+
+sha256() {
+    if command -v sha256sum >/dev/null; then sha256sum "$1"; else shasum -a 256 "$1"; fi | cut -d' ' -f1
+}
+
+# Check $1/$2 against the hash $1/SHA256SUMS lists for it
+verify_checksum() {
+    local expected
+    expected=$(awk -v f="$2" '$2 == f || $2 == "*" f { print $1; exit }' "$1/SHA256SUMS")
+    [ -n "$expected" ] || die "SHA256SUMS does not list $2"
+    [ "$(sha256 "$1/$2")" = "$expected" ] || die "$2 does not match its SHA256SUMS entry; the download is damaged"
+}
+
+# Download the latest release, verify it, and run its install.sh with the same options
+bootstrap() {
+    local url tag version archive
+    command -v curl >/dev/null || die "install.sh needs curl to download Vox"
+    url=$(curl -fsSLI -o /dev/null -w '%{url_effective}' "$REPO_URL/releases/latest") ||
+        die "could not reach $REPO_URL"
+    tag=${url##*/}
+    case "$tag" in
+    v[0-9]*) ;;
+    *) die "could not find the latest Vox release at $REPO_URL/releases" ;;
+    esac
+    version=${tag#v}
+    archive="vox-$version.tar.gz"
+    BOOTSTRAP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/vox-install.XXXXXX")
+    trap 'rm -rf "$BOOTSTRAP_DIR"' EXIT
+    say "Downloading Vox $version"
+    curl -fsSL -o "$BOOTSTRAP_DIR/$archive" "$REPO_URL/releases/download/$tag/$archive"
+    curl -fsSL -o "$BOOTSTRAP_DIR/SHA256SUMS" "$REPO_URL/releases/download/$tag/SHA256SUMS"
+    verify_checksum "$BOOTSTRAP_DIR" "$archive"
+    tar -xzf "$BOOTSTRAP_DIR/$archive" -C "$BOOTSTRAP_DIR"
+    [ -f "$BOOTSTRAP_DIR/vox-$version/install.sh" ] || die "$archive has no install.sh"
+    bash "$BOOTSTRAP_DIR/vox-$version/install.sh" "$@"
+}
+
+# --- Virtualenv ----------------------------------------------------------------------------
+
+# A run that stopped midway left the last working virtualenv aside; put it back first
+recover_old_venv() {
+    [ -e "$VENV_OLD" ] || return 0
+    rm -rf "$VENV"
+    mv "$VENV_OLD" "$VENV"
+}
+
+restore_old_venv() {
+    local status=$?
+    rm -rf "$VENV"
+    if [ -e "$VENV_OLD" ]; then
+        mv "$VENV_OLD" "$VENV"
+        warn "the update failed, so the previous Vox stays installed"
+    fi
+    exit "$status"
+}
+
+# Build a new virtualenv with "$@" where the old one was (venvs can't be moved), keeping the old
+# one aside until the new one passes smoke_test, and putting it back if anything fails
+replace_venv() {
+    recover_old_venv
+    mkdir -p "$(dirname "$VENV")"
+    if [ -e "$VENV" ]; then mv "$VENV" "$VENV_OLD"; fi
+    trap restore_old_venv EXIT
+    trap 'exit 130' INT TERM
+    "$@"
+    smoke_test
+    trap - EXIT INT TERM
+    rm -rf "$VENV_OLD"
+}
+
+# Import what Vox needs at startup; none of it needs a display
+smoke_test() {
+    local modules=vox.audio,vox.history,vox.keystore,vox.streaming,vox.transcribe,vox.ui.tray
+    case "$(uname -s)" in
+    Darwin) modules="$modules,vox.daemon" ;;  # pynput needs an X display on Linux
+    Linux) modules="$modules,gi" ;;
+    esac
+    "$VENV/bin/python" -c "import $modules" || die "the new Vox environment does not work"
+    "$VENV/bin/vox" --help >/dev/null || die "the new vox command does not run"
+}
+
+# The binary a virtualenv's python resolves to, or nothing
+venv_python() {
+    [ -x "$1/bin/python" ] || return 0
+    "$1/bin/python" -c 'import os, sys; print(os.path.realpath(sys.executable))' 2>/dev/null || true
+}
+
+# --- Linux ---------------------------------------------------------------------------------
+
+# What a Debian package provides, for users of other distributions
+describe_package() {
+    case "$1" in
+    libportaudio2) echo "PortAudio" ;;
+    python3-venv) echo "Python's venv module" ;;
+    python3-gi) echo "PyGObject" ;;
+    gir1.2-gtk-4.0) echo "GTK 4 introspection data" ;;
+    gir1.2-adw-1) echo "libadwaita 1.5+ introspection data" ;;
+    gir1.2-ayatanaappindicator3-0.1) echo "Ayatana AppIndicator introspection data" ;;
+    *) echo "$1" ;;
+    esac
+}
 
 # Debian/Ubuntu packages Vox needs, probed so nothing is reinstalled
 linux_deps() {
-    local py=$1 missing=()
+    local py=$1 missing=() pkg
     command -v xdotool >/dev/null || missing+=(xdotool)
     command -v xclip >/dev/null || missing+=(xclip)
     "$py" -c 'import ctypes.util, sys; sys.exit(not ctypes.util.find_library("portaudio"))' || missing+=(libportaudio2)
@@ -41,9 +172,41 @@ try:
 except ValueError:
     gi.require_version("AppIndicator3", "0.1")' 2>/dev/null || missing+=(gir1.2-ayatanaappindicator3-0.1)
     [ ${#missing[@]} -eq 0 ] && return
-    command -v apt-get >/dev/null || die "install these packages (Debian names), then re-run: ${missing[*]}"
+    if ! command -v apt-get >/dev/null; then
+        printf 'error: Vox needs these, which this installer can only install with apt:\n' >&2
+        for pkg in "${missing[@]}"; do
+            printf '  %s (Debian/Ubuntu: %s)\n' "$(describe_package "$pkg")" "$pkg" >&2
+        done
+        printf 'Install them with your package manager, then run install.sh again.\n' >&2
+        exit 1
+    fi
     say "Installing system packages: ${missing[*]}"
-    sudo apt-get install -y "${missing[@]}"
+    # Stale or empty package lists can't find them: refresh the lists and try once more
+    sudo apt-get install -y "${missing[@]}" || { sudo apt-get update && sudo apt-get install -y "${missing[@]}"; }
+}
+
+linux_venv() {
+    local repo=$1 py=$2 pip
+    "$py" -m venv "$VENV"
+    # Share only python3-gi with the venv; pip can't build it without a compiler and dev headers
+    ln -s "$("$py" -c 'import gi, os; print(os.path.dirname(gi.__file__))')" \
+        "$("$VENV/bin/python" -c 'import sysconfig; print(sysconfig.get_path("purelib"))')/gi"
+    pip=("$VENV/bin/python" -m pip --quiet --disable-pip-version-check)
+    # Exactly the locked, hash-checked packages, then Vox itself, built by the locked setuptools
+    "${pip[@]}" install --require-hashes --no-deps -r "$repo/requirements.lock"
+    "${pip[@]}" install --no-deps --no-build-isolation "$repo"
+}
+
+linux_install() {
+    local repo=$1 py=/usr/bin/python3  # the system Python: python3-gi (the tray's GTK binding) only installs there
+    [ -x "$py" ] || die "Vox needs the system Python 3 (/usr/bin/python3)"
+    # Some dependencies publish wheels only for these versions; others would need a compiler
+    "$py" -c 'import sys; sys.exit(not (3, 12) <= sys.version_info[:2] <= (3, 13))' ||
+        die "Vox needs Python 3.12 or 3.13 as /usr/bin/python3; this system has $("$py" -V 2>&1)"
+    linux_deps "$py"
+    say "Installing Vox into $VENV"
+    replace_venv linux_venv "$repo" "$py"
+    linux_tray_host
 }
 
 has_tray_host() {
@@ -77,26 +240,82 @@ app_icon() {
 
 # Launchers start the login service rather than vox itself: opening one while Vox runs does nothing,
 # and on macOS Vox keeps the one identity its Microphone and Accessibility grants belong to
-linux_launcher() {
-    local icon="$HOME/.local/share/vox/vox.png" entry="$HOME/.local/share/applications/vox.desktop"
-    mkdir -p "$(dirname "$icon")" "$(dirname "$entry")"
-    app_icon "$icon"
-    cat >"$entry" <<EOF
+desktop_entry() {
+    cat <<EOF
 [Desktop Entry]
 Type=Application
 Name=Vox
-Comment=Start voice dictation
+Comment=$1
 Exec=systemctl --user start vox.service
-Icon=$icon
+Icon=$2
 Terminal=false
 StartupNotify=false
 Categories=Utility;
 EOF
 }
 
+linux_launchers() {
+    local icon="$HOME/.local/share/vox/vox.png"
+    local entry="$HOME/.local/share/applications/vox.desktop" autostart="$HOME/.config/autostart/vox.desktop"
+    mkdir -p "$(dirname "$icon")" "$(dirname "$entry")" "$(dirname "$autostart")"
+    app_icon "$icon"
+    desktop_entry "Start voice dictation" "$icon" >"$entry"
+    # Starts Vox at login on desktops that never reach graphical-session.target; elsewhere a no-op
+    desktop_entry "Start voice dictation at login" "$icon" >"$autostart"
+}
+
+linux_service() {
+    local repo=$1 unit="$HOME/.config/systemd/user/vox.service"
+    mkdir -p "$(dirname "$unit")"
+    cp "$repo/packaging/linux/vox.service" "$unit"
+    systemctl --user daemon-reload
+    systemctl --user enable --quiet vox.service
+    systemctl --user restart vox.service
+    linux_launchers
+    say "Vox is running (logs: journalctl --user -u vox -f)"
+    say "After Quit, start it again from Vox in your applications"
+}
+
+wayland_warning() {
+    [ "$(uname -s)" = Linux ] || return 0
+    [ "${XDG_SESSION_TYPE:-}" = wayland ] || [ -n "${WAYLAND_DISPLAY:-}" ] || return 0
+    warn "this is a Wayland session: Vox's hotkey and paste only work in X11 (XWayland) apps." \
+        "For everything else, log in with an X11 session such as 'Ubuntu on Xorg'."
+}
+
+# --- macOS -----------------------------------------------------------------------------------
+
+mac_venv() {
+    local repo=$1 version=$2 uvpip
+    # The exact patch version links the venv to that build rather than to uv's moving 3.12 alias,
+    # so `uv python upgrade` can't swap the interpreter macOS granted Vox's permissions to
+    uv venv --quiet --managed-python --python "$version" "$VENV"
+    uvpip=(uv pip install --quiet --python "$VENV/bin/python")
+    # Exactly the locked, hash-checked packages, then Vox itself, built by the locked setuptools
+    "${uvpip[@]}" --require-hashes --no-deps -r "$repo/requirements.lock"
+    "${uvpip[@]}" --no-deps --no-build-isolation --no-cache "$repo"
+}
+
+mac_install() {
+    local repo=$1 old_python new_python version
+    command -v uv >/dev/null || die "Vox installs with uv on macOS: brew install uv (or see https://docs.astral.sh/uv/)"
+    uv python find --managed-python 3.12 >/dev/null 2>&1 || uv python install 3.12
+    version=$("$(uv python find --managed-python 3.12)" -c 'import platform; print(platform.python_version())')
+    recover_old_venv
+    old_python=$(venv_python "$VENV")
+    say "Installing Vox into $VENV"
+    replace_venv mac_venv "$repo" "$version"
+    new_python=$(venv_python "$VENV")
+    if [ -n "$old_python" ] && [ "$old_python" != "$new_python" ]; then
+        warn "Vox now runs on a different Python ($new_python)." \
+            "macOS will ask again for Microphone, Accessibility and Input Monitoring (and Screen Recording for screen hints);" \
+            "remove the old python3.12 entries in System Settings > Privacy & Security."
+    fi
+}
+
 mac_launcher() {
     local dir="$HOME/Applications"
-    [ -w /Applications ] && dir=/Applications  # where Finder, Launchpad and Spotlight show apps; admins need no sudo
+    [ -w "$APPLICATIONS" ] && dir=$APPLICATIONS  # where Finder, Launchpad and Spotlight show apps; admins need no sudo
     local app="$dir/Vox.app"
     mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
     cat >"$app/Contents/Info.plist" <<'EOF'
@@ -133,70 +352,158 @@ EOF
     touch "$app"  # so Finder shows a changed icon
 }
 
-start_service() {
+# Write the LaunchAgent from its template; launchd expands neither ~ nor $HOME, so paths are absolute
+render_plist() {
+    "$VENV/bin/python" - "$1" "$2" "@VOX_BIN@=$BIN" "@LOG_FILE@=$3" "@PATH@=$MAC_PATH" <<'EOF'
+import plistlib
+import sys
+
+template, dest, *pairs = sys.argv[1:]
+values = dict(pair.split("=", 1) for pair in pairs)
+
+
+def fill(value):
+    if isinstance(value, str):
+        for placeholder, text in values.items():
+            value = value.replace(placeholder, text)
+        return value
+    if isinstance(value, list):
+        return [fill(v) for v in value]
+    if isinstance(value, dict):
+        return {k: fill(v) for k, v in value.items()}
+    return value
+
+
+with open(template, "rb") as f:
+    job = fill(plistlib.load(f))
+with open(dest, "wb") as f:
+    plistlib.dump(job, f)
+EOF
+}
+
+# Logs can hold dictated text (vox -v), so only the user may read them
+mac_logs() {
+    local old
+    mkdir -p "$MAC_LOGS"
+    chmod 700 "$MAC_LOGS"
+    touch "$MAC_LOGS/vox.log"
+    chmod 600 "$MAC_LOGS/vox.log"
+    for old in "${LEGACY_LOGS[@]}"; do
+        if [ -O "$old" ]; then rm -f "$old"; fi
+    done
+}
+
+mac_service() {
+    local repo=$1 plist="$HOME/Library/LaunchAgents/$LABEL.plist" started=0
+    mac_logs
+    mkdir -p "$(dirname "$plist")"
+    render_plist "$repo/packaging/macos/$LABEL.plist" "$plist" "$MAC_LOGS/vox.log"
+    launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
+    # launchd may still be retiring the old job immediately after bootout.
+    for _ in 1 2 3 4 5; do
+        if launchctl bootstrap "gui/$(id -u)" "$plist"; then started=1; break; fi
+        sleep 1
+    done
+    [ "$started" -eq 1 ] || die "could not start the Vox LaunchAgent"
+    mac_launcher
+    say "Vox is running (logs: $MAC_LOGS/vox.log)"
+    say "After Quit, start it again from Vox in Applications or Spotlight"
+    say "macOS asks once for Microphone, Accessibility and Input Monitoring access, and for Screen Recording while screen hints are on"
+}
+
+# --- Install and uninstall -------------------------------------------------------------------
+
+install_vox() {
+    local repo=$1 service=$2
+    # setuptools packs whatever is left in build/lib into the wheel, including modules deleted since
+    rm -rf "$repo/build"
+    case "$(uname -s)" in
+    Linux) linux_install "$repo" ;;
+    Darwin) mac_install "$repo" ;;
+    esac
+    mkdir -p "$(dirname "$BIN")"
+    ln -sfn "$VENV/bin/vox" "$BIN"
+
+    # Vox asks for the OpenAI API key itself and keeps it in the system keychain, so the installer never handles it
+    if [ "$service" -eq 1 ]; then
+        case "$(uname -s)" in
+        Linux) linux_service "$repo" ;;
+        Darwin) mac_service "$repo" ;;
+        esac
+    fi
+    say "Vox asks for your OpenAI API key when it needs one; change it later with Set API Key… in its menu"
+    wayland_warning
+    say "Done. Run 'vox --help' for options."
+}
+
+uninstall_vox() {
+    local app
     case "$(uname -s)" in
     Linux)
-        mkdir -p "$HOME/.config/systemd/user"
-        cp "$REPO/vox.service" "$HOME/.config/systemd/user/vox.service"
-        systemctl --user daemon-reload
-        systemctl --user enable --quiet vox.service
-        systemctl --user restart vox.service
-        linux_launcher
-        say "Vox is running (logs: journalctl --user -u vox -f)"
-        say "After Quit, start it again from Vox in your applications"
+        if command -v systemctl >/dev/null; then
+            systemctl --user disable --now vox.service 2>/dev/null || true
+        fi
+        rm -f "$HOME/.config/systemd/user/vox.service" "$HOME/.config/autostart/vox.desktop" \
+            "$HOME/.local/share/applications/vox.desktop" "$HOME/.local/share/vox/vox.png"
+        if command -v systemctl >/dev/null; then
+            systemctl --user daemon-reload 2>/dev/null || true
+            systemctl --user reset-failed vox.service 2>/dev/null || true
+        fi
         ;;
     Darwin)
-        local plist="$HOME/Library/LaunchAgents/com.runsonmypc.vox.plist" started=0
-        mkdir -p "$(dirname "$plist")"
-        cp "$REPO/com.runsonmypc.vox.plist" "$plist"
-        launchctl bootout "gui/$(id -u)/com.runsonmypc.vox" 2>/dev/null || true
-        # launchd may still be retiring the old job immediately after bootout.
-        for _ in 1 2 3 4 5; do
-            if launchctl bootstrap "gui/$(id -u)" "$plist"; then started=1; break; fi
-            sleep 1
+        launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
+        rm -f "$HOME/Library/LaunchAgents/$LABEL.plist"
+        for app in "$APPLICATIONS/Vox.app" "$HOME/Applications/Vox.app"; do
+            if grep -qs "$LABEL.launcher" "$app/Contents/Info.plist"; then rm -rf "$app"; fi
         done
-        [ "$started" -eq 1 ] || die "could not start the Vox LaunchAgent"
-        mac_launcher
-        say "Vox is running (logs: /tmp/vox.stderr.log)"
-        say "After Quit, start it again from Vox in Applications or Spotlight"
-        say "macOS asks once for Microphone, Accessibility and Input Monitoring access"
+        ;;
+    esac
+    rm -rf "$VENV" "$VENV_OLD"
+    if [ -L "$BIN" ]; then rm -f "$BIN"; fi
+    say "Vox is uninstalled"
+    say "Kept your settings in ~/.config/vox and your dictation history in ~/.local/share/vox; delete those folders to remove them"
+    case "$(uname -s)" in
+    Linux)
+        say "Your OpenAI API key stays in your login keyring; remove it with: secret-tool clear service vox username openai_api_key"
+        if dpkg-query -W -f='${Status}' vox 2>/dev/null | grep -q 'ok installed'; then
+            say "The Vox .deb package is still installed; remove it with: sudo apt remove vox"
+        fi
+        ;;
+    Darwin)
+        say "Kept the logs in ~/Library/Logs/Vox"
+        say "Your OpenAI API key stays in your login keychain (item \"vox\"); remove it with Keychain Access"
+        say "Remove Vox's python3.12 entries in System Settings > Privacy & Security if you no longer need them"
         ;;
     esac
 }
 
-# setuptools packs whatever is left in build/lib into the wheel, including modules deleted since
-rm -rf "$REPO/build"
+main() {
+    local service=1 action=install repo
+    [ "$#" -le 1 ] || { usage >&2; exit 2; }
+    case "${1:-}" in
+    "") ;;
+    --no-service) service=0 ;;
+    --uninstall) action=uninstall ;;
+    -h | --help) usage; exit 0 ;;
+    *) usage >&2; exit 2 ;;
+    esac
+    [ "$(id -u)" -ne 0 ] || die "run install.sh as your own user, not as root; it asks for sudo itself when it needs system packages"
+    case "$(uname -s)" in
+    Linux | Darwin) ;;
+    *) die "unsupported system: $(uname -s)" ;;
+    esac
 
-case "$(uname -s)" in
-Linux)
-    PY=/usr/bin/python3  # the system Python: python3-gi (the tray's GTK binding) only installs there
-    [ -x "$PY" ] || die "python3 not found"
-    "$PY" -c 'import sys; sys.exit(sys.version_info < (3, 12))' || die "Vox needs Python 3.12+; the system has $("$PY" -V 2>&1)"
-    linux_deps "$PY"
-    say "Installing Vox into $VENV"
-    rm -rf "$VENV"
-    "$PY" -m venv "$VENV"
-    # Share only python3-gi with the venv; pip can't build it without a compiler and dev headers
-    ln -s "$("$PY" -c 'import gi, os; print(os.path.dirname(gi.__file__))')" \
-        "$("$VENV/bin/python" -c 'import sysconfig; print(sysconfig.get_path("purelib"))')/gi"
-    "$VENV/bin/python" -m pip install --quiet --disable-pip-version-check "$REPO"
-    linux_tray_host
-    ;;
-Darwin)
-    command -v uv >/dev/null || die "Vox installs with uv on macOS: brew install uv (or see https://docs.astral.sh/uv/)"
-    say "Installing Vox into $VENV"
-    rm -rf "$VENV"
-    uv venv --quiet --managed-python --python 3.12 "$VENV"
-    uv pip install --quiet --python "$VENV/bin/python" "$REPO"
-    ;;
-*)
-    die "unsupported system: $(uname -s)"
-    ;;
-esac
-mkdir -p "$(dirname "$BIN")"
-ln -sfn "$VENV/bin/vox" "$BIN"
+    if [ "$action" = uninstall ]; then
+        uninstall_vox
+    elif repo=$(source_tree); then
+        install_vox "$repo" "$service"
+    else
+        bootstrap "$@"
+    fi
+}
 
-# Vox asks for the OpenAI API key itself and keeps it in the system keychain, so the installer never handles it
-if [ "$SERVICE" -eq 1 ]; then start_service; fi
-say "Vox asks for your OpenAI API key when it needs one; change it later with Set API Key… in its menu"
-say "Done. Run 'vox --help' for options."
+# Everything above only defines functions, so `curl | bash` runs nothing until the whole script
+# has arrived. Tests source the file to call its functions without running main.
+if ! (return 0 2>/dev/null); then
+    main "$@"
+fi

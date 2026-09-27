@@ -9,7 +9,7 @@ See `proposal.md` for background and motivation.
 - `vox/attenuation.py`: Linux PipeWire `wpctl`.
 - `vox.service`: Systemd user service.
 
-On macOS Darwin, these subsystems need native platform adapters while preserving Linux/X11 compatibility for Linux hosts (`pc-tail`).
+On macOS Darwin, these subsystems need native platform adapters while preserving Linux/X11 compatibility for existing Linux hosts.
 
 ## Goals / Non-Goals
 

@@ -1,58 +1,91 @@
-# Vox configuration
-# Copy to ~/.config/vox/config.toml
+# Vox configuration: copy to ~/.config/vox/config.toml and uncomment what you want to change.
+# Every commented-out setting shows its default. Vox applies changes within a few seconds of a save,
+# except [hotkey], which applies after a restart (Quit Vox, then open it again). Screen hints and the
+# recording limit apply from the next dictation, and [audio] changes wait for a recording in progress
+# to end.
+#
+# The OpenAI API key does not go here. Choose Set API Key… from the Vox menu; Vox keeps it in the
+# macOS Keychain or your Linux login keyring. OPENAI_API_KEY in the environment overrides it.
 
-# The OpenAI API key is not set here. Choose Set API Key… from the Vox menu; Vox keeps it in
-# the macOS Keychain or your Linux login keyring. OPENAI_API_KEY in the environment overrides it.
+# Words the transcriber should spell exactly as written, sent as hints with every dictation.
+# The Vocabulary & Snippets… window edits this list. For example:
+#   dictionary = ["FastAPI", "PostgreSQL", "Kubernetes"]
+# dictionary = []
 
 [hotkey]
-key = "right_shift"
-fallback = "ctrl+space"
+# The key that starts and stops dictation when tapped on its own. Double-tap it to cancel.
+# Other choices include "right_ctrl", "right_alt", "cmd_r" (macOS) and "f13".
+# key = "right_shift"
+# An optional key combination that also toggles dictation, for example "ctrl+space".
+# fallback = ""
+# How quickly the second tap of a double-tap must follow the first, in milliseconds.
+# double_tap_timeout_ms = 400
 
 [audio]
-# device = 0              # Audio input device index or name substring (use --list-devices)
-# device = "MacBook Pro Microphone"
-sample_rate = 16000
-channels = 1
-max_recording_seconds = 30
+# The input device: unset uses the system default. Set an index or name from `vox --list-devices`,
+# or pick one from the Input Device menu. For example:
+#   device = "MacBook Pro Microphone"
+# sample_rate = 48000
+# channels = 1
+# The recording limit, in seconds. A recording that reaches it stops and is transcribed as usual.
+# The Recording Limit menu sets it to 5, 10, 15, 30 or 60 minutes.
+# max_recording_seconds = 900
 
-# [transcription]
-# mode = "batch"              # "batch" (OpenAI), "streaming" (OpenAI), or "whisper_cpp" (local)
+[transcription]
+# "batch" and "streaming" send audio to OpenAI; "whisper_cpp" transcribes on this computer.
+# The Transcription menu switches between them and saves the choice here.
+# mode = "batch"
+# The OpenAI model for streaming mode.
 # streaming_model = "gpt-live-transcribe"
+# The spoken language, as an ISO code: unset detects it automatically. For example:
+#   language = "en"
+# Text that primes the transcriber in every mode, such as names or a writing style.
+# prompt = ""
 
 [whisper]
-model = "gpt-transcribe"  # OpenAI file transcription model
-# language = "en"         # Force language for either batch provider (auto-detect if unset)
+# The OpenAI model for batch mode.
+# model = "gpt-transcribe"
 
-# To use local whisper.cpp, clone https://github.com/ggml-org/whisper.cpp,
-# then run these commands in that checkout:
+[whisper_cpp]
+# Local transcription with whisper.cpp (https://github.com/ggml-org/whisper.cpp). No OpenAI key is
+# needed and no audio leaves this computer. In a whisper.cpp checkout, run:
 #   cmake -B build && cmake --build build -j --config Release
 #   sh ./models/download-ggml-model.sh large-v3-turbo
-# Uncomment [transcription] and set mode = "whisper_cpp" above.
-# No OpenAI API key is needed in this mode. Paths may be absolute, use ~, or be
-# relative to the directory containing this config file.
-# [whisper_cpp]
-# binary = "/absolute/path/to/whisper.cpp/build/bin/whisper-cli"
-# model = "/absolute/path/to/whisper.cpp/models/ggml-large-v3-turbo.bin"
-# Once configured, use Vox's Transcription menu to switch providers while idle.
-# The menu saves the selection to this file for the next launch.
+# then set model below and choose Local (whisper.cpp) from the Transcription menu. Paths may be
+# absolute, start with ~, or be relative to this file. Give binary as a full path when Vox runs at
+# login, since the login service may not search the same PATH as your shell. For example:
+#   binary = "~/whisper.cpp/build/bin/whisper-cli"
+#   model = "~/whisper.cpp/models/ggml-large-v3-turbo.bin"
+# binary = "whisper-cli"
+# model = ""
+
+[context]
+# Screen hints: send words from the focused window (its title and visible text) to the transcriber
+# as spelling hints. Text that looks like a password, token or API key is left out. Capturing the
+# window's text needs the Screen Recording permission on macOS. Set to false to send no window
+# words at all and never capture the screen.
+# screen = true
 
 [sounds]
-enabled = true
+# Play a sound when dictation starts, stops, is cancelled or fails.
+# enabled = true
 
 [attenuation]
-enabled = true
-level = 0.5    # reduce system volume to 50% of current while recording
+# Lower the system volume while recording, then restore it.
+# enabled = true
+# The volume while recording, as a fraction of the current volume.
+# level = 0.5
 
-# Custom dictionary - words to preserve as-is
-# dictionary = ["FastAPI", "PostgreSQL", "Kubernetes"]
+[snippets]
+# When a whole dictation matches a trigger (ignoring case and trailing .?!,), Vox pastes the
+# expansion instead. The Vocabulary & Snippets… window edits these. For example:
+#   "my email" = "alex@example.com"
+#   "my address" = "123 Main St, Springfield, IL"
 
-# Snippets - exact match on raw transcript -> expansion (skips LLM)
-# [snippets]
-# "my email" = "alex@example.com"
-# "my address" = "123 Main St, Springfield, IL"
-
-# Window class overrides (WM_CLASS -> app type)
-# [window_classes]
-# "Slack" = "CHAT"
-# "Discord" = "CHAT"
-# "Thunderbird" = "EMAIL"
+[window_classes]
+# Tell Vox what kind of app a window belongs to: TERMINAL, EDITOR, CHAT, EMAIL, BROWSER or OTHER.
+# Each key is matched, ignoring case, as part of the window's WM_CLASS on Linux, or of its bundle
+# identifier and app name on macOS. On Linux, TERMINAL apps get Ctrl+Shift+V instead of Ctrl+V,
+# and terminals running tmux give their pane text as screen hints. For example:
+#   "Slack" = "CHAT"
+#   "org.wezfurlong.wezterm" = "TERMINAL"
