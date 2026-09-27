@@ -40,6 +40,7 @@ _PROBLEM_CHARS = 72
 _MENU_RETRY_SECONDS = 0.05
 
 RECENT_HEADER = "Click a recent dictation to copy it"
+CONFIG_ERROR = "Settings file has an error"
 
 HISTORY_WINDOW = "vox.ui.history_window"
 VOCAB_WINDOW = "vox.ui.vocab_window"
@@ -373,8 +374,9 @@ class TrayManager:
         return "Can’t read the keyring" if self._config.api_key_error else "API key needed"
 
     def _problem(self) -> str | None:
-        """What the status line reports while idle, most urgent first: the key, the mode, then a daemon notice."""
-        problem = self._key_problem() or self._config.mode_error or self._notice
+        """What the status line reports while idle, most urgent first: the key, config.toml, the mode, a notice."""
+        config = self._config
+        problem = self._key_problem() or (CONFIG_ERROR if config.config_error else None) or config.mode_error or self._notice
         return _one_line(problem, _PROBLEM_CHARS) if problem else None
 
     def _status_line(self) -> str:

@@ -12,6 +12,7 @@ from vox.config import Config
 from vox.history import HistoryDB
 from vox.ui.icons import IconState, make_icon
 from vox.ui.tray import (
+    CONFIG_ERROR,
     HISTORY_WINDOW,
     KEY_WINDOW,
     RECENT_HEADER,
@@ -597,6 +598,7 @@ def test_daemon_can_open_the_key_window():
 
 def test_status_line_reports_the_most_urgent_problem_while_idle():
     config = Config(mode="batch")
+    config.config_error = "Invalid config.toml: Expected '=' after a key in a key/value pair (at line 3, column 7)"
     config.mode_error = "whisper.cpp model not found: /models/ggml-base.bin"
     tray, icon = make_tray(config)
     tray.set_notice("Microphone is silent: check its permission")
@@ -604,6 +606,11 @@ def test_status_line_reports_the_most_urgent_problem_while_idle():
 
     config.openai_api_key = "test"
     tray.key_changed()
+    assert icon.title == f"Vox · {CONFIG_ERROR}"  # then config.toml; the parser's message is in the log
+    assert items(icon.menu)[0].text == icon.title
+
+    config.config_error = None  # the reloader read the fixed file and told the tray
+    tray.mode_changed()
     assert icon.title == "Vox · whisper.cpp model not found: /models/ggml-base.bin"  # then the mode
     assert items(icon.menu)[0].text == icon.title
 
@@ -616,6 +623,18 @@ def test_status_line_reports_the_most_urgent_problem_while_idle():
     tray.set_state("IDLE")
     tray.set_notice(None)
     assert icon.title == "Vox · Idle"
+
+
+def test_a_settings_file_error_shows_while_paused_but_not_while_processing():
+    config = Config(openai_api_key="test")
+    config.config_error = "Invalid config.toml"
+    tray, icon = make_tray(config)
+    assert icon.title == f"Vox · {CONFIG_ERROR}"
+    tray.set_paused(True)
+    assert icon.title == f"Vox · {CONFIG_ERROR}"
+    tray.set_paused(False)
+    tray.set_state("PROCESSING")
+    assert icon.title == "Vox · Processing…"
 
 
 def test_a_long_problem_is_shortened_to_one_line():
