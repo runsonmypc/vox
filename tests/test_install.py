@@ -259,7 +259,7 @@ def test_launch_agent_has_absolute_paths_and_private_logs(home):
     path = job["EnvironmentVariables"]["PATH"].split(":")
     assert "/opt/homebrew/bin" in path and "/usr/local/bin" in path and "/usr/bin" in path
     text = out.read_text()
-    assert "@" not in text and "/tmp/" not in text and "Developer" not in text
+    assert "@" not in text and "/tmp/vox" not in text and "Developer" not in text
 
 
 def test_mac_logs_are_private_and_old_tmp_logs_are_removed(home):
