@@ -213,6 +213,11 @@ def test_macos_dictation_is_never_on_the_clipboard_without_its_markers(pasteboar
     assert observed.calls[0] == ("prepareForNewContentsWithOptions_", AppKit.NSPasteboardContentsCurrentHostOnly)
     assert pasteboard.pb.stringForType_(AppKit.NSPasteboardTypeString) == "dictated"
 
+    # writeObjects_ publishes the item's types one at a time in their order, so the markers come first
+    [(_, [item])] = [call for call in observed.calls if call[0] == "writeObjects_"]
+    order = [str(t) for t in item.types()]
+    assert all(order.index(marker) < order.index(AppKit.NSPasteboardTypeString) for marker in injector._TRANSIENT_TYPES)
+
 
 @darwin_only
 def test_macos_refused_dictation_write_raises_and_never_pastes(pasteboard):
