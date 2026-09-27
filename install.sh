@@ -443,17 +443,18 @@ mac_logs() {
 }
 
 mac_service() {
-    local repo=$1 plist="$HOME/Library/LaunchAgents/$LABEL.plist" started=0
+    local repo=$1 plist="$HOME/Library/LaunchAgents/$LABEL.plist" started=0 error=""
     mac_logs
     mkdir -p "$(dirname "$plist")"
     render_plist "$repo/packaging/macos/$LABEL.plist" "$plist" "$MAC_LOGS/vox.log"
     launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
-    # launchd may still be retiring the old job immediately after bootout.
+    # launchd may still be retiring the old job right after bootout, so an attempt can fail with
+    # "Bootstrap failed: 5: Input/output error"; retry quietly and report only a failure that lasts
     for _ in 1 2 3 4 5; do
-        if launchctl bootstrap "gui/$(id -u)" "$plist"; then started=1; break; fi
+        if error=$(launchctl bootstrap "gui/$(id -u)" "$plist" 2>&1); then started=1; break; fi
         sleep 1
     done
-    [ "$started" -eq 1 ] || die "could not start the Vox Transfer LaunchAgent"
+    [ "$started" -eq 1 ] || die "could not start the Vox Transfer LaunchAgent: $error"
     say "Vox Transfer is running (logs: $MAC_LOGS/vox.log)"
     mac_launcher
     say "macOS asks once for Microphone, Accessibility and Input Monitoring access, and for Screen Recording while screen hints are on"

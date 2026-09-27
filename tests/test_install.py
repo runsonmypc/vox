@@ -342,6 +342,40 @@ def test_mac_logs_are_private_and_old_tmp_logs_are_removed(home):
     assert not any(p.exists() for p in legacy)
 
 
+# launchctl bootstrap fails the first `failures` times, as it does while launchd retires the old job
+FLAKY_BOOTSTRAP = """
+    id() { echo 501; }
+    mac_logs() { :; }
+    render_plist() { :; }
+    mac_launcher() { :; }
+    sleep() { :; }
+    launchctl() {
+        [ "$1" = bootstrap ] || return 0
+        echo x >>"$HOME/attempts"
+        if [ "$(wc -l <"$HOME/attempts")" -le {failures} ]; then
+            echo "Bootstrap failed: 5: Input/output error" >&2
+            return 5
+        fi
+    }
+    mac_service "$PWD"
+"""
+
+
+def test_an_update_hides_a_launchd_retry_that_succeeds(home):
+    result = bash(home, FLAKY_BOOTSTRAP.replace("{failures}", "1"))
+    assert result.returncode == 0, result.stderr
+    assert (home / "attempts").read_text().count("x") == 2
+    assert "Bootstrap failed" not in result.stdout + result.stderr
+    assert "Vox Transfer is running" in result.stdout + result.stderr
+
+
+def test_a_launch_agent_that_never_starts_reports_why(home):
+    result = bash(home, FLAKY_BOOTSTRAP.replace("{failures}", "5"))
+    assert result.returncode == 1
+    assert (home / "attempts").read_text().count("x") == 5
+    assert "could not start the Vox Transfer LaunchAgent: Bootstrap failed: 5: Input/output error" in result.stderr
+
+
 def test_mac_uninstall_removes_only_the_vox_launchers(home):
     venv = fake_venv(home)
     ours = home / "SystemApplications/Vox Transfer.app/Contents"
