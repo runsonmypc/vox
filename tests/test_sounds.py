@@ -152,6 +152,13 @@ def _amplitude(samples, seconds, window=0.004):
     return np.abs(samples[start : start + round(window * _SAMPLE_RATE)]).max()
 
 
+def _pitch(samples, seconds, cycles):
+    """The frequency in Hz over `cycles` cycles, from the first rising zero crossing at or after `seconds`."""
+    start = round(seconds * _SAMPLE_RATE)
+    rising = np.nonzero((samples[start:-1] <= 0) & (samples[start + 1 :] > 0))[0]
+    return cycles * _SAMPLE_RATE / (rising[cycles] - rising[0])
+
+
 def test_every_cue_has_a_built_in_sound(built_in):
     assert set(built_in) == set(_SYSTEM_SOUNDS)
     with patch("sys.platform", "linux"):
@@ -205,6 +212,12 @@ def test_a_damped_partial_dies_quickly_from_then_on():
     assert _amplitude(damped, 0.05) == pytest.approx(_amplitude(ringing, 0.05))
     assert _amplitude(damped, 0.12) < _amplitude(ringing, 0.12) / 10
     assert len(damped) < 0.2 * _SAMPLE_RATE < len(ringing)
+
+
+def test_a_bent_partial_starts_sharp_and_slides_down_to_its_pitch():
+    samples = _synthesize([Partial(0, 1000, 0.3, 40, bend=1.5)])
+    assert 1400 < _pitch(samples, 0, cycles=2) < 1500  # the first cycles, already sliding down from 1500 Hz
+    assert _pitch(samples, 0.03, cycles=10) == pytest.approx(1000, rel=0.01)
 
 
 def test_a_band_of_noise_stays_in_its_band():
