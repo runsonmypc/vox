@@ -58,11 +58,19 @@ _BLOCK_FRAMES = 1 << 16
 
 
 def read_wav(wav_bytes: bytes) -> tuple[np.ndarray, int, int]:
-    """Samples (int16, channels interleaved), sample rate and channel count of a PCM16 WAV."""
+    """Samples (int16, channels interleaved, read-only), sample rate and channel count of a PCM16 WAV.
+
+    When the data chunk comes last, as in Vox's own WAVs, the samples are a view of
+    ``wav_bytes`` rather than a copy: an hour at 48 kHz is 346 MB.
+    """
     with wave.open(io.BytesIO(wav_bytes), "rb") as wf:
         if wf.getsampwidth() != 2:
             raise ValueError("expected 16-bit PCM audio")
         rate, channels = wf.getframerate(), wf.getnchannels()
+        size = wf.getnframes() * 2 * channels
+        start = len(wav_bytes) - size
+        if start >= 8 and wav_bytes[start - 8 : start] == b"data" + size.to_bytes(4, "little"):
+            return np.frombuffer(wav_bytes, dtype="<i2", offset=start), rate, channels
         pcm = wf.readframes(wf.getnframes())
     return np.frombuffer(pcm, dtype="<i2"), rate, channels
 
@@ -516,8 +524,10 @@ class Recorder:
         ``stream`` also feeds 24 kHz chunks to ``stream_chunks()``. ``on_limit``
         is called on ``loop`` once the recording reaches max_recording_seconds.
         """
+        # A fresh queue for each recording: the tail and end marker of one that was just stopped or
+        # discarded may still be on their way through the loop, and must land in the old queue
+        self._stream_queue = None
         self.get_chunk_queue(loop)
-        self._drop_queued_chunks()
 
         self._streaming = stream
         self._resampler = Resampler(self._sample_rate, STREAM_RATE) if stream else None

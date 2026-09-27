@@ -200,8 +200,41 @@ async def test_local_prompt_never_carries_secrets_from_the_screen(tmp_path):
 
 
 @pytest.mark.anyio
+async def test_local_prompt_never_carries_passwords_from_urls_or_command_lines(tmp_path):
+    config = _config(tmp_path, _COPY_INPUT)
+    screen = "\n".join([
+        "DATABASE_URL=postgres://app:Xy7pQ9zRw2@db.internal:5432/prod",
+        "mysql -uroot -pS3cr3tRoot",
+        "curl -u alice:S3cretPass https://example.com",
+        "password: Correct Horse Battery Staple",
+        "DeploymentConfig",
+    ])
+    context = AppContext("term", "psql --password Hunter2Xyz", AppType.TERMINAL, screen_text=screen)
+    await WhisperCppTranscriber(config).transcribe(_wav(), context)
+    argv = (tmp_path / "bin" / "argv.txt").read_text()
+    for secret in ["Xy7pQ9zRw2", "S3cr3tRoot", "S3cretPass", "Horse", "Staple", "Hunter2Xyz"]:
+        assert secret not in argv
+    assert "DATABASE_URL" in argv and "DeploymentConfig" in argv
+
+
+@pytest.mark.anyio
 async def test_local_cli_rejects_invalid_audio_before_running(tmp_path):
     config = _config(tmp_path, _COPY_INPUT)
     with pytest.raises(TranscriptionError, match="Invalid WAV input"):
         await WhisperCppTranscriber(config).transcribe(b"not audio")
     assert not (tmp_path / "bin" / "argv.txt").exists()
+
+
+@pytest.mark.anyio
+async def test_a_transcript_that_is_not_valid_utf8_is_kept(tmp_path):
+    # whisper.cpp tokens are bytes, so a segment line can end inside a character: here "日" is split
+    char = "日".encode()
+    output = b"Hello " + char[:2] + b"\n" + char[2:] + b" world"
+    script = f"""import sys
+from pathlib import Path
+a = sys.argv
+Path(a[a.index("-of") + 1] + ".txt").write_bytes({output!r})
+"""
+    text = await WhisperCppTranscriber(_config(tmp_path, script)).transcribe(_wav())
+    assert text.startswith("Hello ") and text.endswith(" world")
+    assert "�" in text

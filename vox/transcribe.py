@@ -9,7 +9,7 @@ import threading
 import wave
 from typing import TYPE_CHECKING, Any
 
-from .audio import upload_wavs
+from .audio import has_speech, upload_wavs
 from .config import Config
 from .errors import TranscriptionError
 from .window import AppContext
@@ -47,10 +47,24 @@ _SECRET_RE = re.compile(
     r"(?<![A-Za-z0-9])(?:sk-[\w-]{16,}|gh[po]_\w{16,}|github_pat_\w{16,}|xox[abprs]-[\w-]{8,}"
     r"|A(?:KIA|SIA)[0-9A-Z]{12,}|AIza[\w-]{20,}|eyJ[\w.-]{10,})"
 )
-# The value in "API_KEY=...", "password: ...", '"token": "..."' and the like
+# The value in "API_KEY=...", '"token": "..."' and the like. The names are matched from the start
+# of a word only: tried inside every word, the scan is quadratic in its length.
 _SECRET_VALUE_RE = re.compile(
-    r"""(?i)(\w*(?:key|token|secret|passw(?:or)?d)\w*)["']?\s*[=:]\s*(?:"[^"\n]*"|'[^'\n]*'|[^\s"',;]+)"""
+    r"""(?i)(?<!\w)(\w*(?:key|token|secret|credential)\w*)["']?\s*[=:]\s*(?:"[^"\n]*"|'[^'\n]*'|[^\s"',;]+)"""
 )
+# The value in "password: ...", "DB_PASS=...", "MYSQL_PWD=..." and the like. Unquoted, it runs to
+# the end of the line, since a password can have spaces in it: "password: correct horse battery".
+_PASSWORD_VALUE_RE = re.compile(
+    r"""(?i)(?<!\w)(\w*(?:pass|pwd)\w*)["']?\s*[=:]\s*(?:"[^"\n]*"|'[^'\n]*'|[^\n]*)"""
+)
+# The credentials in a URL: "postgres://user:password@host" keeps only "postgres://host"
+_URL_USERINFO_RE = re.compile(r"(?<=://)[^\s/]*@")
+# A command-line argument, quoted or not
+_ARG = r"""(?:"[^"\n]*"|'[^'\n]*'|\S+)"""
+# A password given on a command line: "--password VALUE", "--pass=VALUE" and mysql's "-pVALUE"
+_PASSWORD_ARG_RE = re.compile(rf"(?<!\S)(--pass(?:w(?:or)?d)?)(?:=|\s+){_ARG}|(?<!\S)(-p){_ARG}")
+# curl's "-u user:password" and "--user=user:password"
+_USER_ARG_RE = re.compile(r"""(?<!\S)(-u|--user)(?:=|\s*)(?:"[^"\n]*:[^"\n]*"|'[^'\n]*:[^'\n]*'|[^\s"':]*:\S*)""")
 # A PEM or OpenSSH key block, whose last line can be too short for the run rule below
 _PEM_BLOCK_RE = re.compile(r"-----BEGIN [^-\n]+-----.*?(?:-----END [^-\n]+-----|\Z)", re.S)
 # Text between whitespace and quotes. Secrets are judged per token, before the word split cuts
@@ -72,6 +86,11 @@ def _is_secret_token(token: str) -> bool:
 
 def _drop_secrets(text: str) -> str:
     text = _PEM_BLOCK_RE.sub(" ", text)
+    text = _URL_USERINFO_RE.sub("", text)
+    # Before the name rules: a flag's value is one argument, not the rest of the line
+    text = _PASSWORD_ARG_RE.sub(lambda m: m.group(1) or m.group(2), text)
+    text = _USER_ARG_RE.sub(r"\1", text)
+    text = _PASSWORD_VALUE_RE.sub(r"\1", text)
     text = _SECRET_VALUE_RE.sub(r"\1", text)
     return _TOKEN_RE.sub(lambda m: "" if _is_secret_token(m.group()) else m.group(), text)
 
@@ -226,6 +245,12 @@ class Transcriber:
             log.debug("Transcription prompt: %d chars", len(echo))
         if len(parts) > 1:
             log.info("Recording is over the upload limit; sending it in %d parts", len(parts))
+            # The daemon checked the whole recording for speech; a long one can still end in a
+            # silent part (a recording left running until the limit), which would be billed for nothing
+            speech = await asyncio.to_thread(lambda: [part for part in parts if has_speech(part)])
+            if len(speech) < len(parts):
+                log.info("Skipped %d of %d parts with no speech", len(parts) - len(speech), len(parts))
+            parts = speech
 
         texts: list[str] = []
         for number, part in enumerate(parts, 1):

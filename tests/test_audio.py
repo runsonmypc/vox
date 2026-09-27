@@ -14,6 +14,8 @@ from vox.audio import (
     Resampler,
     has_speech,
     is_digital_silence,
+    pcm16_wav,
+    read_wav,
     resolve_input_device,
     split_at_pauses,
     upload_wavs,
@@ -363,6 +365,48 @@ async def test_a_live_session_that_gives_up_stops_the_queue_but_not_the_recordin
     assert recorder.get_chunk_queue().empty()
 
 
+@pytest.mark.anyio
+async def test_a_discarded_recording_does_not_end_the_next_one_s_live_stream():
+    """A cancel and the next start can run in one loop turn, before the discarded recording's
+    tail and end marker, posted through the loop, have landed."""
+    recorder = Recorder(Config(sample_rate=48000))
+    loop = asyncio.get_running_loop()
+    streamed = []
+
+    async def consume():
+        async for chunk in recorder.stream_chunks():
+            streamed.append(chunk)
+
+    with patch("vox.audio.sd.InputStream", side_effect=[FakeStream(), FakeStream()]):
+        recorder.start(loop=loop, stream=True)
+        recorder._callback(_block(1, 2400), 2400, None, 0)
+        await asyncio.sleep(0)
+        recorder.discard()
+        recorder.start(loop=loop, stream=True)
+        consumer = asyncio.create_task(consume())
+        for value in (2, 3, 4):
+            recorder._callback(_block(value, 2400), 2400, None, 0)
+            await asyncio.sleep(0)
+        recorder.stop()
+        await consumer
+
+    assert len(np.frombuffer(b"".join(streamed), dtype="<i2")) == 3600  # all of the second recording
+
+
+@pytest.mark.anyio
+async def test_the_block_delivered_while_stopping_streams_before_the_end_marker():
+    """The last PortAudio block is posted through the loop, so the end marker must be too."""
+    recorder = Recorder(Config(sample_rate=48000))
+    closing = FakeStream(on_stop=lambda: recorder._callback(_block(3, 2400), 2400, None, 0))
+    with patch("vox.audio.sd.InputStream", return_value=closing):
+        recorder.start(loop=asyncio.get_running_loop(), stream=True)
+        recorder._callback(_block(1, 2400), 2400, None, 0)
+        recorder.stop()
+        await asyncio.sleep(0)
+    _, streamed = _drain(recorder.get_chunk_queue())
+    assert len(streamed) == 2400  # 4800 frames at 48 kHz, the last block included
+
+
 def test_stop_does_not_leak_audio_into_the_next_recording():
     """Replaces the old pre-roll test: the mic is closed between recordings, so nothing carries over."""
     recorder = Recorder(Config(sample_rate=16000))
@@ -551,3 +595,28 @@ def test_is_digital_silence_flags_only_all_zero_audio():
     assert not is_digital_silence(_wav(np.r_[np.zeros(1599), 1], 16000))
     assert not is_digital_silence(_wav([], 16000))
     assert not is_digital_silence(b"")
+
+
+def test_read_wav_returns_a_view_of_vox_s_own_wavs():
+    """No copy of the samples: for an hour at 48 kHz that is 346 MB, made by every reader."""
+    stereo = np.arange(-4800, 4800, dtype=np.int16)
+    wav = pcm16_wav(stereo, 48000, channels=2)
+    samples, rate, channels = read_wav(wav)
+    assert (rate, channels) == (48000, 2)
+    np.testing.assert_array_equal(samples, stereo)
+    assert np.shares_memory(samples, np.frombuffer(wav, dtype=np.uint8))
+    assert not samples.flags.writeable
+
+    samples, _, _ = read_wav(pcm16_wav(np.empty(0, dtype=np.int16), 16000))
+    assert len(samples) == 0
+
+
+def test_read_wav_copies_when_another_chunk_follows_the_data():
+    audio = np.arange(1600, dtype=np.int16)
+    wav = pcm16_wav(audio, 16000)
+    info = b"INFOISFT" + (4).to_bytes(4, "little") + b"Vox\0"
+    tail = b"LIST" + len(info).to_bytes(4, "little") + info
+    wav = wav[:4] + (len(wav) - 8 + len(tail)).to_bytes(4, "little") + wav[8:] + tail
+    samples, rate, channels = read_wav(wav)
+    assert (rate, channels) == (16000, 1)
+    np.testing.assert_array_equal(samples, audio)
