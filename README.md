@@ -450,8 +450,6 @@ docker run --rm -v "$PWD:/src:ro" -w /src ubuntu:24.04 packaging/deb/smoke-test.
 [RELEASING.md](RELEASING.md) describes how to make a release and how to try the release workflow
 without publishing anything.
 
-Report security problems as described in [SECURITY.md](SECURITY.md).
-
 ## License
 
 Copyright (C) 2026 Alex

@@ -11,7 +11,6 @@ pushed. This file is for the maintainer. Users install from the README.
 - **Allow the actions the workflows use** if the repository restricts them (Settings > Actions >
   General): `actions/checkout`, `actions/upload-artifact`, `actions/download-artifact` and
   `astral-sh/setup-uv`. The workflows pin each one to a commit, with its version in a comment.
-- **Turn on private vulnerability reporting** (Settings > Security), which `SECURITY.md` points to.
 - The workflows need no secrets. Only the `publish` job can write to the repository, through the
   `contents: write` permission it asks for itself.
 
