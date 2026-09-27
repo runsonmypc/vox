@@ -19,6 +19,15 @@ dictionary = ["FastAPI"]
 "my email" = "alex@example.com"
 """
 
+# Parses, but fails validation: the window shows no snippets, while the file still has one
+INVALID = """\
+[audio]
+max_recording_seconds = 0
+
+[snippets]
+"my address" = "221B Baker Street, London"
+"""
+
 
 @pytest.fixture
 def cfg(tmp_path):
@@ -116,6 +125,28 @@ def test_broken_config_is_reported_not_overwritten(tmp_path):
     assert path.read_text() == "[snippets\n"
 
 
+def test_invalid_config_refuses_every_write(tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_text(INVALID)
+    model = loaded(path)
+    assert model.load_error and model.snippets == {}
+    assert model.conflict("my address") is None  # so the window could not warn before replacing it
+    for write in (
+        lambda: model.save_snippet("my address", "typo"),
+        lambda: model.remove_snippet("my address"),
+        lambda: model.add_words("Vox"),
+        lambda: model.remove_words(["Vox"]),
+    ):
+        with pytest.raises(ConfigError, match="max_recording_seconds"):
+            write()
+    assert path.read_text() == INVALID
+
+    path.write_text(INVALID.replace("= 0", "= 60"))
+    model.reload()
+    model.save_snippet("sign off", "Best")
+    assert load_config(path).snippets == {"my address": "221B Baker Street, London", "sign off": "Best"}
+
+
 def test_missing_config_file_is_created(tmp_path):
     path = tmp_path / "vox" / "config.toml"
     model = loaded(path)
@@ -152,6 +183,7 @@ def test_mac_lists_words_and_snippets(appkit, mac_window):
     assert mac_rows(mac_window.snippets_table) == 1
     assert mac_window.words_footer.stringValue().startswith("Saved to ")
     assert mac_window.word_field.isEnabled()
+    assert mac_window.new_button.isEnabled()
 
 
 def test_mac_add_words_saves_selects_and_clears(appkit, cfg, mac_window):
@@ -270,6 +302,30 @@ def test_mac_broken_config_disables_editing(appkit, tmp_path):
     controller.window.close()
 
 
+def test_mac_invalid_config_disables_new_snippet_and_refuses_saves(appkit, tmp_path):
+    from vox.ui.mac.vocab import VocabController
+
+    path = tmp_path / "config.toml"
+    path.write_text(INVALID)
+    with patch("vox.ui.mac.kit.alert") as alert:
+        controller = VocabController.alloc().initWithModel_(VocabModel(path))
+        assert not controller.new_button.isEnabled()
+        assert not controller.word_field.isEnabled()
+
+        controller.open_editor(None)  # Command-N still gets here
+        editor = controller.editor
+        editor.trigger.setStringValue_("my address")
+        editor.expansion.setString_("typo")
+        editor.validate()
+        editor.save_(None)
+    assert alert.call_args.args[1] == "Couldn’t Save"
+    assert "max_recording_seconds" in alert.call_args.args[2]
+    assert path.read_text() == INVALID
+    assert controller.editor is editor
+    controller.close_editor()
+    controller.window.close()
+
+
 # -- Linux --------------------------------------------------------------------------
 
 
@@ -356,6 +412,28 @@ def test_gtk_broken_config_shows_a_banner_and_disables_editing(gtk, tmp_path):
     assert window.banner.get_revealed()
     assert not window.word_entry.get_sensitive()
     window.destroy()
+
+
+def test_gtk_invalid_config_refuses_snippet_saves(gtk, tmp_path):
+    from vox.ui.gtk.vocab import VocabWindow
+
+    path = tmp_path / "config.toml"
+    path.write_text(INVALID)
+    with patch("vox.ui.gtk.vocab.error_dialog") as dialog:
+        window = VocabWindow(VocabModel(path))
+        assert not window.new_button.get_sensitive()
+
+        window.open_editor(None)  # Ctrl+N still gets here
+        editor = window.editor
+        editor.trigger.set_text("my address")
+        editor.expansion.get_buffer().set_text("typo")
+        editor.save()
+    assert dialog.call_args.args[1] == "Couldn’t Save"
+    assert "max_recording_seconds" in dialog.call_args.args[2]
+    assert path.read_text() == INVALID
+    editor.close()
+    window.destroy()
+    _drain(gtk)
 
 
 # -- Launch -------------------------------------------------------------------------
