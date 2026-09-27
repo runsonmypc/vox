@@ -88,6 +88,10 @@ or run `systemctl --user start vox`. The package installs into `/opt/vox` and pu
 dependencies; `tesseract-ocr` and `maim` are optional and let screen hints read windows that do not
 expose their text to accessibility tools. Remove it with `sudo apt remove vox`.
 
+To stop Vox starting at login for everyone, run `sudo systemctl --global disable vox.service` and
+add `Hidden=true` to `/etc/xdg/autostart/vox.desktop`; updates keep both. One user can opt out
+with `systemctl --user mask vox.service`.
+
 The package and the per-user installer can coexist; the per-user install takes precedence for the
 user who ran it.
 
@@ -319,7 +323,7 @@ with Keychain Access (macOS, item "vox") or
 python3.12 entries from System Settings > Privacy & Security.
 
 The `.deb` is removed with `sudo apt remove vox`; user settings and history stay in each home
-folder.
+folder. `sudo apt purge vox` also deletes the autostart entry in `/etc/xdg/autostart`.
 
 ## Development
 

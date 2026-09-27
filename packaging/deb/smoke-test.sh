@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Install a built Vox .deb on a clean Ubuntu, check that it works, upgrade over it, then remove it.
+# Install a built Vox .deb on a clean Ubuntu, check that it works, upgrade over it, remove it,
+# reinstall it, then purge it.
 #
 #   packaging/deb/smoke-test.sh DEB
 #
@@ -16,6 +17,7 @@ deb=$(realpath "$1")
 version=$(dpkg-deb --field "$deb" Version)
 unit=/usr/lib/systemd/user/vox.service
 login_link=/etc/systemd/user/graphical-session.target.wants/vox.service
+autostart=/etc/xdg/autostart/vox.desktop
 
 apt-get update -q
 # A desktop has systemd, which the maintainer scripts use; the container image does not
@@ -24,7 +26,7 @@ apt-get install -y -q "$deb"
 
 [ "$(readlink -f /usr/bin/vox)" = /opt/vox/venv/bin/vox ] || die "/usr/bin/vox does not run /opt/vox/venv/bin/vox"
 vox --version | grep -qF "$version" || die "vox --version does not report $version"
-for file in "$unit" /usr/share/applications/vox.desktop /etc/xdg/autostart/vox.desktop \
+for file in "$unit" /usr/share/applications/vox.desktop "$autostart" \
     /usr/share/icons/hicolor/256x256/apps/vox.png /usr/share/doc/vox/copyright; do
     [ -f "$file" ] || die "the package did not install $file"
 done
@@ -48,14 +50,27 @@ for module in pkgutil.iter_modules(windows.__path__, windows.__name__ + "."):
     importlib.import_module(module.name)
 '
 
-# Reinstalling runs the upgrade path of the maintainer scripts
+# Reinstalling runs the upgrade path of the maintainer scripts, which keeps the login setting
 apt-get install -y -q --reinstall "$deb"
 [ "$(systemctl --global is-enabled vox.service)" = enabled ] || die "vox.service is not enabled after an upgrade"
+systemctl --global disable vox.service
+apt-get install -y -q --reinstall "$deb"
+[ ! -L "$login_link" ] || die "an upgrade enabled vox.service again after an administrator disabled it"
+systemctl --global enable vox.service
 
 apt-get remove -y -q vox
 [ ! -e /opt/vox ] || die "/opt/vox is left after removal"
 if [ -e /usr/bin/vox ] || [ -L /usr/bin/vox ]; then die "/usr/bin/vox is left after removal"; fi
 [ ! -e "$unit" ] || die "$unit is left after removal"
 [ ! -L "$login_link" ] || die "$login_link is left after removal"
+[ -f "$autostart" ] || die "removal deleted $autostart, a conffile that only a purge deletes"
+
+# Installing a removed Vox again starts it at login again
+apt-get install -y -q "$deb"
+[ "$(systemctl --global is-enabled vox.service)" = enabled ] || die "vox.service is not enabled after reinstalling"
+
 apt-get purge -y -q vox
-echo "vox $version: install, upgrade and removal passed"
+for path in "$autostart" "$login_link" /var/lib/vox /opt/vox; do
+    if [ -e "$path" ] || [ -L "$path" ]; then die "$path is left after purge"; fi
+done
+echo "vox $version: install, upgrade, removal, reinstall and purge passed"

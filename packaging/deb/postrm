@@ -25,3 +25,8 @@ remove | purge)
     rm -rf /opt/vox
     ;;
 esac
+
+if [ "$1" = purge ]; then
+    # Whether Vox started at login when it was removed (see prerm)
+    rm -rf /var/lib/vox
+fi

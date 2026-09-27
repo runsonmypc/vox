@@ -4,6 +4,8 @@ Name=Vox
 Comment=Start voice dictation at login
 # Starts Vox on desktops that never reach graphical-session.target; elsewhere a no-op
 Exec=systemctl --user start vox.service
+# Removing the package keeps this file (a conffile) until a purge; without Vox it is skipped
+TryExec=/usr/bin/vox
 Icon=vox
 Terminal=false
 StartupNotify=false

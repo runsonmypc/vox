@@ -72,6 +72,9 @@ install -m 644 "$here/copyright" "$root/usr/share/doc/vox/copyright"
 for script in postinst prerm postrm; do
     install -m 755 "$here/$script" "$root/DEBIAN/$script"
 done
+# Files under /etc are conffiles, so an upgrade keeps an administrator's edits (such as Hidden=true
+# in the autostart entry) and only a purge deletes them
+(cd "$root" && find etc -type f | sed 's|^|/|' | sort) >"$root/DEBIAN/conffiles"
 cat >"$root/DEBIAN/control" <<EOF
 Package: vox
 Version: $version

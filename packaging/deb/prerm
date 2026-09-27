@@ -2,6 +2,9 @@
 # On removal, stop Vox for logged-in users and stop starting it at login
 set -e
 
+# postinst starts Vox at login again if this exists when the package is reinstalled
+reenable=/var/lib/vox/enabled-at-removal
+
 # Run `systemctl --user "$@"` in the service manager of every logged-in user
 each_user_manager() {
     for dir in /run/user/*; do
@@ -15,6 +18,11 @@ each_user_manager() {
 }
 
 if [ "$1" = remove ] && command -v systemctl >/dev/null 2>&1; then
+    # Removal keeps the autostart entry, a conffile, so reinstalling keeps this setting too
+    if systemctl --global is-enabled --quiet vox.service; then
+        mkdir -p "${reenable%/*}"
+        : >"$reenable"
+    fi
     # Disable while the unit file still exists: systemctl reads its [Install] section
     systemctl --global disable vox.service || true
     if [ -d /run/systemd/system ]; then

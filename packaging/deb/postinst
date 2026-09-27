@@ -2,6 +2,9 @@
 # Start Vox at login for every user, and restart it for users running an older version
 set -e
 
+# prerm leaves this when it stops Vox starting at login on removal
+reenable=/var/lib/vox/enabled-at-removal
+
 # Run `systemctl --user "$@"` in the service manager of every logged-in user
 each_user_manager() {
     for dir in /run/user/*; do
@@ -15,7 +18,12 @@ each_user_manager() {
 }
 
 if [ "$1" = configure ] && command -v systemctl >/dev/null 2>&1; then
-    systemctl --global enable vox.service
+    # A first install starts Vox at login, and so does reinstalling a removed Vox that did. An
+    # upgrade leaves it as it was, so an administrator's `systemctl --global disable` stays.
+    if [ -z "$2" ] || [ -e "$reenable" ]; then
+        systemctl --global enable vox.service
+    fi
+    rm -f "$reenable"
     if [ -d /run/systemd/system ]; then
         each_user_manager daemon-reload
         if [ -n "$2" ]; then  # an upgrade from version $2
