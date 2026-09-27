@@ -214,6 +214,12 @@ def test_a_band_of_noise_stays_in_its_band():
     assert power[(freqs > 5000) & (freqs < 7000)].sum() > 0.99 * power.sum()
 
 
+def test_a_band_of_noise_is_as_loud_as_a_sine_at_its_level():
+    noise = _synthesize([Partial(0, 6000, 0.1, 20, width=2000)])
+    sine = _synthesize([Partial(0, 6000, 0.1, 20)])
+    assert np.sqrt(np.mean(noise**2)) == pytest.approx(np.sqrt(np.mean(sine**2)), rel=0.05)
+
+
 # -- Custom sounds -------------------------------------------------------------------------
 
 
