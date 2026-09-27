@@ -4,6 +4,10 @@
 # recording limit apply from the next dictation, and [audio] changes wait for a recording in progress
 # to end.
 #
+# If this file has an error when Vox starts, Vox starts anyway but does not record until you fix it:
+# the Vox menu shows "Settings file has an error" and the log names the setting. An error in a later
+# edit is logged, and the previous settings stay in effect.
+#
 # The OpenAI API key does not go here. Choose Set API Key… from the Vox menu; Vox keeps it in the
 # macOS Keychain or your Linux login keyring. OPENAI_API_KEY in the environment overrides it.
 
@@ -22,8 +26,9 @@
 # double_tap_timeout_ms = 400
 
 [audio]
-# The input device: unset uses the system default. Set an index or name from `vox --list-devices`,
-# or pick one from the Input Device menu. For example:
+# The input device: unset uses the system default. Set an index or name from `vox --list-devices`.
+# A device picked from the Input Device menu lasts until Vox quits; set it here to keep one.
+# For example:
 #   device = "MacBook Pro Microphone"
 # sample_rate = 48000
 # channels = 1
@@ -56,6 +61,7 @@
 # login, since the login service may not search the same PATH as your shell. For example:
 #   binary = "~/whisper.cpp/build/bin/whisper-cli"
 #   model = "~/whisper.cpp/models/ggml-large-v3-turbo.bin"
+# If the setup is broken, the Vox menu says why, and each hotkey press checks it again.
 # binary = "whisper-cli"
 # model = ""
 
@@ -67,7 +73,10 @@
 # screen = true
 
 [sounds]
-# Play a sound when dictation starts, stops, is cancelled or fails.
+# Play a sound when dictation starts, stops, is cancelled or fails, when the hotkey is ignored
+# because Vox is busy or paused, and on pause and resume. To replace one, put a WAV file named
+# start.wav, stop.wav, cancel.wav, error.wav, busy.wav, pause.wav or resume.wav in
+# ~/.config/vox/sounds; Vox loads them when it starts.
 # enabled = true
 
 [attenuation]

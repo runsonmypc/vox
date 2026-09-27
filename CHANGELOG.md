@@ -16,8 +16,11 @@ The first public release.
   (5 to 60 minutes). A recording that reaches it stops and is transcribed like any other.
 - Long recordings are sent as 16 kHz mono audio and split at pauses when they would exceed
   OpenAI's upload limit, then joined in order.
-- A transcript is always saved to history, even when pasting it fails.
+- A transcript is always saved to history, even when pasting it fails. When a long recording fails
+  partway, the parts already transcribed are saved there, and the menu says so.
+- History records which transcription produced each dictation: batch, streaming or whisper.cpp.
 - Custom dictionary and snippets, edited in the Vocabulary & Snippets window.
+- Your own sounds: WAV files in `~/.config/vox/sounds` replace the built-in ones.
 
 ### Privacy
 
@@ -26,18 +29,25 @@ The first public release.
   in which case Vox never captures the screen.
 - The OpenAI API key lives in the macOS Keychain or the Linux login keyring.
 - Logs record events and lengths, not what you said; transcripts appear only with `vox -v`. On
-  macOS the log moved from `/tmp` to `~/Library/Logs/Vox/vox.log`, readable only by you.
+  macOS the log moved from `/tmp` to `~/Library/Logs/Vox/vox.log`, readable only by you, and is
+  emptied when Vox starts if it has grown past 10 MiB.
 - History can be searched, and entries deleted one at a time or all at once; deleted text is
   overwritten. The history database is readable only by you.
-- Pasting restores everything that was on the clipboard before, including images, files and rich
-  text; on macOS Vox's temporary copy is hidden from clipboard managers and Universal Clipboard.
+- Pasting puts back what was on the clipboard before: on macOS all of it, including images, files
+  and rich text, and on Linux one form of it (copied files, text, or an image). On macOS Vox's
+  temporary copy is hidden from clipboard managers and Universal Clipboard.
 
 ### Desktop
 
 - Menu bar (macOS) and tray (Linux) icon with status, pause, input device, transcription mode,
   recording limit, recent dictations, history search, vocabulary and API key.
-- The menu shows problems that need you: a missing API key, a broken whisper.cpp setup, missing
-  Accessibility access, a silent microphone, or a Wayland session.
+- The menu shows problems that need you: a missing API key, an error in the settings file, a broken
+  whisper.cpp setup, missing Accessibility access, a silent microphone, a Wayland session, or a
+  dictation that was only partly transcribed.
+- An error in the settings file no longer stops Vox from starting: it starts, shows the problem,
+  and does not record until the file is fixed, which it picks up without a restart. A broken
+  whisper.cpp setup is checked again on each hotkey press.
+- Microphones connected while Vox runs appear in the Input Device menu.
 
 ### Installing
 

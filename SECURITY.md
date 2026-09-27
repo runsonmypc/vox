@@ -2,7 +2,8 @@
 
 ## Supported versions
 
-Security fixes go into the latest release. Update with the installer (see the README) to get them.
+Security fixes go into the latest release. To get them, run the installer again or install the new
+`.deb` (see the README).
 
 ## Reporting a vulnerability
 

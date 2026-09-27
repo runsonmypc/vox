@@ -9,7 +9,8 @@ Type=simple
 ExecStart=%h/.local/bin/vox
 Restart=on-failure
 RestartSec=3
-# 78 (EX_CONFIG): Vox cannot run with this configuration, so restarting would only fail again
+# 78 (EX_CONFIG): a startup problem only the user can fix, such as a missing xdotool or xclip, so
+# restarting would only fail again
 RestartPreventExitStatus=78
 # History, logs and settings that Vox creates are readable only by the user
 UMask=0077
