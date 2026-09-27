@@ -18,6 +18,10 @@ EXIT_CANNOT_START = os.EX_CONFIG
 # launchd appends Vox's output to one log file for good; past this size, a new start begins it afresh
 _LOG_LIMIT_BYTES = 10 * 1024 * 1024
 
+# Third-party loggers kept to warnings even with -v: they are noisy, and at DEBUG websockets logs every
+# request header, the OpenAI key in the streaming handshake included
+_QUIET_LOGGERS = ("httpx", "httpcore", "openai", "websockets")
+
 
 def _lock_dir() -> Path:
     """Vox's per-user lock directory, where no cleaner deletes old files."""
@@ -66,6 +70,16 @@ def _clear_big_log(fd: int = 2, limit: int = _LOG_LIMIT_BYTES) -> int | None:
     return info.st_size
 
 
+def _configure_logging(verbose: bool) -> None:
+    logging.basicConfig(
+        level=logging.DEBUG if verbose else logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%H:%M:%S",
+    )
+    for name in _QUIET_LOGGERS:
+        logging.getLogger(name).setLevel(logging.WARNING)
+
+
 def _version() -> str:
     try:
         return importlib.metadata.version("vox")
@@ -97,14 +111,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        datefmt="%H:%M:%S",
-    )
-    # Silence noisy third-party loggers even in verbose mode
-    for noisy in ("httpx", "httpcore", "openai"):
-        logging.getLogger(noisy).setLevel(logging.WARNING)
+    _configure_logging(args.verbose)
     log = logging.getLogger("vox")
 
     if args.list_devices:
