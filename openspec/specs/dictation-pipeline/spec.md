@@ -177,7 +177,7 @@ The system SHALL check the type and range of every setting in `config.toml`. Whe
 
 #### Scenario: File fixed while running
 - **WHEN** the user fixes `config.toml` while Vox runs
-- **THEN** within a few seconds Vox applies it, clears the error, and updates the status line, with no restart; settings that always need a restart, such as `[hotkey]`, apply after the next restart
+- **THEN** within a few seconds Vox applies it, including `[hotkey]`, clears the error, and updates the status line, with no restart
 
 #### Scenario: Permanent startup failure
 - **WHEN** a required system tool is missing (for example `xdotool` or `xclip` on Linux) or the lock directory cannot be created
@@ -188,7 +188,7 @@ The system SHALL check the type and range of every setting in `config.toml`. Whe
 - **THEN** Vox starts and logs one warning that it cannot tell terminals from other windows, so terminals get `Ctrl+V` and `[window_classes]` does not apply; this is not a status-78 startup failure
 
 ### Requirement: Settings Reload
-The system SHALL apply edits to `config.toml` while running, a few seconds after a save, except for settings that need a restart.
+The system SHALL apply every edit to `config.toml` while running, a few seconds after a save, with no restart.
 
 #### Scenario: Hot-reloaded settings
 - **WHEN** the user changes the dictionary, snippets, window classes, screen hints, sounds, attenuation, the recording limit, the transcription mode, a model, the language or the prompt
@@ -199,8 +199,9 @@ The system SHALL apply edits to `config.toml` while running, a few seconds after
 - **THEN** the change is applied once that recording ends, and the recording is not lost
 
 #### Scenario: Hotkey settings
-- **WHEN** `[hotkey]` changes
-- **THEN** the change applies after Vox restarts
+- **WHEN** `[hotkey]` key, fallback or double_tap_timeout_ms changes, by hand or from the hotkey window
+- **THEN** within a few seconds, or at once when the hotkey window closes, a new hotkey listener with those settings replaces the old one, with no restart, and the old key no longer toggles dictation
+- **AND** during a recording the new listener takes over at once, and the new key stops the recording
 
 #### Scenario: Invalid edit while running
 - **WHEN** a `config.toml` that loaded is edited into an invalid state while Vox runs
@@ -267,23 +268,50 @@ The system SHALL rescan the audio input devices so the tray can offer devices co
 The system SHALL accept the hotkey names users naturally write and SHALL match them to the key that was actually pressed. Without a usable keyboard backend it SHALL exit with a clear message.
 
 #### Scenario: Spellings
-- **WHEN** `[hotkey] key` is `right_shift`, `"Right Shift"`, `right_ctrl`, `right_alt`, `left_shift`, `left_ctrl` or `left_alt`, or `fallback` is a combination such as `"left_ctrl+space"`
+- **WHEN** `[hotkey] key` is `right_shift`, `"Right Shift"`, `right_ctrl`, `right_alt`, `left_shift`, `left_ctrl` or `left_alt`, `fn` or `globe` on macOS, or `pause`, `scroll_lock` or `"Scroll Lock"` on Linux, or `fallback` is a combination such as `"left_ctrl+space"`
 - **THEN** each names the intended key
 
 #### Scenario: Left and right modifiers
 - **WHEN** the hotkey is `left_shift`
 - **THEN** it fires on the left Shift key and not on the right one
 
+#### Scenario: Alt with Shift held on Linux
+- **WHEN** an Alt key is pressed or released while Shift is held, which X11 reports as Meta
+- **THEN** it is still named `alt` or `right_alt`, so `alt+shift+space` fires whichever of Alt and Shift goes down first, and an Alt let go after Shift never stays counted as held
+
+#### Scenario: Pause and Scroll Lock on Linux
+- **WHEN** the hotkey is `pause` or `scroll_lock` and the user taps that key on its own
+- **THEN** it starts or stops dictation, and a double-tap cancels, like any other tap-alone key
+- **AND** a Pause tap counts however short it is, because PS/2 keyboards send its press and release together, while every other key still has to be held at least 30 ms
+
+#### Scenario: fn on macOS
+- **WHEN** the hotkey is `fn` and the user taps fn (Globe) on its own
+- **THEN** it starts or stops dictation, and a double-tap cancels, like any other tap-alone key, and fn held while another key is pressed, such as fn+F5, does not
+- **AND** Vox tells an fn press from a release by the fn flag in the HID system's modifier state, read at each fn event, because pynput reports both as a release; its event tap stays listen-only, so no keystroke waits for Vox
+- **AND** a combination pressed while fn is held, such as Control, then fn, then F5 for `ctrl+f5`, fires once and is not also an fn tap
+
+#### Scenario: fn held for a function key
+- **WHEN** fn is not the hotkey and a Mac laptop needs fn held for a function key, such as fn+F5 for the hotkey `f5` or Control+fn+F5 for the combination `ctrl+f5`
+- **THEN** Vox leaves fn alone, so it does not count as another key, and pressing that key twice quickly cancels even when fn is let go between the two presses
+
+#### Scenario: A missed fn event
+- **WHEN** an fn press or release never reaches Vox
+- **THEN** fn is not left counted as down: a release with no press fires nothing, and fn going down while Vox counts it as down starts a new press, so the next tap works
+
 #### Scenario: No keyboard backend
 - **WHEN** global hotkeys cannot be set up, for example with no X11 display on Linux
 - **THEN** Vox logs that global hotkeys are unavailable, with the reason in a few words (such as "no X display: DISPLAY is not set"), and that it needs an X11 display, and exits with status 1 instead of a traceback
 
 ### Requirement: Audio Feedback Sounds
-The system SHALL play a short sound for start, stop, error, busy, cancel, pause and resume while `[sounds] enabled` is on, SHALL follow changes to that setting without a restart, and SHALL let the user replace any of these sounds.
+The system SHALL play a short sound for start, stop, error, busy, cancel, pause and resume while `[sounds] enabled` is on, SHALL follow changes to that setting without a restart, and SHALL let the user replace any of these sounds. On Linux the built-in sounds SHALL resemble the macOS alert sounds, and SHALL be synthesized by Vox from its own parameters, with no audio taken or derived from Apple's sound files.
 
 #### Scenario: Built-in sounds
 - **WHEN** no custom sound is installed
-- **THEN** macOS plays its system alert sounds and Linux plays short synthetic tones
+- **THEN** macOS plays its system alert sounds (start Tink, stop Pop, error Basso, busy Funk, cancel Blow, pause Bottle, resume Glass), and Linux plays sounds that Vox synthesizes when it starts, each resembling its macOS counterpart in pitch, timbre, length, envelope and loudness
+
+#### Scenario: Built-in sounds on Linux
+- **WHEN** Vox makes its built-in sounds on Linux
+- **THEN** each one starts and ends on silence, peaks at least 6 dB below full scale, lasts less than 1.6 seconds (the start sound less than 0.1 seconds), and is the same at every start
 
 #### Scenario: Custom sound
 - **WHEN** `~/.config/vox/sounds/<name>.wav` exists for one of the sound names (`start`, `stop`, `error`, `busy`, `cancel`, `pause`, `resume`)
@@ -294,11 +322,11 @@ The system SHALL play a short sound for start, stop, error, busy, cancel, pause 
 - **THEN** no sound plays
 
 ### Requirement: Quitting on a Stop Signal
-The system SHALL quit on SIGTERM, which a service stop or restart, a logout, `install.sh` updating Vox and the `.deb`'s upgrade or removal all send, the same way it quits from the tray's Quit Vox: on macOS and Linux, with or without a tray, a lowered output volume SHALL be restored and the microphone released.
+The system SHALL quit on SIGTERM, which a service stop or restart, a logout, `install.sh` updating Vox and the `.deb`'s upgrade or removal all send, the same way it quits from the tray's Quit Vox Transfer: on macOS and Linux, with or without a tray, a lowered output volume SHALL be restored and the microphone released.
 
 #### Scenario: Service stop during a recording
 - **WHEN** Vox receives SIGTERM while it records with the output volume lowered, even while the volume is still being lowered
-- **THEN** the recording is not transcribed, the output volume returns to its level before the recording, and Vox exits through the same path as Quit Vox
+- **THEN** the recording is not transcribed, the output volume returns to its level before the recording, and Vox exits through the same path as Quit Vox Transfer
 
 #### Scenario: Second SIGTERM
 - **WHEN** a second SIGTERM arrives while Vox is shutting down, or after the tray's event loop has ended

@@ -301,7 +301,7 @@ class VocabController(NSObject):
     def confirm_remove_snippet(self, trigger: str) -> None:
         alert = AppKit.NSAlert.alloc().init()
         alert.setMessageText_(f"Delete “{trigger}”?")
-        alert.setInformativeText_("Vox will stop expanding this phrase.")
+        alert.setInformativeText_("Vox Transfer will stop expanding this phrase.")
         alert.addButtonWithTitle_("Delete").setHasDestructiveAction_(True)
         alert.addButtonWithTitle_("Cancel")
 
@@ -332,7 +332,7 @@ class VocabController(NSObject):
         """Say what just happened in the footer for a moment, then go back to where changes are saved."""
         self._note_token += 1
         token = self._note_token
-        self._set_footer(f"{message} Vox picks this up within a few seconds.")
+        self._set_footer(f"{message} Vox Transfer picks this up within a few seconds.")
         kit.later(_NOTE_SECONDS, lambda: token == self._note_token and self._set_footer(None))
 
     @objc.python_method
@@ -462,7 +462,7 @@ class SnippetEditor(NSObject):
         secondary = AppKit.NSColor.secondaryLabelColor()
         grid = AppKit.NSGridView.gridViewWithViews_([
             [kit.label("When you say", 13, color=secondary), self.trigger],
-            [kit.label("Vox types", 13, color=secondary), field_box],
+            [kit.label("Vox Transfer types", 13, color=secondary), field_box],
         ])
         grid.setRowSpacing_(12)
         grid.setColumnSpacing_(12)

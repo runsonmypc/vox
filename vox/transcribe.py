@@ -232,7 +232,7 @@ class Transcriber:
         SDK retries transient failures itself; anything else fails at once.
         """
         if not self._config.openai_api_key:
-            raise TranscriptionError("No OpenAI API key. Choose Set API Key… from the Vox menu.")
+            raise TranscriptionError("No OpenAI API key. Choose Set API Key… from the Vox Transfer menu.")
         try:
             parts = await asyncio.to_thread(upload_wavs, wav_bytes)
         except (EOFError, ValueError, wave.Error) as e:

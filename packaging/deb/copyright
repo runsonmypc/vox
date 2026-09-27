@@ -1,5 +1,5 @@
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
-Upstream-Name: vox
+Upstream-Name: Vox Transfer
 Upstream-Contact: https://github.com/runsonmypc/vox/issues
 Source: https://github.com/runsonmypc/vox
 
@@ -16,5 +16,5 @@ License: GPL-3.0-only
  .
  On Debian systems, the complete text of the GNU General Public License
  version 3 can be found in "/usr/share/common-licenses/GPL-3".
-Comment: /opt/vox/venv also contains the Python packages Vox depends on,
- each under its own license, recorded in its .dist-info directory.
+Comment: /opt/vox/venv also contains the Python packages Vox Transfer depends
+ on, each under its own license, recorded in its .dist-info directory.

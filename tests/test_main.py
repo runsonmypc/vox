@@ -91,7 +91,7 @@ def test_version_flag_prints_the_package_version(monkeypatch, capsys):
     with pytest.raises(SystemExit) as exit_info:
         cli.main()
     assert exit_info.value.code == 0
-    assert capsys.readouterr().out.strip() == f"vox {importlib.metadata.version('vox')}"
+    assert capsys.readouterr().out.strip() == f"Vox Transfer {importlib.metadata.version('vox')}"
 
 
 def test_second_instance_exits_cleanly_before_config_and_permission_prompt(monkeypatch):

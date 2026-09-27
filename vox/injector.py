@@ -73,7 +73,7 @@ def check_dependencies() -> None:
     if not shutil.which("xprop"):
         # Vox still works, but window detection reads WM_CLASS through xprop
         log.warning(
-            "xprop is not installed, so Vox can't tell which app is focused: it pastes into terminals with "
+            "xprop is not installed, so Vox Transfer can't tell which app is focused: it pastes into terminals with "
             "Ctrl+V, which they ignore, and [window_classes] doesn't apply. Install with: sudo apt install x11-utils"
         )
     missing = []

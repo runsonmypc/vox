@@ -1,5 +1,5 @@
 [Unit]
-Description=Vox voice dictation
+Description=Vox Transfer voice dictation
 Documentation=https://github.com/runsonmypc/vox
 PartOf=graphical-session.target
 After=graphical-session.target

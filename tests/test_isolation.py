@@ -22,7 +22,7 @@ def test_home_is_a_scratch_directory():
 
 def test_default_config_path_is_per_test(tmp_path):
     assert vox.config.DEFAULT_CONFIG_PATH.parent == tmp_path
-    for name in ("vox.daemon", "vox.ui.tray", "vox.ui.vocab_window"):
+    for name in ("vox.daemon", "vox.ui.tray", "vox.ui.vocab_window", "vox.ui.hotkey_window"):
         if name in sys.modules:
             assert sys.modules[name].DEFAULT_CONFIG_PATH == vox.config.DEFAULT_CONFIG_PATH
 

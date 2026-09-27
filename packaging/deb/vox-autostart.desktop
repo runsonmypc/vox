@@ -1,6 +1,6 @@
 [Desktop Entry]
 Type=Application
-Name=Vox
+Name=Vox Transfer
 Comment=Start voice dictation at login
 # Starts Vox on desktops that never reach graphical-session.target; elsewhere a no-op
 Exec=systemctl --user start vox.service

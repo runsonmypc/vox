@@ -100,7 +100,7 @@ jobs:
           "$HOME/.local/bin/vox" --version | grep -qF "$VERSION"
           bash "$src/install.sh" --uninstall
           if [ -e "$HOME/.local/share/vox/venv" ] || [ -L "$HOME/.local/bin/vox" ]; then
-              echo "::error::--uninstall left Vox behind"
+              echo "::error::--uninstall left Vox Transfer behind"
               exit 1
           fi
 
@@ -167,7 +167,7 @@ jobs:
       - name: Release notes
         run: |
           {
-              echo "## Vox $VERSION release notes"
+              echo "## Vox Transfer $VERSION release notes"
               echo
               scripts/changelog-notes.sh "$VERSION"
           } >>"$GITHUB_STEP_SUMMARY"
@@ -204,4 +204,4 @@ jobs:
           flags=()
           # A pre-release (1.1.0rc1) must not become the latest release that install.sh installs
           case "$VERSION" in *[a-z]*) flags+=(--prerelease) ;; esac
-          gh release create "$TAG" --verify-tag --title "Vox $VERSION" --notes-file notes.md "${flags[@]}" release/*
+          gh release create "$TAG" --verify-tag --title "Vox Transfer $VERSION" --notes-file notes.md "${flags[@]}" release/*

@@ -18,7 +18,7 @@ import websockets
 
 from vox import daemon as daemon_module
 from vox import sounds as sounds_module
-from vox.config import Config, fallback_config, load_config
+from vox.config import Config, fallback_config, load_config, update_hotkey
 from vox.daemon import (
     ACCESSIBILITY_NOTICE,
     PARTIAL_NOTICE,
@@ -297,6 +297,86 @@ async def test_pause_discards_a_recording_and_blocks_new_ones_until_resumed():
 
         h.send("resume", "toggle")
         await until(lambda: h.state is State.RECORDING)
+
+
+# -- The hotkey window --------------------------------------------------------------------
+
+
+def saved_settings(tmp_path, text="[hotkey]\nkey = 'right_shift'\n"):
+    """Settings loaded from tmp_path/config.toml, with an API key."""
+    path = tmp_path / "config.toml"
+    path.write_text(text)
+    config = load_config(path)
+    config.openai_api_key = KEY
+    return config
+
+
+@pytest.mark.anyio
+async def test_the_hotkey_does_nothing_while_the_hotkey_window_is_open():
+    async with running(openai_config()) as h:
+        h.send("hotkey:suspend", "toggle", "cancel", "toggle")
+        await settle()
+        assert h.state is State.IDLE
+        h.recorder.start.assert_not_called()
+        h.sounds.play.assert_not_called()  # no busy sound: the user is pressing keys to record a hotkey
+
+        h.send("hotkey:resume", "toggle")
+        await until(lambda: h.state is State.RECORDING)
+        assert h.hotkey.call_count == 1  # nothing was saved, so the listener stays
+
+
+@pytest.mark.anyio
+async def test_opening_the_hotkey_window_during_a_recording_discards_it():
+    async with running(openai_config()) as h:
+        h.send("toggle")
+        await until(lambda: h.state is State.RECORDING)
+        h.send("hotkey:suspend")
+        await until(lambda: h.state is State.IDLE)
+        h.recorder.discard.assert_called()
+        assert h.played("cancel")
+        h.batch.transcribe.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_a_hotkey_saved_in_the_window_applies_when_it_closes(tmp_path, caplog):
+    config = saved_settings(tmp_path)
+    async with running(config) as h:
+        h.send("hotkey:suspend")
+        await settle()
+        update_hotkey(config.config_path, "cmd_r", "ctrl+space")  # what the window saves
+        h.send("hotkey:resume")
+        await until(lambda: h.hotkey.call_count == 2)
+
+        h.hotkey.return_value.stop.assert_called_once_with()
+        assert h.hotkey.return_value.start.call_count == 2
+        new = h.hotkey.call_args.args[0]
+        assert (new.hotkey, new.hotkey_fallback, new.double_tap_timeout_ms) == ("cmd_r", "ctrl+space", 400)
+        h.send("toggle")  # the new listener's toggle records again
+        await until(lambda: h.state is State.RECORDING)
+    assert "restart" not in caplog.text
+
+
+@pytest.mark.anyio
+async def test_closing_the_hotkey_window_without_a_change_keeps_the_listener(tmp_path):
+    async with running(saved_settings(tmp_path)) as h:
+        h.send("hotkey:suspend", "hotkey:resume")
+        await settle()
+        assert h.hotkey.call_count == 1
+        h.hotkey.return_value.stop.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_closing_the_hotkey_window_with_a_broken_settings_file_keeps_the_listener(tmp_path, caplog):
+    config = saved_settings(tmp_path)
+    async with running(config) as h:
+        h.send("hotkey:suspend")
+        await settle()
+        config.config_path.write_text("[hotkey\nkey = 'cmd_r'\n")  # broken by hand while the window was open
+        h.send("hotkey:resume", "toggle")
+        await until(lambda: h.state is State.RECORDING)  # the hotkey works again
+        assert h.hotkey.call_count == 1
+        h.hotkey.return_value.stop.assert_not_called()
+    assert "Couldn't read the hotkey settings" in caplog.text
 
 
 # -- Transcription mode ---------------------------------------------------------------
@@ -1065,10 +1145,10 @@ async def test_a_failed_live_session_falls_back_to_batch(handler):
 
 
 @contextlib.asynccontextmanager
-async def reloading(config, recorder, tray=None):
+async def reloading(config, recorder, tray=None, apply_hotkey=None):
     """Run the real config reloader, polling every 10 ms."""
     with patch("vox.daemon._CONFIG_POLL_SECONDS", 0.01):
-        task = asyncio.create_task(_config_reloader(config, recorder, tray))
+        task = asyncio.create_task(_config_reloader(config, recorder, tray, apply_hotkey))
         await asyncio.sleep(0.02)  # it notes the file as it is first
         try:
             yield task
@@ -1117,12 +1197,14 @@ async def test_a_settings_file_that_loads_again_is_applied_and_lets_vox_record(t
     config = broken_settings(tmp_path)
     path = config.config_path
     tray = MagicMock()
+    apply_hotkey = MagicMock()
 
-    async with reloading(config, MagicMock(), tray):
+    async with reloading(config, MagicMock(), tray, apply_hotkey):
         path.write_text("[transcription]\nmode = 'streaming'\n[attenuation]\nlevel = 'still wrong'\n")
         await until(lambda: "Config reload failed" in caplog.text)
         assert config.config_error is not None
         tray.mode_changed.assert_not_called()
+        apply_hotkey.assert_not_called()
 
         # A backup moved back into place keeps its older time, so the time alone doesn't show the change
         backup = tmp_path / "config.toml.bak"
@@ -1133,8 +1215,28 @@ async def test_a_settings_file_that_loads_again_is_applied_and_lets_vox_record(t
 
     assert (config.mode, config.attenuation_level) == ("streaming", 0.3)
     tray.mode_changed.assert_called_once()  # the status line drops "Settings file has an error"
-    assert config.hotkey == "right_shift"  # the listener started with the default, until a restart
-    assert "hotkey settings in" in caplog.text and "take effect when Vox restarts" in caplog.text
+    assert apply_hotkey.call_args.args[0].hotkey == "right_ctrl"  # the listener swaps to the file's hotkey
+    assert "restart" not in caplog.text
+
+
+@pytest.mark.anyio
+async def test_a_hand_edited_hotkey_applies_without_a_restart(tmp_path):
+    config = saved_settings(tmp_path)
+    async with running(config) as h, reloading(config, h.recorder, apply_hotkey=h.daemon._apply_hotkey):
+        h.send("toggle")
+        await until(lambda: h.state is State.RECORDING)
+        rewrite(config.config_path, "[hotkey]\nkey = 'right_ctrl'\ndouble_tap_timeout_ms = 300\n")
+        await until(lambda: h.hotkey.call_count == 2)
+        # The new listener takes over during the recording, whose stop the new key then presses
+        assert h.state is State.RECORDING
+        h.hotkey.return_value.stop.assert_called_once_with()
+        new = h.hotkey.call_args.args[0]
+        assert (new.hotkey, new.double_tap_timeout_ms) == ("right_ctrl", 300)
+
+        rewrite(config.config_path, "[hotkey]\nkey = 'right_ctrl'\ndouble_tap_timeout_ms = 300\n"
+                "[sounds]\nenabled = false\n")
+        await until(lambda: not config.sounds_enabled)
+        assert h.hotkey.call_count == 2  # an edit elsewhere keeps the listener
 
 
 @pytest.mark.anyio
@@ -1149,7 +1251,7 @@ async def test_a_broken_settings_file_that_is_deleted_lets_vox_record_on_the_def
 
     assert config.mode == "batch"
     tray.mode_changed.assert_called_once()
-    assert "is gone: Vox is using the default settings" in caplog.text
+    assert "is gone: Vox Transfer is using the default settings" in caplog.text
 
 
 @pytest.mark.anyio

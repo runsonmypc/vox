@@ -45,7 +45,9 @@ CONFIG_ERROR = "Settings file has an error"
 HISTORY_WINDOW = "vox.ui.history_window"
 VOCAB_WINDOW = "vox.ui.vocab_window"
 KEY_WINDOW = "vox.ui.key_window"
+HOTKEY_WINDOW = "vox.ui.hotkey_window"
 SET_KEY = "Set API Key…"
+SET_HOTKEY = "Set Hotkey…"
 
 
 def create_tray(config: Config) -> TrayManager | None:
@@ -365,7 +367,7 @@ class TrayManager:
 
     @staticmethod
     def _title(state: IconState) -> str:
-        return f"Vox · {_STATUS_TEXT[state]}"
+        return f"Vox Transfer · {_STATUS_TEXT[state]}"
 
     def _key_problem(self) -> str | None:
         """Why dictation can't reach OpenAI, if the mode needs it and there is no key."""
@@ -386,7 +388,7 @@ class TrayManager:
     def _status_line(self) -> str:
         shown = self._shown
         problem = self._problem() if shown in (IconState.IDLE, IconState.PAUSED) else None
-        return f"Vox · {problem}" if problem else self._title(shown)
+        return f"Vox Transfer · {problem}" if problem else self._title(shown)
 
     def _render(self) -> None:
         shown = self._shown
@@ -444,8 +446,9 @@ class TrayManager:
         yield Item("Vocabulary & Snippets…", self._open_vocab)
         if not key_problem:
             yield Item(SET_KEY, self._open_key)
+        yield Item(SET_HOTKEY, self._open_hotkey, enabled=lambda _: self._state is IconState.IDLE)
         yield Menu.SEPARATOR
-        yield Item("Quit Vox", self._quit)
+        yield Item("Quit Vox Transfer", self._quit)
 
     def _device_items(self):
         # Only the daemon's snapshot: querying PortAudio here would block the UI thread and see a stale device list
@@ -540,6 +543,13 @@ class TrayManager:
         # The window writes the keychain itself; once it closes, the daemon re-reads the key
         self._open_window(KEY_WINDOW, on_exit=lambda: self._send("api_key"))
 
+    def _open_hotkey(self, icon, item) -> None:
+        # The hotkey mustn't dictate while the window records keys. Sent before the window starts, so the resume its
+        # exit sends, however it ends, always comes after it; the daemon then applies what the window saved.
+        self._send("hotkey:suspend")
+        path = self._config.config_path or DEFAULT_CONFIG_PATH
+        self._open_window(HOTKEY_WINDOW, "--config", str(path), on_exit=lambda: self._send("hotkey:resume"))
+
     def _quit(self, icon, item) -> None:
         log.info("Quit requested from menu bar")
         self.request_quit()
@@ -558,6 +568,8 @@ class TrayManager:
             proc = self._windows[module] = self._launcher(command)
         except OSError as e:
             log.warning("Failed to open %s: %s", module, e)
+            if on_exit is not None:
+                on_exit()  # as if it closed at once
             return
         # Always wait on the window, so a closed one doesn't linger as a zombie
         threading.Thread(target=_call_after_exit, args=(proc, on_exit), name=f"{module}-exit", daemon=True).start()

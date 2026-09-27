@@ -40,7 +40,7 @@ fi
 [ -f "$wheel" ] || die "no wheel at $wheel"
 case "$(basename "$wheel")" in
 "vox-$version-"*) ;;
-*) die "$(basename "$wheel") is not Vox $version" ;;
+*) die "$(basename "$wheel") is not Vox Transfer $version" ;;
 esac
 
 # The virtualenv, at the path it will run from
@@ -86,10 +86,10 @@ Suggests: tesseract-ocr, maim, gir1.2-atspi-2.0
 Section: sound
 Priority: optional
 Homepage: https://github.com/runsonmypc/vox
-Description: Voice dictation for macOS and Linux
- Tap a key, speak, and Vox types what you said into the focused app. It
- transcribes with OpenAI or locally with whisper.cpp, and lives in the
- system tray. Vox starts at login for every user.
+Description: Vox Transfer, voice dictation for macOS and Linux
+ Tap a key, speak, and Vox Transfer types what you said into the focused app.
+ It transcribes with OpenAI or locally with whisper.cpp, and lives in the
+ system tray. Vox Transfer starts at login for every user.
 EOF
 
 mkdir -p "$out"

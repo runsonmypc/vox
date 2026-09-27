@@ -14,6 +14,7 @@ from vox.config import (
     RECORDING_LIMIT_CHOICES,
     load_config,
     update_dictionary,
+    update_hotkey,
     update_max_recording_seconds,
     update_snippet,
     update_transcription_mode,
@@ -218,6 +219,32 @@ def test_recording_limit_rejects_invalid_values(cfg, seconds):
     assert cfg.read_text() == before
 
 
+def test_hotkey_is_saved_in_the_hotkey_section(cfg):
+    update_hotkey(cfg, "cmd_r", "ctrl+space")
+    config = load_config(cfg)
+    assert (config.hotkey, config.hotkey_fallback) == ("cmd_r", "ctrl+space")
+    assert "sample_rate = 16000  # keep this comment" in cfg.read_text()
+    before = cfg.read_text()
+    with pytest.raises(ValueError):
+        update_hotkey(cfg, " ", "")
+    assert cfg.read_text() == before
+
+
+def test_clearing_the_combination_removes_fallback(cfg):
+    update_hotkey(cfg, "cmd_r", "ctrl+space")
+    update_hotkey(cfg, "cmd_r", "")
+    assert tomllib.loads(cfg.read_text())["hotkey"] == {"key": "cmd_r"}
+    update_hotkey(cfg, "f13", "")  # nothing to remove
+    assert load_config(cfg).hotkey_fallback == ""
+
+
+def test_hotkey_update_creates_a_private_file(tmp_path):
+    path = tmp_path / "new" / "config.toml"
+    update_hotkey(path, "f13", "")
+    assert tomllib.loads(path.read_text()) == {"hotkey": {"key": "f13"}}
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
 def test_preserves_file_permissions(cfg):
     os.chmod(cfg, 0o640)
     update_dictionary(cfg, add=["Vox"])
@@ -253,6 +280,7 @@ def test_refuses_to_overwrite_unparseable_config(tmp_path):
 
 @pytest.mark.parametrize("text, write", [
     ("audio = 5\n", lambda path: update_max_recording_seconds(path, 600)),
+    ('hotkey = "right_ctrl"\n', lambda path: update_hotkey(path, "f13", "")),
     ('transcription = "batch"\n', lambda path: update_transcription_mode(path, "streaming")),
     ('whisper = 1\n[transcription]\nmodel = "m"\n', lambda path: update_transcription_mode(path, "streaming")),
     ('[transcription]\nmode = "batch"\nmodel = "m"\n[whisper]\n', None),

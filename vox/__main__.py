@@ -90,9 +90,9 @@ def _version() -> str:
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="vox",
-        description="Voice-to-text daemon for Linux and macOS",
+        description="Vox Transfer, a voice-to-text daemon for Linux and macOS",
     )
-    parser.add_argument("--version", action="version", version=f"%(prog)s {_version()}")
+    parser.add_argument("--version", action="version", version=f"Vox Transfer {_version()}")
     parser.add_argument(
         "--config", "-c",
         type=Path,
@@ -128,10 +128,10 @@ def main() -> None:
     try:
         lock = _acquire_instance_lock(lock_dir)
     except OSError as e:
-        log.error("Couldn't lock %s to keep Vox to one instance: %s", lock_dir, e)
+        log.error("Couldn't lock %s to keep Vox Transfer to one instance: %s", lock_dir, e)
         sys.exit(EXIT_CANNOT_START)
     if lock is None:
-        log.info("Vox is already running.")
+        log.info("Vox Transfer is already running.")
         return
     cleared = _clear_big_log()  # only now: a second Vox must not empty the running one's log
     if cleared is not None:
@@ -145,7 +145,7 @@ def main() -> None:
     except ConfigError as e:
         # Exiting would only get Vox restarted into the same error; it waits for the fixed file instead
         config = fallback_config(args.config, e)
-        log.error("%s. Vox won't record until the file is fixed, and loads it as soon as it is.", e)
+        log.error("%s. Vox Transfer won't record until the file is fixed, and loads it as soon as it is.", e)
 
     # Without a key Vox still starts: the menu asks for one, and a service exiting here would only be restarted
     from .keystore import KeystoreError, get_api_key, hide_env_override, migrate_plaintext
@@ -158,14 +158,14 @@ def main() -> None:
         log.warning("Couldn't read the OpenAI API key from the keychain: %s", e)
     no_key = config.uses_openai and not config.openai_api_key and config.api_key_error is None
     if no_key and config.config_error is None:
-        log.warning("No OpenAI API key yet. Choose Set API Key… from the Vox menu.")
+        log.warning("No OpenAI API key yet. Choose Set API Key… from the Vox Transfer menu.")
     if config.mode == "whisper_cpp":
         from .modes import mode_problem
 
         # Start anyway, like without a key: the menu can switch modes, and exiting would only get Vox restarted
         config.mode_error = mode_problem(config, config.mode)
         if config.mode_error is not None:
-            log.error("Local transcription can't run: %s. Choose another mode from the Vox menu.", config.mode_error)
+            log.error("Local transcription can't run: %s. Choose another mode from the Vox Transfer menu.", config.mode_error)
 
     # Check system dependencies
     from .injector import check_accessibility_permission, check_dependencies
@@ -183,7 +183,7 @@ def main() -> None:
             "Enable Accessibility in System Settings -> Privacy & Security -> Accessibility."
         )
 
-    log.info("Starting vox %s daemon...", _version())
+    log.info("Starting Vox Transfer %s daemon...", _version())
 
     try:
         from .daemon import run

@@ -82,7 +82,7 @@ def test_key_with_a_character_outside_printable_ascii_is_refused(key):
 def test_storage_text_names_the_keychain_or_warns():
     model = loaded()
     assert model.encrypted
-    assert model.storage_text == "Vox keeps your key in the system keyring, which encrypts it."
+    assert model.storage_text == "Vox Transfer keeps your key in the system keyring, which encrypts it."
     keyring.set_keyring(fail.Keyring())
     assert not model.encrypted
     assert "without encryption" in model.storage_text
@@ -147,8 +147,8 @@ def test_check_rejects_a_key_the_client_cannot_send(monkeypatch):
 
 
 def test_unchecked_result_asks_to_save_anyway():
-    result = CheckResult(Outcome.UNCHECKED, "Vox couldn’t reach OpenAI to check the key.")
-    assert result.save_anyway_question == "Vox couldn’t reach OpenAI to check the key. Save it anyway?"
+    result = CheckResult(Outcome.UNCHECKED, "Vox Transfer couldn’t reach OpenAI to check the key.")
+    assert result.save_anyway_question == "Vox Transfer couldn’t reach OpenAI to check the key. Save it anyway?"
 
 
 # -- Launch -------------------------------------------------------------------------
@@ -260,7 +260,7 @@ def test_mac_unchecked_key_can_be_saved_anyway(appkit, memory_keyring, mac_windo
     window = mac_window()
     checking(appkit, window, True)
     window.secure_field.setStringValue_(KEY)
-    with patch("vox.ui.mac.key.check_key", return_value=CheckResult(Outcome.UNCHECKED, "Vox couldn’t reach OpenAI.")):
+    with patch("vox.ui.mac.key.check_key", return_value=CheckResult(Outcome.UNCHECKED, "Vox Transfer couldn’t reach OpenAI.")):
         window.save_(None)
     assert window.confirmed == ["Couldn’t Check the Key"]
     assert stored(memory_keyring) == KEY
@@ -391,7 +391,7 @@ def test_gtk_unchecked_key_can_be_saved_anyway(gtk, memory_keyring, gtk_window):
     window = gtk_window()
     window.check_row.set_active(True)
     window.entry.set_text(KEY)
-    with patch("vox.ui.gtk.key.check_key", return_value=CheckResult(Outcome.UNCHECKED, "Vox couldn’t reach OpenAI.")):
+    with patch("vox.ui.gtk.key.check_key", return_value=CheckResult(Outcome.UNCHECKED, "Vox Transfer couldn’t reach OpenAI.")):
         window.save()
     assert window.confirmed == ["Couldn’t Check the Key"]
     assert stored(memory_keyring) == KEY

@@ -17,7 +17,7 @@ from ..history import HistoryDB
 
 
 def main(argv: list[str] | None = None) -> None:
-    parser = argparse.ArgumentParser(prog="vox-history", description="Search past Vox dictations")
+    parser = argparse.ArgumentParser(prog="vox-history", description="Search past Vox Transfer dictations")
     parser.add_argument("--db", type=Path, default=None, help="Path to history.db")
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")

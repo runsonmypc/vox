@@ -1,4 +1,4 @@
-# Releasing Vox
+# Releasing Vox Transfer
 
 A release is a GitHub release made by `.github/workflows/release.yml` when a `vX.Y.Z` tag is
 pushed. This file is for the maintainer. Users install from the README.
@@ -49,11 +49,11 @@ gh run download <run-id> --name release
 1. **Pick the version** `X.Y.Z` ([semantic versioning](https://semver.org/)) and set it as
    `version` in `pyproject.toml`. `tests/test_release.py` accepts only `X.Y.Z`.
 
-2. <a id="relock"></a>**Relock.** `uv.lock` records Vox's own version, so it must be regenerated,
-   with the uv version that CI pins (`UV_VERSION` in `.github/workflows/ci.yml` and `release.yml`,
-   now 0.12.19); another uv may write a different lock. `scripts/lock.sh` calls `uv` itself, so
-   put the pinned uv first on `PATH`, from a new private directory (a fixed path under `/tmp` could
-   be created, and the script in it swapped, by another account):
+2. <a id="relock"></a>**Relock.** `uv.lock` records Vox Transfer's own version, so it must be
+   regenerated, with the uv version that CI pins (`UV_VERSION` in `.github/workflows/ci.yml` and
+   `release.yml`, now 0.12.19); another uv may write a different lock. `scripts/lock.sh` calls `uv`
+   itself, so put the pinned uv first on `PATH`, from a new private directory (a fixed path under
+   `/tmp` could be created, and the script in it swapped, by another account):
 
    ```sh
    d=$(mktemp -d)
@@ -84,7 +84,7 @@ gh run download <run-id> --name release
 5. **Tag the tested commit and push the tag:**
 
    ```sh
-   git tag -a vX.Y.Z -m "Vox X.Y.Z"
+   git tag -a vX.Y.Z -m "Vox Transfer X.Y.Z"
    git push origin vX.Y.Z
    ```
 
@@ -106,13 +106,13 @@ release with `gh release delete vX.Y.Z` (the tag stays) and re-run the failed jo
 
 ## What a release publishes
 
-A GitHub release named "Vox X.Y.Z" on the tag `vX.Y.Z`, with the `CHANGELOG.md` section as its
-notes and these files:
+A GitHub release named "Vox Transfer X.Y.Z" on the tag `vX.Y.Z`, with the `CHANGELOG.md` section as
+its notes and these files:
 
 | File | What it is |
 | --- | --- |
 | `vox-X.Y.Z.tar.gz` | The tagged source tree (`git archive`), with `install.sh` for macOS and Linux. |
-| `vox_X.Y.Z_amd64.deb`, `vox_X.Y.Z_arm64.deb` | Packages for Ubuntu 24.04 and distributions based on it. Vox and its locked dependencies go to `/opt/vox`, and Vox starts at login for every user. |
+| `vox_X.Y.Z_amd64.deb`, `vox_X.Y.Z_arm64.deb` | Packages for Ubuntu 24.04 and distributions based on it. Vox Transfer and its locked dependencies go to `/opt/vox`, and Vox Transfer starts at login for every user. |
 | `install.sh` | The installer on its own. Run without a source tree, it downloads the latest release's tarball, checks it against `SHA256SUMS` and runs the `install.sh` inside. |
 | `SHA256SUMS` | SHA-256 checksums of the four files above. |
 
@@ -122,8 +122,8 @@ or a package repository; the wheel is built only to make the `.deb` packages.
 
 ## Check the published release
 
-Installing starts Vox at login, so use a spare Mac, a spare account or a virtual machine rather
-than the computer you work on. Each check ends by removing Vox again.
+Installing starts Vox Transfer at login, so use a spare Mac, a spare account or a virtual machine
+rather than the computer you work on. Each check ends by removing Vox Transfer again.
 
 ### macOS
 
@@ -131,13 +131,14 @@ Needs [uv](https://docs.astral.sh/uv/) (`brew install uv`).
 
 ```sh
 curl -fsSL https://github.com/runsonmypc/vox/releases/latest/download/install.sh | bash
-~/.local/bin/vox --version                                   # vox X.Y.Z
+~/.local/bin/vox --version                                   # Vox Transfer X.Y.Z
 launchctl print "gui/$(id -u)/com.runsonmypc.vox" | grep state   # state = running
-grep "Starting vox" ~/Library/Logs/Vox/vox.log
+grep "Starting Vox Transfer" ~/Library/Logs/Vox/vox.log
 ```
 
-The Vox icon appears in the menu bar and Vox.app in Applications. Allow Microphone, Accessibility
-and Input Monitoring when macOS asks, then dictate a sentence into any text field. Remove it with:
+The Vox Transfer icon appears in the menu bar and Vox Transfer.app in Applications. Allow
+Microphone, Accessibility and Input Monitoring when macOS asks, then dictate a sentence into any
+text field. Remove it with:
 
 ```sh
 curl -fsSL https://github.com/runsonmypc/vox/releases/latest/download/install.sh | bash -s -- --uninstall
@@ -147,14 +148,14 @@ curl -fsSL https://github.com/runsonmypc/vox/releases/latest/download/install.sh
 
 ```sh
 curl -fsSL https://github.com/runsonmypc/vox/releases/latest/download/install.sh | bash
-~/.local/bin/vox --version        # vox X.Y.Z
+~/.local/bin/vox --version        # Vox Transfer X.Y.Z
 systemctl --user status vox       # active (running)
 journalctl --user -u vox -e
 ```
 
-On GNOME, click Install if a dialog offers the AppIndicator extension; the Vox icon then appears in
-the top bar. Dictate a sentence, then remove Vox with the same one-liner followed by
-`bash -s -- --uninstall`.
+On GNOME, click Install if a dialog offers the AppIndicator extension; the Vox Transfer icon then
+appears in the top bar. Dictate a sentence, then remove Vox Transfer with the same one-liner
+followed by `bash -s -- --uninstall`.
 
 ### Ubuntu 24.04, with the .deb
 
@@ -165,7 +166,7 @@ curl -fsSLO https://github.com/runsonmypc/vox/releases/download/vX.Y.Z/vox_X.Y.Z
 curl -fsSLO https://github.com/runsonmypc/vox/releases/download/vX.Y.Z/SHA256SUMS
 sha256sum --check --ignore-missing SHA256SUMS
 sudo apt install ./vox_X.Y.Z_amd64.deb
-vox --version                                 # vox X.Y.Z
+vox --version                                 # Vox Transfer X.Y.Z
 systemctl --global is-enabled vox.service     # enabled
 systemctl --user start vox                    # or log out and back in
 systemctl --user status vox                   # active (running)

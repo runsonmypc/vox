@@ -10,14 +10,22 @@ The system SHALL provide one install script for macOS and Linux that installs Vo
 
 #### Scenario: Fresh install
 - **WHEN** the user runs `./install.sh`
-- **THEN** Vox is installed into its own virtualenv (`~/.local/share/vox/venv`) from exactly the hash-pinned packages in `requirements.lock`, with a `~/.local/bin/vox` link; missing system packages are installed (on Linux including `xdotool`, `xclip` and `xprop` from x11-utils); Vox starts at login whether or not an OpenAI API key is set; a Vox launcher is added to the system's applications; and it ends by naming the full path of the `vox` command (`~/.local/bin/vox`), warning when that folder is not on `PATH`
+- **THEN** Vox is installed into its own virtualenv (`~/.local/share/vox/venv`) from exactly the hash-pinned packages in `requirements.lock`, with a `~/.local/bin/vox` link; missing system packages are installed (on Linux including `xdotool`, `xclip` and `xprop` from x11-utils); Vox starts at login whether or not an OpenAI API key is set; a Vox Transfer launcher is added to the system's applications; and it ends by naming the full path of the `vox` command (`~/.local/bin/vox`), warning when that folder is not on `PATH`
+
+#### Scenario: Another app named Vox Transfer (macOS)
+- **WHEN** `/Applications` already holds an app at `Vox Transfer.app` that is not this user's own launcher (its `Info.plist` is not owned by the user or lacks `com.runsonmypc.vox.launcher`)
+- **THEN** the installer never writes into it: it puts the launcher at `~/Applications/Vox Transfer.app` under the same rule, or, when neither place is free, skips the launcher with a warning and still finishes; and `--uninstall` removes only this user's own launcher
 
 #### Scenario: Another app named Vox (macOS)
-- **WHEN** `/Applications` already holds an app at `Vox.app` (`VOX.app` on the case-insensitive default volume) that is not this user's own Vox launcher (its `Info.plist` is not owned by the user or lacks `com.runsonmypc.vox.launcher`)
-- **THEN** the installer never writes into it: it puts the launcher at `~/Applications/Vox.app` under the same rule, or, when neither place is free, skips the launcher with a warning and still finishes; and `--uninstall` removes only this user's own launcher
+- **WHEN** `/Applications` or `~/Applications` holds an app at `Vox.app` (`VOX.app` on the case-insensitive default volume, such as the VOX music player) that is not this user's own launcher
+- **THEN** installing, updating and `--uninstall` never write into or delete it, and it does not stop the `Vox Transfer.app` launcher from going to `/Applications`
+
+#### Scenario: Launcher from before the rename (macOS)
+- **WHEN** an install or update adds the `Vox Transfer.app` launcher, and `/Applications` or `~/Applications` holds a `Vox.app` launcher that this user's installer added before the rename
+- **THEN** that `Vox.app` is deleted, so the user is left with one launcher, Vox Transfer
 
 #### Scenario: Start after Quit
-- **WHEN** the user has quit Vox from the tray and opens the Vox launcher (the Applications folder or Spotlight on macOS, the applications list on Linux)
+- **WHEN** the user has quit Vox from the tray and opens the Vox Transfer launcher (the Applications folder or Spotlight on macOS, the applications list on Linux)
 - **THEN** Vox starts again through its login service with the same permissions, and opening the launcher while Vox is running does nothing
 
 #### Scenario: Already running
@@ -80,11 +88,11 @@ The system SHALL remove a per-user install with `install.sh --uninstall`, keepin
 
 #### Scenario: Uninstalling on Linux
 - **WHEN** the user runs `install.sh --uninstall` on Linux
-- **THEN** the login service is stopped and disabled, and the unit, autostart entry, launcher, icon, virtualenv and the `vox` link are removed, while `~/.config/vox` and `~/.local/share/vox` history are kept; the output explains how to delete the key from the login keyring and mentions an installed Vox `.deb`
+- **THEN** the login service is stopped and disabled, and the unit, autostart entry, launcher, icon, virtualenv and the `vox` link are removed, while `~/.config/vox` and `~/.local/share/vox` history are kept; the output explains how to delete the key from the login keyring and mentions an installed Vox Transfer `.deb`
 
 #### Scenario: Uninstalling on macOS
 - **WHEN** the user runs `install.sh --uninstall` on macOS
-- **THEN** the LaunchAgent is booted out and deleted, only the `Vox.app` launcher this user's installer created is removed (in `/Applications` or `~/Applications`), the virtualenv and the `vox` link are removed, and settings, history, `~/Library/Logs/Vox` and the Keychain item are kept; a launcher that cannot be deleted is reported and does not stop the rest of the uninstall
+- **THEN** the LaunchAgent is booted out and deleted, only the launchers this user's installer created are removed (`Vox Transfer.app`, or `Vox.app` from before the rename, in `/Applications` or `~/Applications`), the virtualenv and the `vox` link are removed, and settings, history, `~/Library/Logs/Vox` and the Keychain item are kept; a launcher that cannot be deleted is reported and does not stop the rest of the uninstall
 
 ### Requirement: Debian Package
 The system SHALL publish a `vox_<version>_<arch>.deb` for Ubuntu 24.04 and its derivatives, for amd64 and arm64, that installs Vox into `/opt/vox` with `/usr/bin/vox`, depends on the system packages Vox needs (including `x11-utils` for `xprop`, as `install.sh` requires), and starts Vox at login for every user.
@@ -140,7 +148,7 @@ The system SHALL report its installed version.
 
 #### Scenario: Version flag
 - **WHEN** the user runs `vox --version`
-- **THEN** it prints `vox` and the installed package version, or `unknown` when run from a checkout that was never installed
+- **THEN** it prints `Vox Transfer` and the installed package version, or `unknown` when run from a checkout that was never installed
 
 ### Requirement: Continuous Integration
 The project SHALL check every push to `main` and every pull request with GitHub Actions on standard GitHub-hosted runners only, which are free for public repositories, and never on larger or paid runners.
@@ -158,7 +166,7 @@ The project SHALL publish a release when a `vX.Y.Z` tag is pushed. It SHALL publ
 
 #### Scenario: Tagging a release
 - **WHEN** a tag `vX.Y.Z` is pushed
-- **THEN** the workflow checks that the tag matches the version in `pyproject.toml` and that `CHANGELOG.md` has a section for it, runs CI, builds the wheel with the locked setuptools and a `git archive` tarball of the tagged commit, builds and smoke-tests amd64 and arm64 packages on their own runners, writes `SHA256SUMS`, and creates the GitHub release with the changelog section as its notes
+- **THEN** the workflow checks that the tag matches the version in `pyproject.toml` and that `CHANGELOG.md` has a section for it, runs CI, builds the wheel with the locked setuptools and a `git archive` tarball of the tagged commit, builds and smoke-tests amd64 and arm64 packages on their own runners, writes `SHA256SUMS`, and creates the GitHub release titled "Vox Transfer X.Y.Z" with the changelog section as its notes
 
 #### Scenario: Mismatched tag
 - **WHEN** the tag does not match `pyproject.toml`'s version, or `CHANGELOG.md` has no section for it
@@ -171,3 +179,14 @@ The project SHALL publish a release when a `vX.Y.Z` tag is pushed. It SHALL publ
 #### Scenario: Write access
 - **WHEN** the release workflow runs
 - **THEN** only the job that creates the release can write to the repository
+
+### Requirement: Product Name
+The system SHALL present itself to users as Vox Transfer: in its tray or menu bar menu, its windows, dialogs and messages, its log lines, `vox --help` and `vox --version`, its launchers, the Linux service's description, the Debian package's description, the release title and its documentation. The names that scripts, installs and permission grants depend on SHALL stay `vox`: the command and `/usr/bin/vox`, the Python package, `~/.config/vox`, `~/Library/Logs/Vox`, `~/.local/share/vox`, `/opt/vox`, `vox.service`, the launchd label and its plist, the bundle identifiers (`com.runsonmypc.vox…`), the `.desktop` file names, the `vox` Debian package and the release file names, the keychain item `vox`, environment variables, and the GitHub repository `runsonmypc/vox`.
+
+#### Scenario: Names users see
+- **WHEN** the user opens the menu, a window of the app, the applications list or Spotlight, reads the log, runs `vox --help`, or looks at the package or the release
+- **THEN** the app is called Vox Transfer: the menu's first line begins "Vox Transfer ·", its last item is "Quit Vox Transfer", the launchers' `Name=` and the macOS launcher's bundle name are "Vox Transfer", the systemd unit's `Description=` is "Vox Transfer voice dictation", the `.deb` description begins "Vox Transfer", and the GitHub release is titled "Vox Transfer X.Y.Z"
+
+#### Scenario: Names that stay vox
+- **WHEN** an existing install is updated
+- **THEN** the command, settings, history, logs, login service, keychain item and package keep the paths and names they had, so nothing moves and no permission or key is lost

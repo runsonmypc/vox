@@ -17,7 +17,7 @@ from .key_model import KeyModel
 
 
 def main(argv: list[str] | None = None) -> None:
-    parser = argparse.ArgumentParser(prog="vox-key", description="Set the OpenAI API key Vox uses")
+    parser = argparse.ArgumentParser(prog="vox-key", description="Set the OpenAI API key Vox Transfer uses")
     parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 

@@ -37,8 +37,8 @@ def setup() -> None:
     global _ready
     if _ready:
         return
-    GLib.set_prgname("vox")  # before GTK starts, so the window class names Vox rather than python3
-    GLib.set_application_name("Vox")
+    GLib.set_prgname("vox")  # before GTK starts, so the window class is vox rather than python3
+    GLib.set_application_name("Vox Transfer")
     Adw.init()
     provider = Gtk.CssProvider()
     provider.load_from_string(_CSS)

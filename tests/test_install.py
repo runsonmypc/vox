@@ -119,12 +119,12 @@ def test_failed_build_keeps_the_previous_venv(home):
     assert result.returncode != 0
     assert (venv / "marker").read_text() == "old"
     assert not Path(f"{venv}.old").exists()
-    assert "previous Vox stays installed" in result.stderr
+    assert "previous Vox Transfer stays installed" in result.stderr
 
 
 def test_failed_smoke_test_keeps_the_previous_venv(home):
     venv = make_old_venv(home)
-    result = bash(home, BUILD + "smoke_test() { die 'the new Vox environment does not work'; }\nreplace_venv build_ok")
+    result = bash(home, BUILD + "smoke_test() { die 'the new Vox Transfer environment does not work'; }\nreplace_venv build_ok")
     assert result.returncode == 1
     assert (venv / "marker").read_text() == "old"
 
@@ -185,6 +185,7 @@ def test_linux_launchers_add_an_autostart_entry(home):
         desktop = configparser.ConfigParser(interpolation=None)
         desktop.optionxform = str
         desktop.read_string(entry.read_text())
+        assert desktop["Desktop Entry"]["Name"] == "Vox Transfer"
         assert desktop["Desktop Entry"]["Exec"] == "systemctl --user start vox.service"
         assert desktop["Desktop Entry"]["Icon"] == str(home / ".local/share/vox/vox.png")
     assert (home / ".local/share/vox/vox.png").read_bytes().startswith(b"\x89PNG")
@@ -316,6 +317,8 @@ def test_launch_agent_has_absolute_paths_and_private_logs(home):
     job = plistlib.loads(out.read_bytes())
     log = str(home / "Library/Logs/Vox/vox.log")
     assert job["Label"] == "com.runsonmypc.vox"
+    # so Login Items in System Settings shows the agent as the launcher, Vox Transfer
+    assert job["AssociatedBundleIdentifiers"] == ["com.runsonmypc.vox.launcher"]
     assert job["ProgramArguments"] == [str(home / ".local/bin/vox")]
     assert job["StandardOutPath"] == job["StandardErrorPath"] == log
     assert job["Umask"] == 0o077
@@ -339,13 +342,49 @@ def test_mac_logs_are_private_and_old_tmp_logs_are_removed(home):
     assert not any(p.exists() for p in legacy)
 
 
-def test_mac_uninstall_removes_only_the_vox_launcher(home):
+# launchctl bootstrap fails the first `failures` times, as it does while launchd retires the old job
+FLAKY_BOOTSTRAP = """
+    id() { echo 501; }
+    mac_logs() { :; }
+    render_plist() { :; }
+    mac_launcher() { :; }
+    sleep() { :; }
+    launchctl() {
+        [ "$1" = bootstrap ] || return 0
+        echo x >>"$HOME/attempts"
+        if [ "$(wc -l <"$HOME/attempts")" -le {failures} ]; then
+            echo "Bootstrap failed: 5: Input/output error" >&2
+            return 5
+        fi
+    }
+    mac_service "$PWD"
+"""
+
+
+def test_an_update_hides_a_launchd_retry_that_succeeds(home):
+    result = bash(home, FLAKY_BOOTSTRAP.replace("{failures}", "1"))
+    assert result.returncode == 0, result.stderr
+    assert (home / "attempts").read_text().count("x") == 2
+    assert "Bootstrap failed" not in result.stdout + result.stderr
+    assert "Vox Transfer is running" in result.stdout + result.stderr
+
+
+def test_a_launch_agent_that_never_starts_reports_why(home):
+    result = bash(home, FLAKY_BOOTSTRAP.replace("{failures}", "5"))
+    assert result.returncode == 1
+    assert (home / "attempts").read_text().count("x") == 5
+    assert "could not start the Vox Transfer LaunchAgent: Bootstrap failed: 5: Input/output error" in result.stderr
+
+
+def test_mac_uninstall_removes_only_the_vox_launchers(home):
     venv = fake_venv(home)
-    ours = home / "SystemApplications/Vox.app/Contents"
-    other = home / "Applications/Vox.app/Contents"  # someone else's app of the same name
-    ours.mkdir(parents=True)
-    other.mkdir(parents=True)
+    ours = home / "SystemApplications/Vox Transfer.app/Contents"
+    old = home / "Applications/Vox.app/Contents"  # added by an install from before the rename
+    other = home / "Applications/Vox Transfer.app/Contents"  # someone else's app of the same name
+    for path in (ours, old, other):
+        path.mkdir(parents=True)
     (ours / "Info.plist").write_text("<string>com.runsonmypc.vox.launcher</string>")
+    (old / "Info.plist").write_text("<string>com.runsonmypc.vox.launcher</string>")
     (other / "Info.plist").write_text("<string>com.example.vox</string>")
     agent = home / "Library/LaunchAgents/com.runsonmypc.vox.plist"
     agent.parent.mkdir(parents=True)
@@ -362,7 +401,7 @@ def test_mac_uninstall_removes_only_the_vox_launcher(home):
     """
     result = bash(home, script)
     assert result.returncode == 0, result.stderr
-    assert not ours.exists() and other.exists()
+    assert not ours.exists() and not old.exists() and other.exists()
     assert not agent.exists() and not venv.exists()
     assert logs.exists()
     assert "launchctl bootout gui/501/com.runsonmypc.vox" in (home / "calls").read_text()
@@ -394,47 +433,83 @@ def is_launcher(path: Path) -> bool:
     return "com.runsonmypc.vox.launcher" in (path / "Contents/Info.plist").read_text()
 
 
-def test_mac_launcher_never_writes_into_another_app_named_vox(home):
-    """The default APFS volume ignores case, so another vendor's VOX.app is the same path as Vox.app."""
+def own_launcher(path: Path) -> None:
+    """A launcher that an earlier run of this user's install.sh added at `path`."""
+    (path / "Contents/MacOS").mkdir(parents=True)
+    (path / "Contents/Info.plist").write_text("<string>com.runsonmypc.vox.launcher</string>")
+    (path / "Contents/MacOS/Vox").write_text("an older launcher")
+
+
+def test_mac_launcher_never_writes_into_another_app_named_vox_transfer(home):
+    fake_venv(home)
+    other = home / "SystemApplications/Vox Transfer.app"
+    before = other_app(other)
+    result = bash(home, MAC + "mac_launcher")
+    assert result.returncode == 0, result.stderr
+    assert bundle(other) == before
+    assert is_launcher(home / "Applications/Vox Transfer.app")
+    assert (home / "Applications/Vox Transfer.app/Contents/MacOS/Vox").read_text().startswith("#!/bin/bash")
+
+    # and uninstalling removes only the launcher it added
+    result = bash(home, MAC + "uninstall_vox")
+    assert result.returncode == 0, result.stderr
+    assert bundle(other) == before
+    assert not (home / "Applications/Vox Transfer.app").exists()
+
+
+def test_mac_launcher_never_removes_another_app_named_vox(home):
+    """The default APFS volume ignores case, so another vendor's VOX.app is the same path as the old Vox.app."""
     fake_venv(home)
     other = home / "SystemApplications/Vox.app"
     before = other_app(other)
     result = bash(home, MAC + "mac_launcher")
     assert result.returncode == 0, result.stderr
     assert bundle(other) == before
-    assert is_launcher(home / "Applications/Vox.app")
-    assert (home / "Applications/Vox.app/Contents/MacOS/Vox").read_text().startswith("#!/bin/bash")
+    assert is_launcher(home / "SystemApplications/Vox Transfer.app")
 
-    # and uninstalling removes only the launcher it added
     result = bash(home, MAC + "uninstall_vox")
     assert result.returncode == 0, result.stderr
     assert bundle(other) == before
-    assert not (home / "Applications/Vox.app").exists()
+    assert not (home / "SystemApplications/Vox Transfer.app").exists()
 
 
-def test_mac_launcher_is_skipped_when_both_places_have_another_app_named_vox(home):
+@pytest.mark.parametrize("folder", ["SystemApplications", "Applications"])
+def test_mac_launcher_replaces_the_vox_launcher_from_before_the_rename(home, folder):
     fake_venv(home)
-    apps = [home / "SystemApplications/Vox.app", home / "Applications/Vox.app"]
+    (home / "SystemApplications").mkdir()
+    old = home / folder / "Vox.app"
+    own_launcher(old)
+    result = bash(home, MAC + "mac_launcher")
+    assert result.returncode == 0, result.stderr
+    assert is_launcher(home / "SystemApplications/Vox Transfer.app")
+    assert not old.exists()
+
+
+def test_mac_launcher_is_skipped_when_both_places_have_another_app_named_vox_transfer(home):
+    fake_venv(home)
+    apps = [home / "SystemApplications/Vox Transfer.app", home / "Applications/Vox Transfer.app"]
     before = [other_app(app) for app in apps]
+    old = home / "SystemApplications/Vox.app"
+    own_launcher(old)
     result = bash(home, MAC + "mac_launcher")
     assert result.returncode == 0, result.stderr
     assert [bundle(app) for app in apps] == before
-    assert "no Vox launcher was added" in result.stderr
+    assert is_launcher(old)  # with no new launcher, the old one is still the way to start the app
+    assert "no Vox Transfer launcher was added" in result.stderr
     assert "launchctl kickstart gui/501/com.runsonmypc.vox" in result.stderr
 
 
 def test_mac_launcher_updates_its_own_launcher_in_place(home):
     fake_venv(home)
-    ours = home / "SystemApplications/Vox.app"
-    (ours / "Contents/MacOS").mkdir(parents=True)
-    (ours / "Contents/Info.plist").write_text("<string>com.runsonmypc.vox.launcher</string>")
-    (ours / "Contents/MacOS/Vox").write_text("an older launcher")
+    ours = home / "SystemApplications/Vox Transfer.app"
+    own_launcher(ours)
     result = bash(home, MAC + "mac_launcher")
     assert result.returncode == 0, result.stderr
     assert (ours / "Contents/MacOS/Vox").read_text().startswith("#!/bin/bash")
-    assert plistlib.loads((ours / "Contents/Info.plist").read_bytes())["CFBundleIdentifier"] == (
-        "com.runsonmypc.vox.launcher"
-    )
+    info = plistlib.loads((ours / "Contents/Info.plist").read_bytes())
+    assert info["CFBundleIdentifier"] == "com.runsonmypc.vox.launcher"
+    # the names Finder, Spotlight and Login Items show
+    assert info["CFBundleName"] == info["CFBundleDisplayName"] == "Vox Transfer"
     assert not (home / "Applications").exists()
 
 
@@ -449,8 +524,8 @@ def test_mac_launcher_goes_to_the_users_applications_when_the_shared_folder_is_r
     finally:
         shared.chmod(0o755)
     assert result.returncode == 0, result.stderr
-    assert is_launcher(home / "Applications/Vox.app")
-    assert not (shared / "Vox.app").exists()
+    assert is_launcher(home / "Applications/Vox Transfer.app")
+    assert not (shared / "Vox Transfer.app").exists()
 
 
 @pytest.mark.skipif(os.geteuid() == 0, reason="root can delete a read-only launcher")
@@ -458,10 +533,8 @@ def test_mac_uninstall_carries_on_when_the_launcher_cannot_be_deleted(home):
     venv = fake_venv(home)
     (home / ".local/bin").mkdir(parents=True)
     (home / ".local/bin/vox").symlink_to(venv / "bin/vox")
-    launcher = home / "Applications/Vox.app"
-    (launcher / "Contents/MacOS").mkdir(parents=True)
-    (launcher / "Contents/Info.plist").write_text("<string>com.runsonmypc.vox.launcher</string>")
-    (launcher / "Contents/MacOS/Vox").touch()
+    launcher = home / "Applications/Vox Transfer.app"
+    own_launcher(launcher)
     locked = [launcher / "Contents/MacOS", launcher / "Contents", launcher]
     for path in locked:
         path.chmod(0o555)
@@ -473,7 +546,7 @@ def test_mac_uninstall_carries_on_when_the_launcher_cannot_be_deleted(home):
     assert result.returncode == 0, result.stderr
     assert f"could not remove {launcher}" in result.stderr
     assert not venv.exists() and not (home / ".local/bin/vox").is_symlink()
-    assert "Vox is uninstalled" in result.stdout
+    assert "Vox Transfer is uninstalled" in result.stdout
 
 
 # --- Bootstrap from a release ----------------------------------------------------------------
@@ -541,4 +614,4 @@ def test_bootstrap_needs_a_published_release(home, tmp_path):
     result = bash(home, FAKE_CURL + "bootstrap", RELEASE=str(tmp_path),
                   LATEST="https://github.com/runsonmypc/vox/releases")
     assert result.returncode == 1
-    assert "could not find the latest Vox release" in result.stderr
+    assert "could not find the latest Vox Transfer release" in result.stderr

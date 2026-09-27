@@ -47,14 +47,14 @@ py=/opt/vox/venv/bin/python
 xvfb-run -a "$py" -P -c '
 import sys
 import gi, vox, vox.daemon, vox.ui.tray, pystray
-assert vox.__file__.startswith("/opt/vox/venv/"), "imported Vox from " + vox.__file__
+assert vox.__file__.startswith("/opt/vox/venv/"), "imported vox from " + vox.__file__
 assert "pystray._appindicator" in sys.modules, "pystray fell back from AppIndicator: " + pystray.Icon.__module__
 '
 # GTK 3 (the tray) and GTK 4 (the windows) cannot share a process
 xvfb-run -a "$py" -P -c '
 import importlib, pkgutil
 import vox.ui.gtk as windows
-assert windows.__file__.startswith("/opt/vox/venv/"), "imported Vox from " + windows.__file__
+assert windows.__file__.startswith("/opt/vox/venv/"), "imported vox from " + windows.__file__
 for module in pkgutil.iter_modules(windows.__path__, windows.__name__ + "."):
     importlib.import_module(module.name)
 '

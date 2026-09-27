@@ -237,7 +237,7 @@ class KeyController(NSObject):
         except (KeystoreError, OSError) as e:
             log.warning("Couldn't save the API key: %s", e)
             kit.alert(self.window, SAVE_FAILED_TITLE,
-                      f"{e}\n\nIf macOS asked whether Vox may use the Keychain, choose Always Allow and try again.")
+                      f"{e}\n\nIf macOS asked whether Vox Transfer may use the Keychain, choose Always Allow and try again.")
             return
         log.info("Saved the OpenAI API key")
         self.finish()

@@ -1,6 +1,6 @@
 [Desktop Entry]
 Type=Application
-Name=Vox
+Name=Vox Transfer
 Comment=Start voice dictation
 Exec=systemctl --user start vox.service
 Icon=vox
