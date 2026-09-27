@@ -904,7 +904,8 @@ async def _config_reloader(config: Config, recorder: Recorder, tray: TrayManager
     """Poll config.toml every couple of seconds and apply the settings that can change while Vox runs.
 
     Hotkey settings are read once at startup and need a restart. While config.config_error is set,
-    the first version of the file that loads is applied and clears it, so Vox records again.
+    the file is tried on every poll, and the first version that loads (or its deletion, which means
+    the defaults) is applied and clears it, so Vox records again.
     """
     path = config.config_path
     if path is None:
@@ -912,15 +913,17 @@ async def _config_reloader(config: Config, recorder: Recorder, tray: TrayManager
 
     last_stamp = _file_stamp(path)
     file_audio = (config.audio_device, config.sample_rate, config.channels)
+    last_failure = config.config_error  # __main__ has logged that one
 
     while True:
         await asyncio.sleep(_CONFIG_POLL_SECONDS)
+        stamp = _file_stamp(path)
+        changed, last_stamp = stamp != last_stamp, stamp
+        # A fix need not change the stamp (chmod), may predate the first stamp, or may be deleting
+        # the file, so a file that doesn't load is retried whatever the stamp says.
+        if config.config_error is None and (stamp is None or not changed):
+            continue
         try:
-            stamp = _file_stamp(path)
-            if stamp is None or stamp == last_stamp:
-                continue
-
-            last_stamp = stamp
             new_config = load_config(path)
 
             config.snippets = new_config.snippets
@@ -949,7 +952,10 @@ async def _config_reloader(config: Config, recorder: Recorder, tray: TrayManager
 
             if config.config_error is not None:
                 config.config_error = None
-                log.info("%s loads again: Vox is using its settings and records again", path)
+                if stamp is None:
+                    log.info("%s is gone: Vox is using the default settings and records again", path)
+                else:
+                    log.info("%s loads again: Vox is using its settings and records again", path)
                 hotkey = (new_config.hotkey, new_config.hotkey_fallback, new_config.double_tap_timeout_ms)
                 if hotkey != (config.hotkey, config.hotkey_fallback, config.double_tap_timeout_ms):
                     log.warning("The hotkey settings in %s take effect when Vox restarts", path)
@@ -958,6 +964,12 @@ async def _config_reloader(config: Config, recorder: Recorder, tray: TrayManager
             if tray is not None:
                 tray.mode_changed()  # the menu shows the mode and the limit, and the status line the problems
         except ConfigError as e:
-            log.warning("Config reload failed: %s", e)
-        except Exception:
-            log.exception("Config reload failed")
+            if changed or str(e) != last_failure:  # a retry that fails the same way stays quiet
+                log.warning("Config reload failed: %s", e)
+            last_failure = str(e)
+            if config.config_error is not None:
+                config.config_error = str(e)  # refused toggles name the problem the file has now
+        except Exception as e:
+            if changed or repr(e) != last_failure:
+                log.exception("Config reload failed")
+            last_failure = repr(e)

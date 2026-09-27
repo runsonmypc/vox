@@ -1002,3 +1002,63 @@ async def test_a_settings_file_that_loads_again_is_applied_and_lets_vox_record(t
     tray.mode_changed.assert_called_once()  # the status line drops "Settings file has an error"
     assert config.hotkey == "right_shift"  # the listener started with the default, until a restart
     assert "hotkey settings in" in caplog.text and "take effect when Vox restarts" in caplog.text
+
+
+@pytest.mark.anyio
+async def test_a_broken_settings_file_that_is_deleted_lets_vox_record_on_the_defaults(tmp_path, caplog):
+    caplog.set_level(logging.INFO, logger="vox.daemon")
+    config = broken_settings(tmp_path)
+    tray = MagicMock()
+
+    async with reloading(config, MagicMock(), tray):
+        config.config_path.unlink()
+        await until(lambda: config.config_error is None)
+
+    assert config.mode == "batch"
+    tray.mode_changed.assert_called_once()
+    assert "is gone: Vox is using the default settings" in caplog.text
+
+
+@pytest.mark.anyio
+async def test_a_settings_file_fixed_before_the_reloader_starts_is_applied(tmp_path):
+    config = broken_settings(tmp_path)
+    config.config_path.write_text('[transcription]\nmode = "whisper_cpp"\n[attenuation]\nlevel = 0.2\n')
+
+    async with reloading(config, MagicMock()):  # its first look at the file sees the fixed version
+        await until(lambda: config.config_error is None)
+
+    assert (config.mode, config.attenuation_level) == ("whisper_cpp", 0.2)
+
+
+@pytest.mark.anyio
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads the file whatever its permissions")
+async def test_an_unreadable_settings_file_is_applied_once_it_is_readable(tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_text('[transcription]\nmode = "whisper_cpp"\n')
+    path.chmod(0)
+    with pytest.raises(ConfigError, match="Permission denied") as error:
+        load_config(path)
+    config = fallback_config(path, error.value)
+
+    async with reloading(config, MagicMock()):
+        path.chmod(0o600)  # changes neither the time, the size nor the inode
+        await until(lambda: config.config_error is None)
+
+    assert config.mode == "whisper_cpp"
+
+
+@pytest.mark.anyio
+async def test_a_later_edit_that_still_fails_replaces_the_error_and_is_logged_once(tmp_path, caplog):
+    config = broken_settings(tmp_path)
+    tray = MagicMock()
+
+    async with reloading(config, MagicMock(), tray):
+        await settle()
+        assert "Config reload failed" not in caplog.text  # retries that fail as at startup stay quiet
+
+        config.config_path.write_text("[audio]\nsample_rate = 0\n")
+        await until(lambda: "sample_rate" in config.config_error)
+        await settle()  # several more polls retry the file
+
+    assert caplog.text.count("Config reload failed") == 1
+    tray.mode_changed.assert_not_called()
