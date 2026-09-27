@@ -228,6 +228,15 @@ def test_deb_and_install_sh_need_the_same_system_packages():
     assert install_sh_packages() - {"python3-venv"} <= deb_depends()
 
 
+def test_users_see_the_name_vox_transfer_while_the_package_and_service_stay_vox():
+    for entry in ("vox.desktop", "vox-autostart.desktop"):
+        assert "\nName=Vox Transfer\n" in (REPO / "packaging/deb" / entry).read_text()
+    assert "\nDescription=Vox Transfer voice dictation\n" in (REPO / "packaging/linux/vox.service").read_text()
+    control = (REPO / "packaging/deb/build-deb.sh").read_text()
+    assert "\nPackage: vox\n" in control and "\nDescription: Vox Transfer, voice dictation" in control
+    assert '--title "Vox Transfer $VERSION"' in workflow_jobs("release.yml")["publish"]
+
+
 def test_deb_smoke_test_imports_the_packaged_vox_not_the_checkout():
     """CI runs the smoke test from the checkout, where python -c would import its vox/ instead of /opt/vox."""
     script = (REPO / "packaging/deb/smoke-test.sh").read_text()
