@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import sys
+import time
 import wave
 from pathlib import Path
 
@@ -37,6 +38,18 @@ _TONES = {
     "pause": ((660, 0.07, 0.22), 0.03, (440, 0.1, 0.22)),  # low falling pair
     "resume": ((440, 0.07, 0.22), 0.03, (660, 0.1, 0.22)),  # low rising pair
 }
+
+# sounddevice plays one sound at a time for the whole process (play() stops the one before), so when it
+# ends is process-wide too, in time.monotonic() seconds
+_sd_playing_until = 0.0
+
+
+def sound_playing_until() -> float:
+    """When the sound sounddevice last started ends (time.monotonic()); in the past once none is playing.
+
+    Restarting PortAudio stops that sound, so the device re-scan waits for it. NSSound on macOS is unaffected.
+    """
+    return _sd_playing_until
 
 
 def sounds_dir(config: Config) -> Path:
@@ -138,6 +151,7 @@ class SoundPlayer:
 
     def play(self, name: str) -> None:
         """Start playing a named sound; it plays on while the caller carries on."""
+        global _sd_playing_until
         if not self._config.sounds_enabled:
             return
         sound = self._sounds.get(name)
@@ -151,5 +165,6 @@ class SoundPlayer:
             else:
                 samples, rate = sound
                 sd.play(samples, samplerate=rate)
+                _sd_playing_until = time.monotonic() + len(samples) / rate
         except Exception as e:
             log.warning("Failed to play sound %r: %s", name, e)

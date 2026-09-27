@@ -32,7 +32,7 @@ from .hotkey import HotkeyListener
 from .injector import check_accessibility_permission, paste
 from .keystore import KeystoreError, get_api_key
 from .modes import mode_problem
-from .sounds import SoundPlayer
+from .sounds import SoundPlayer, sound_playing_until
 from .streaming import StreamingTranscriber
 from .transcribe import PartialTranscriptionError, Transcriber
 from .whisper_cpp import WhisperCppTranscriber
@@ -52,7 +52,8 @@ PARTIAL_NOTICE = "Last dictation only partly transcribed: see History"
 _POST_ROLL_SECONDS = 0.12
 # How long a batch transcription waits for the screen capture started with the recording
 _SCREEN_WAIT_SECONDS = 1.5
-# The device re-scan restarts PortAudio, which on Linux also plays Vox's sounds: let them finish first
+# The device re-scan restarts PortAudio, which on Linux also plays Vox's sounds: let them finish first.
+# It waits this long after returning to idle, or longer while a sound is still playing (a custom one).
 _DEVICE_REFRESH_DELAY = 1.0
 # macOS also re-scans while idle, since the restart costs about 1 ms there. On Linux it costs about 45 ms,
 # and PipeWire's or PulseAudio's "default" device already follows hotplugs, so the re-scan after a recording does.
@@ -310,7 +311,7 @@ class _Daemon:
         if self.tray is not None:
             self.tray.set_state(state.value)
         if state is State.IDLE:
-            self._schedule_device_refresh(_DEVICE_REFRESH_DELAY)
+            self._schedule_device_refresh(max(_DEVICE_REFRESH_DELAY, sound_playing_until() - time.monotonic() + 0.1))
 
     # -- Recording ------------------------------------------------------------
 

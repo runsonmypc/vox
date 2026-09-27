@@ -1,14 +1,22 @@
 """Tests for audio feedback sounds, macOS alert sound mappings, and custom sound files."""
 
 import logging
+import time
 import wave
 from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
 
+from vox import sounds
 from vox.config import Config
-from vox.sounds import _SAMPLE_RATE, _SYSTEM_SOUNDS, SoundPlayer, sounds_dir
+from vox.sounds import _SAMPLE_RATE, _SYSTEM_SOUNDS, SoundPlayer, sound_playing_until, sounds_dir
+
+
+@pytest.fixture(autouse=True)
+def _no_sound_playing(monkeypatch):
+    """Each test starts with no sound playing, and leaves none behind for the daemon's device re-scan."""
+    monkeypatch.setattr(sounds, "_sd_playing_until", 0.0)
 
 
 def _fake_appkit():
@@ -186,3 +194,27 @@ def test_a_custom_file_macos_cannot_load_falls_back_to_the_system_sound(tmp_path
         player = SoundPlayer(_config(tmp_path, sounds_enabled=True))
     assert player._sounds["start"]._extract_mock_name() == "Tink"
     assert any("start.wav" in r.getMessage() for r in caplog.records)
+
+
+# -- When the sound ends (the device re-scan waits for it) -----------------------------------
+
+
+def test_a_linux_sound_notes_when_it_ends(tmp_path):
+    _write_wav(tmp_path / "sounds" / "cancel.wav", np.zeros(2 * 22050), rate=22050)  # 2 s
+    with patch("sys.platform", "linux"), patch("vox.sounds.sd"):
+        player = SoundPlayer(_config(tmp_path, sounds_enabled=True))
+        before = time.monotonic()
+        player.play("cancel")
+        assert before + 2 <= sound_playing_until() <= time.monotonic() + 2
+
+        before = time.monotonic()
+        player.play("start")  # sounddevice stops the long sound for this 0.18 s tone
+        assert before + 0.18 <= sound_playing_until() <= time.monotonic() + 0.18
+
+
+def test_a_sound_that_does_not_play_through_sounddevice_notes_nothing(tmp_path):
+    with patch("sys.platform", "linux"), patch("vox.sounds.sd"):
+        SoundPlayer(_config(tmp_path, sounds_enabled=False)).play("error")
+    with patch("sys.platform", "darwin"), patch.dict("sys.modules", {"AppKit": _fake_appkit()}):
+        SoundPlayer(_config(tmp_path, sounds_enabled=True)).play("error")  # NSSound, which a PortAudio restart leaves alone
+    assert sound_playing_until() == 0.0

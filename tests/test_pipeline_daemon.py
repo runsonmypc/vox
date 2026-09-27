@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import threading
+import time
 import tomllib
 import wave
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -16,6 +17,7 @@ import pytest
 import websockets
 
 from vox import daemon as daemon_module
+from vox import sounds as sounds_module
 from vox.config import Config, fallback_config, load_config
 from vox.daemon import (
     ACCESSIBILITY_NOTICE,
@@ -595,6 +597,31 @@ async def test_without_idle_rescans_devices_are_rescanned_only_on_return_to_idle
             await until(lambda: scans.call_count == 2)
             await settle()
             assert scans.call_count == 2
+
+
+@pytest.mark.anyio
+async def test_the_rescan_on_return_to_idle_waits_for_a_sound_still_playing():
+    """On Linux the PortAudio restart stops sounddevice's sound, such as a long custom cancel.wav."""
+    tray = MagicMock()
+    scanned = []
+
+    def scan():
+        scanned.append(time.monotonic())
+        return [(0, "Built-in Mic")]
+
+    with patch("vox.daemon._DEVICE_REFRESH_DELAY", 0.01):
+        async with running(openai_config(), tray) as h:
+            h.recorder.refresh_input_devices.side_effect = scan
+            await until(lambda: scanned)
+            h.send("toggle")
+            await until(lambda: h.state is State.RECORDING)
+
+            ends = time.monotonic() + 0.3
+            with patch.object(sounds_module, "_sd_playing_until", ends):  # the cancel sound plays 0.3 s more
+                h.send("cancel")
+                await until(lambda: h.state is State.IDLE)
+                await until(lambda: len(scanned) == 2)
+    assert scanned[1] >= ends + 0.1
 
 
 @pytest.mark.anyio
