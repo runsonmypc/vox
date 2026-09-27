@@ -349,6 +349,28 @@ async def test_batch_recording_does_not_feed_the_stream_queue_and_stop_releases_
     assert recorder._chunks == []
 
 
+@pytest.mark.anyio
+async def test_a_live_session_that_gives_up_stops_the_queue_but_not_the_recording():
+    recorder = Recorder(Config(sample_rate=16000))
+    with patch("vox.audio.sd.InputStream", return_value=FakeStream()):
+        recorder.start(loop=asyncio.get_running_loop(), stream=True)
+        for value in (1, 2):
+            recorder._callback(_block(value), 800, None, 0)
+        await asyncio.sleep(0)
+        assert recorder.get_chunk_queue().qsize() == 2
+
+        recorder.stop_streaming()
+        assert recorder.get_chunk_queue().empty()  # nobody will read what was queued
+        recorder._callback(_block(3), 800, None, 0)
+        await asyncio.sleep(0)
+        assert recorder.get_chunk_queue().empty()  # nor what comes after
+
+        samples, _ = _wav_samples(recorder.stop())
+        await asyncio.sleep(0)
+    assert list(np.unique(samples)) == [1, 2, 3]  # the batch fallback still gets all of it
+    assert recorder.get_chunk_queue().empty()
+
+
 def test_stop_does_not_leak_audio_into_the_next_recording():
     """Replaces the old pre-roll test: the mic is closed between recordings, so nothing carries over."""
     recorder = Recorder(Config(sample_rate=16000))

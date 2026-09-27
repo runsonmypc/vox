@@ -27,7 +27,7 @@ from vox.daemon import (
     _platform_notice,
     _process,
 )
-from vox.errors import AudioError, ConfigError, TranscriptionError
+from vox.errors import AudioError, ConfigError, StreamingError, TranscriptionError
 from vox.history import HistoryDB
 from vox.streaming import StreamingTranscriber
 from vox.transcribe import PartialTranscriptionError
@@ -544,6 +544,34 @@ async def test_streaming_recording_starts_no_screen_capture():
         h.capture.assert_not_called()
         h.paste.assert_called_once_with("streamed text", AppType.EDITOR)
         h.batch.transcribe.assert_not_called()
+
+
+async def endless_chunks():
+    await asyncio.Event().wait()  # a recording that is still running
+    yield b""
+
+
+@pytest.mark.anyio
+async def test_a_live_session_that_fails_mid_recording_stops_the_audio_queue():
+    async with running(openai_config(mode="streaming")) as h:
+        h.recorder.stream_chunks = endless_chunks
+        h.streaming.connect.side_effect = StreamingError("Failed to connect")
+        h.send("toggle")
+        await until(lambda: h.recorder.stop_streaming.called)
+        assert h.state is State.RECORDING  # the recording itself goes on, for the batch fallback
+
+
+@pytest.mark.anyio
+async def test_a_cancelled_live_session_leaves_the_next_recordings_audio_queue_alone():
+    async with running(openai_config(mode="streaming")) as h:
+        h.recorder.stream_chunks = endless_chunks
+        h.send("toggle")
+        await until(lambda: h.streaming.connect.await_count == 1)
+        h.send("cancel", "toggle")  # the old worker ends only once the new recording has started
+        await until(lambda: h.streaming.connect.await_count == 2)
+        await settle()
+        assert h.state is State.RECORDING
+        h.recorder.stop_streaming.assert_not_called()
 
 
 # -- _process: paste, history, errors ----------------------------------------------------

@@ -407,9 +407,8 @@ class Recorder:
         ``stream`` also feeds 24 kHz chunks to ``stream_chunks()``. ``on_limit``
         is called on ``loop`` once the recording reaches max_recording_seconds.
         """
-        queue = self.get_chunk_queue(loop)
-        while not queue.empty():
-            queue.get_nowait()
+        self.get_chunk_queue(loop)
+        self._drop_queued_chunks()
 
         self._streaming = stream
         self._on_limit = on_limit
@@ -470,6 +469,16 @@ class Recorder:
     def _apply_pending_config(self) -> None:
         if self._pending_config is not None:
             self.reconfigure(self._pending_config)
+
+    def stop_streaming(self) -> None:
+        """The live session ended before the recording: stop queueing chunks it will never read."""
+        self._streaming = False
+        self._drop_queued_chunks()
+
+    def _drop_queued_chunks(self) -> None:
+        queue = self._stream_queue
+        while queue is not None and not queue.empty():
+            queue.get_nowait()
 
     def _end_stream_queue(self) -> None:
         if self._streaming:

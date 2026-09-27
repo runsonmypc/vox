@@ -333,6 +333,12 @@ class _Daemon:
         if session.mode == "streaming":
             session.streaming = StreamingTranscriber(config)
             session.stream_task = asyncio.create_task(_stream_worker(self.recorder, session.streaming, context))
+            session.stream_task.add_done_callback(lambda _: self._stream_ended(session))
+
+    def _stream_ended(self, session: _Session) -> None:
+        """A live session is done. If it gave up early, the recorder must stop queueing audio for it."""
+        if session is self.session or session is self.inflight:  # not one released for a newer recording
+            self.recorder.stop_streaming()
 
     async def _stop_recording(self) -> None:
         await self._restore_volume()
