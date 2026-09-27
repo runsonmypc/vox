@@ -87,7 +87,12 @@ class StreamingTranscriber:
     @property
     def closed(self) -> bool:
         """Whether the session is over: finished, closed, or failed."""
-        return self._closed
+        return self._closed or self._failed
+
+    @property
+    def _failed(self) -> bool:
+        # An error event or a dropped connection before the final transcript; the socket may still be open
+        return self._last_error is not None and not self._completed
 
     async def connect(self, context: AppContext | None = None) -> None:
         """Establish WebSocket connection with auth headers and send session.update."""
@@ -122,8 +127,8 @@ class StreamingTranscriber:
         self._receive_task = asyncio.create_task(self._receive_loop())
 
     async def send_audio_chunk(self, pcm_chunk: bytes) -> None:
-        """Stream a 24kHz PCM16 chunk via input_audio_buffer.append."""
-        if self._closed:
+        """Stream a 24kHz PCM16 chunk via input_audio_buffer.append. A session that is over drops it."""
+        if self.closed:
             return
         if self._ws is None:
             raise StreamingError("Cannot send audio chunk: WebSocket is not connected")
@@ -149,9 +154,10 @@ class StreamingTranscriber:
             raise StreamingError("Cannot finish turn: WebSocket is not connected")
 
         try:
-            await self._ws.send(json.dumps({"type": "input_audio_buffer.commit"}))
-            log.debug("Sent input_audio_buffer.commit")
-            await asyncio.wait_for(self._completed_event.wait(), timeout)
+            if not self._failed:  # a failed session gets no commit: its transcript would be billed, then dropped
+                await self._ws.send(json.dumps({"type": "input_audio_buffer.commit"}))
+                log.debug("Sent input_audio_buffer.commit")
+                await asyncio.wait_for(self._completed_event.wait(), timeout)
         except TimeoutError as e:
             raise StreamingError("Timed out waiting for the transcription to complete") from e
         except websockets.ConnectionClosed as e:

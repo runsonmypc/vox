@@ -340,3 +340,29 @@ async def test_finish_after_close_raises():
     finally:
         server.close()
         await server.wait_closed()
+
+
+@pytest.mark.anyio
+async def test_a_server_error_ends_the_session_while_the_socket_stays_open():
+    received = []
+
+    async def error_on_first_chunk(websocket):
+        async for message in websocket:
+            received.append(json.loads(message)["type"])
+            if received[-1] == "input_audio_buffer.append":
+                await websocket.send(json.dumps({"type": "error", "error": {"message": "Rate limit"}}))
+
+    server, transcriber = await _session(error_on_first_chunk)
+    try:
+        await transcriber.send_audio_chunk(b"\x00\x00" * 100)
+        await until(lambda: transcriber.closed)
+        assert transcriber._ws is not None  # the server kept the connection open
+
+        await transcriber.send_audio_chunk(b"\x00\x00" * 100)  # dropped: nothing more to bill
+        with pytest.raises(StreamingError, match="Rate limit"):
+            await transcriber.finish()
+        await asyncio.sleep(0.05)
+        assert received == ["session.update", "input_audio_buffer.append"]  # and no commit
+    finally:
+        server.close()
+        await server.wait_closed()
