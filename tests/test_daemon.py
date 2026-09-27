@@ -145,7 +145,7 @@ async def test_daemon_streaming_snippet_expansion():
 
 @pytest.mark.anyio
 async def test_daemon_streaming_fallback_to_batch():
-    """Verify graceful fallback to batch WhisperTranscriber when WebSocket streaming fails."""
+    """Verify graceful fallback to batch Transcriber when WebSocket streaming fails."""
     config = Config(mode="streaming")
     context = AppContext(
         wm_class="code",
@@ -194,7 +194,7 @@ async def test_daemon_streaming_fallback_to_batch():
 
 @pytest.mark.anyio
 async def test_daemon_explicit_batch_mode():
-    """Verify that mode='batch' bypasses streaming entirely and uses WhisperTranscriber directly."""
+    """Verify that mode='batch' bypasses streaming entirely and uses Transcriber directly."""
     config = Config(mode="batch")
     context = AppContext(
         wm_class="ghostty",
@@ -336,7 +336,7 @@ async def test_daemon_cancel_during_recording():
     with patch("vox.daemon.HotkeyListener", side_effect=fake_hotkey_init), \
          patch("vox.daemon.Recorder", return_value=mock_recorder), \
          patch("vox.daemon.SoundPlayer", return_value=mock_sounds), \
-         patch("vox.daemon.WhisperTranscriber"), \
+         patch("vox.daemon.Transcriber"), \
          patch("vox.daemon.StreamingTranscriber", return_value=mock_streaming), \
          patch("vox.daemon._config_reloader", side_effect=fake_reloader), \
          patch("vox.daemon.start_screen_capture", return_value=fake_screen_future) as capture, \
@@ -417,7 +417,7 @@ async def test_daemon_cancel_during_processing():
     with patch("vox.daemon.HotkeyListener", side_effect=fake_hotkey_init), \
          patch("vox.daemon.Recorder", return_value=mock_recorder), \
          patch("vox.daemon.SoundPlayer", return_value=mock_sounds), \
-         patch("vox.daemon.WhisperTranscriber"), \
+         patch("vox.daemon.Transcriber"), \
          patch("vox.daemon._config_reloader", side_effect=fake_reloader), \
          patch("vox.daemon.detect_active_window", return_value=AppContext(wm_class="term", window_title="Term", app_type=AppType.TERMINAL)), \
          patch("vox.daemon.start_screen_capture", return_value=None), \
@@ -567,7 +567,7 @@ async def test_daemon_cancel_ignored_in_idle():
 
     with patch("vox.daemon.HotkeyListener", side_effect=fake_hotkey_init), \
          patch("vox.daemon.Recorder"), \
-         patch("vox.daemon.WhisperTranscriber"), \
+         patch("vox.daemon.Transcriber"), \
          patch("vox.daemon._config_reloader", side_effect=fake_reloader), \
          patch("vox.daemon.SoundPlayer", return_value=mock_sounds):
 

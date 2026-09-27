@@ -298,12 +298,12 @@ async def running_reloader(config, recorder):
 @pytest.mark.anyio
 async def test_ui_edits_hot_reload_into_running_daemon(cfg):
     from vox.daemon import _process
-    from vox.transcribe import WhisperTranscriber
+    from vox.transcribe import Transcriber
     from vox.window import AppContext, AppType
 
     config = load_config(cfg)
     config.openai_api_key = "test"
-    transcriber = WhisperTranscriber(config)  # created before the edit, like the running daemon's
+    transcriber = Transcriber(config)  # created before the edit, like the running daemon's
     recorder = MagicMock()
 
     async with running_reloader(config, recorder) as wait_until:
@@ -311,7 +311,7 @@ async def test_ui_edits_hot_reload_into_running_daemon(cfg):
         update_snippet(cfg, "sign off", "Best,\nAlex")
         await wait_until(lambda: "sign off" in config.snippets and config.dictionary == ["Kubernetes"])
 
-    assert "Kubernetes" in transcriber._build_prompt(None)
+    assert "Kubernetes" in transcriber._request(None)[0]["keywords"]
 
     batch = MagicMock()
     batch.transcribe = AsyncMock(return_value="Sign off.")

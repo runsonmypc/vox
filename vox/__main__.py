@@ -128,13 +128,12 @@ def main() -> None:
     if config.uses_openai and not config.openai_api_key and config.api_key_error is None:
         log.warning("No OpenAI API key yet. Choose Set API Key… from the Vox menu.")
     if config.mode == "whisper_cpp":
-        from .whisper_cpp import WhisperCppTranscriber
-        try:
-            WhisperCppTranscriber(config)
-        except ConfigError as e:
-            # Start anyway, like without a key: the menu can switch modes, and exiting would only get Vox restarted
-            config.mode_error = str(e)
-            log.error("Local transcription can't run: %s. Choose another mode from the Vox menu.", e)
+        from .modes import mode_problem
+
+        # Start anyway, like without a key: the menu can switch modes, and exiting would only get Vox restarted
+        config.mode_error = mode_problem(config, config.mode)
+        if config.mode_error is not None:
+            log.error("Local transcription can't run: %s. Choose another mode from the Vox menu.", config.mode_error)
 
     # Check system dependencies
     from .injector import check_accessibility_permission, check_dependencies

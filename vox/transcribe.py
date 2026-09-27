@@ -166,9 +166,6 @@ class Transcriber:
         self._client_lock = threading.Lock()  # warm_up() builds it on a worker thread
         self._config = config
 
-    def _build_prompt(self, context: AppContext | None) -> str:
-        return build_prompt(self._config, context)
-
     def _openai(self) -> AsyncOpenAI:
         with self._client_lock:
             key = self._config.openai_api_key
@@ -203,7 +200,7 @@ class Transcriber:
         request["response_format"] = "text"
         if config.whisper_language:
             request["language"] = config.whisper_language
-        prompt = self._build_prompt(context)
+        prompt = build_prompt(config, context)
         if prompt:
             request["prompt"] = prompt
         return request, prompt
@@ -254,9 +251,6 @@ class Transcriber:
         log.info("Transcript: %d chars", len(text))
         log.debug("Transcript: %s", text)
         return text
-
-
-WhisperTranscriber = Transcriber
 
 
 def build_vocabulary(config: Config, context: AppContext | None) -> list[str]:

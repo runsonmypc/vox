@@ -244,6 +244,12 @@ def test_context_screen_defaults_on_and_loads_from_the_context_section(tmp_path)
     assert load(tmp_path, "[context]\nscreen = true\n").context_screen is True
 
 
+def test_the_old_styles_table_is_ignored(tmp_path):
+    """Left over from a removed formatter: nothing reads it, so it is neither loaded nor rejected."""
+    config = load(tmp_path, '[styles]\nCHAT = "casual"\n')
+    assert not hasattr(config, "styles")
+
+
 def test_dictionary_comes_from_the_first_section_that_has_one(tmp_path):
     text = '[whisper]\ndictionary = ["W"]\n[attenuation]\ndictionary = ["A"]\n'
     assert load(tmp_path, text).dictionary == ["A"]

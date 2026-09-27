@@ -15,7 +15,7 @@ from vox.config import Config
 from vox.errors import TranscriptionError
 from vox.transcribe import (
     PartialTranscriptionError,
-    WhisperTranscriber,
+    Transcriber,
     _extract_vocab,
     build_prompt,
     build_vocabulary,
@@ -65,7 +65,7 @@ def create_mock(fake_openai):
 
 
 def test_starts_without_a_key():
-    WhisperTranscriber(Config(openai_api_key=""))  # the real client raises without a key
+    Transcriber(Config(openai_api_key=""))  # the real client raises without a key
 
 
 def test_importing_the_daemon_does_not_load_the_openai_sdk():
@@ -78,14 +78,14 @@ def test_importing_the_daemon_does_not_load_the_openai_sdk():
 @pytest.mark.anyio
 async def test_no_key_fails_without_calling_openai(fake_openai):
     with pytest.raises(TranscriptionError, match="Set API Key"):
-        await WhisperTranscriber(Config()).transcribe(WAV)
+        await Transcriber(Config()).transcribe(WAV)
     assert fake_openai.made == []
 
 
 @pytest.mark.anyio
 async def test_client_follows_the_current_key(fake_openai):
     config = Config(openai_api_key=KEY)
-    transcriber = WhisperTranscriber(config)
+    transcriber = Transcriber(config)
     assert await transcriber.transcribe(WAV) == "hello there"
     await transcriber.transcribe(WAV)
     config.openai_api_key = OTHER
@@ -95,7 +95,7 @@ async def test_client_follows_the_current_key(fake_openai):
 
 def test_warm_up_builds_the_client_once_and_only_with_a_key(fake_openai):
     config = Config(openai_api_key="")
-    transcriber = WhisperTranscriber(config)
+    transcriber = Transcriber(config)
     transcriber.warm_up()
     assert fake_openai.made == []
     config.openai_api_key = KEY
@@ -112,7 +112,7 @@ async def test_gpt_transcribe_uses_keywords_and_plural_languages(fake_openai):
         whisper_prompt="Software dictation",
         dictionary=["Kubernetes", "FastAPI", "<invalid>"],
     )
-    transcriber = WhisperTranscriber(config)
+    transcriber = Transcriber(config)
     assert await transcriber.transcribe(WAV) == "hello there"
 
     kwargs = create_mock(fake_openai).call_args.kwargs
@@ -133,7 +133,7 @@ async def test_gpt_transcribe_uses_keywords_and_plural_languages(fake_openai):
 @pytest.mark.anyio
 async def test_upload_is_16k_mono(fake_openai):
     ramp = (np.arange(48000) % 20000).astype(np.int16)
-    await WhisperTranscriber(Config(openai_api_key=KEY)).transcribe(make_wav(ramp))
+    await Transcriber(Config(openai_api_key=KEY)).transcribe(make_wav(ramp))
 
     name, data, mime = create_mock(fake_openai).call_args.kwargs["file"]
     assert (name, mime) == ("audio.wav", "audio/wav")
@@ -146,13 +146,13 @@ async def test_upload_is_16k_mono(fake_openai):
 @pytest.mark.anyio
 async def test_invalid_recording_fails_without_calling_openai(fake_openai):
     with pytest.raises(TranscriptionError, match="Invalid recording"):
-        await WhisperTranscriber(Config(openai_api_key=KEY)).transcribe(b"wav")
+        await Transcriber(Config(openai_api_key=KEY)).transcribe(b"wav")
     assert fake_openai.made == []
 
 
 @pytest.mark.anyio
 async def test_api_failure_is_not_retried_on_top_of_the_sdk(fake_openai):
-    transcriber = WhisperTranscriber(Config(openai_api_key=KEY))
+    transcriber = Transcriber(Config(openai_api_key=KEY))
     transcriber._openai()
     create_mock(fake_openai).side_effect = OpenAIError("server exploded")
 
@@ -164,7 +164,7 @@ async def test_api_failure_is_not_retried_on_top_of_the_sdk(fake_openai):
 
 @pytest.mark.anyio
 async def test_a_long_recording_goes_up_in_parts_joined_with_a_space(fake_openai):
-    transcriber = WhisperTranscriber(Config(openai_api_key=KEY))
+    transcriber = Transcriber(Config(openai_api_key=KEY))
     transcriber._openai()
     create_mock(fake_openai).side_effect = ["First part.", "  ", "second part."]
 
@@ -176,7 +176,7 @@ async def test_a_long_recording_goes_up_in_parts_joined_with_a_space(fake_openai
 
 @pytest.mark.anyio
 async def test_a_failed_part_keeps_the_text_already_transcribed(fake_openai):
-    transcriber = WhisperTranscriber(Config(openai_api_key=KEY))
+    transcriber = Transcriber(Config(openai_api_key=KEY))
     transcriber._openai()
     create_mock(fake_openai).side_effect = ["First part.", OpenAIError("rate limited")]
 
@@ -189,7 +189,7 @@ async def test_a_failed_part_keeps_the_text_already_transcribed(fake_openai):
 
 @pytest.mark.anyio
 async def test_transcript_text_is_logged_only_at_debug(fake_openai, caplog):
-    transcriber = WhisperTranscriber(Config(openai_api_key=KEY))
+    transcriber = Transcriber(Config(openai_api_key=KEY))
     transcriber._openai()
     create_mock(fake_openai).return_value = "my bank PIN is private"
 
@@ -207,7 +207,7 @@ async def test_transcript_text_is_logged_only_at_debug(fake_openai, caplog):
 @pytest.mark.anyio
 async def test_a_transcript_that_only_echoes_the_hints_is_dropped(fake_openai):
     words = ["Kubernetes", "FastAPI", "Postgres", "Terraform", "useState"]
-    transcriber = WhisperTranscriber(Config(openai_api_key=KEY, dictionary=words))
+    transcriber = Transcriber(Config(openai_api_key=KEY, dictionary=words))
     transcriber._openai()
 
     create_mock(fake_openai).return_value = ", ".join(words) + "."
@@ -302,7 +302,7 @@ def test_screen_context_off_sends_only_the_dictionary():
 @pytest.mark.anyio
 async def test_screen_context_off_keeps_screen_words_out_of_the_request(fake_openai):
     config = Config(openai_api_key=KEY, dictionary=["Vox"], context_screen=False)
-    await WhisperTranscriber(config).transcribe(WAV, _context())
+    await Transcriber(config).transcribe(WAV, _context())
     assert create_mock(fake_openai).call_args.kwargs["keywords"] == ["Vox"]
 
 

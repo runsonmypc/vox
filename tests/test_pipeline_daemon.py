@@ -123,7 +123,7 @@ async def running(config, tray=None, *, history=None, cpp=None, streaming=None):
         mocks = {
             "recorder": recorder, "sounds": sounds, "batch": batch, "streaming": streaming, "context": context,
             "hotkey": enter("vox.daemon.HotkeyListener"),
-            "whisper": enter("vox.daemon.WhisperTranscriber", return_value=batch),
+            "whisper": enter("vox.daemon.Transcriber", return_value=batch),
             "cpp": enter("vox.daemon.WhisperCppTranscriber", **(cpp or {})),
             "streaming_cls": enter("vox.daemon.StreamingTranscriber", return_value=streaming),
             "detect": enter("vox.daemon.detect_active_window", return_value=context),
@@ -323,6 +323,34 @@ async def test_a_failed_mode_switch_changes_nothing(tmp_path):
         await until(lambda: tray.mode_changed.called)
         assert config.mode == "streaming"
         assert tomllib.loads(path.read_text())["transcription"]["mode"] == "streaming"
+
+
+@pytest.mark.anyio
+async def test_switching_to_local_transcription_tries_its_setup_once(tmp_path):
+    local = MagicMock()
+    config = openai_config()
+    config._config_path = tmp_path / "config.toml"
+    tray = MagicMock()
+    async with running(config, tray, cpp={"return_value": local}) as h:
+        h.send("mode:whisper_cpp")
+        await until(lambda: tray.mode_changed.called)
+        assert config.mode == "whisper_cpp"
+        assert h.daemon.batch_transcriber is local
+        h.cpp.assert_called_once_with(config)  # building it is the setup check
+    assert tomllib.loads(config.config_path.read_text())["transcription"]["mode"] == "whisper_cpp"
+
+
+@pytest.mark.anyio
+async def test_an_openai_mode_needs_a_key_before_it_can_be_chosen(tmp_path):
+    config = Config(mode="whisper_cpp")
+    config._config_path = tmp_path / "config.toml"
+    tray = MagicMock()
+    async with running(config, tray, cpp={"return_value": MagicMock()}) as h:
+        h.send("mode:streaming")
+        await until(lambda: h.played("error"))
+        assert config.mode == "whisper_cpp"
+        assert not config.config_path.exists()
+        tray.mode_changed.assert_not_called()
 
 
 @pytest.mark.anyio

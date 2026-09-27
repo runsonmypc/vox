@@ -51,9 +51,6 @@ class Config:
     # Custom dictionary words to preserve
     dictionary: list[str] = field(default_factory=list)
 
-    # Per-app style overrides (app_type -> style instruction)
-    styles: dict[str, str] = field(default_factory=dict)
-
     # Window class overrides (wm_class -> app_type)
     window_classes: dict[str, str] = field(default_factory=dict)
 
@@ -167,8 +164,6 @@ def _apply(config: Config, data: dict) -> None:
             break
     if "snippets" in data:
         config.snippets = _text_table("[snippets]", data["snippets"])
-    if "styles" in data:
-        config.styles = _text_table("[styles]", data["styles"])
     if "window_classes" in data:
         config.window_classes = _text_table("[window_classes]", data["window_classes"])
 

@@ -30,9 +30,10 @@ from .history import HistoryDB
 from .hotkey import HotkeyListener
 from .injector import check_accessibility_permission, paste
 from .keystore import KeystoreError, get_api_key
+from .modes import mode_problem
 from .sounds import SoundPlayer
 from .streaming import StreamingTranscriber
-from .transcribe import PartialTranscriptionError, WhisperTranscriber
+from .transcribe import PartialTranscriptionError, Transcriber
 from .whisper_cpp import WhisperCppTranscriber
 from .window import AppContext, detect_active_window, start_screen_capture
 
@@ -40,8 +41,6 @@ if TYPE_CHECKING:
     from .ui.tray import TrayManager
 
 log = logging.getLogger(__name__)
-
-MODES = ("batch", "streaming", "whisper_cpp")
 
 WAYLAND_NOTICE = "Wayland: hotkey and paste only work in X11 apps"
 SILENT_MIC_NOTICE = "Microphone is silent: check its permission"
@@ -195,7 +194,7 @@ class _Daemon:
         self.process_task: asyncio.Task | None = None
         self.mic_silent = False
 
-        self.batch_transcriber: WhisperTranscriber | WhisperCppTranscriber | None = None
+        self.batch_transcriber: Transcriber | WhisperCppTranscriber | None = None
         self.transcriber_local = False
         try:
             self._use_transcriber(self._build_transcriber(config.mode), config.mode)
@@ -532,10 +531,11 @@ class _Daemon:
             self.tray.mode_changed()
         return True
 
-    def _build_transcriber(self, mode: str) -> WhisperTranscriber | WhisperCppTranscriber:
-        return WhisperCppTranscriber(self.config) if mode == "whisper_cpp" else WhisperTranscriber(self.config)
+    def _build_transcriber(self, mode: str) -> Transcriber | WhisperCppTranscriber:
+        """The transcriber for ``mode``. Raises ConfigError when a whisper.cpp setup can't run."""
+        return WhisperCppTranscriber(self.config) if mode == "whisper_cpp" else Transcriber(self.config)
 
-    def _use_transcriber(self, transcriber: WhisperTranscriber | WhisperCppTranscriber, mode: str) -> None:
+    def _use_transcriber(self, transcriber: Transcriber | WhisperCppTranscriber, mode: str) -> None:
         self.batch_transcriber = transcriber
         self.transcriber_local = mode == "whisper_cpp"
         self._warm_up_transcriber()
@@ -547,7 +547,7 @@ class _Daemon:
         _spawn(self._warm_up(self.batch_transcriber))
 
     @staticmethod
-    async def _warm_up(transcriber: WhisperTranscriber) -> None:
+    async def _warm_up(transcriber: Transcriber) -> None:
         try:
             await asyncio.to_thread(transcriber.warm_up)
         except Exception:
@@ -560,10 +560,10 @@ class _Daemon:
         if self.state is not State.IDLE or (mode == config.mode and config.mode_error is None):
             return
         try:
-            if mode not in MODES:
-                raise ConfigError(f"Invalid transcription mode: {mode}")
-            if mode != "whisper_cpp" and not config.openai_api_key:
-                raise ConfigError("Set an OpenAI API key before selecting OpenAI transcription")
+            # Building the transcriber tries the whisper.cpp setup, so mode_problem needn't
+            problem = mode_problem(config, mode, check_setup=False)
+            if problem is not None:
+                raise ConfigError(problem)
             candidate = self._build_transcriber(mode)
             update_transcription_mode(config.config_path or DEFAULT_CONFIG_PATH, mode)
         except (ConfigError, OSError, ValueError) as e:
@@ -663,7 +663,7 @@ async def _stream_worker(
 async def _process(
     wav_data: bytes,
     config: Config,
-    batch_transcriber: WhisperTranscriber | WhisperCppTranscriber,
+    batch_transcriber: Transcriber | WhisperCppTranscriber,
     streaming_transcriber: StreamingTranscriber | None,
     stream_task: asyncio.Task | None,
     sounds: SoundPlayer,
@@ -865,7 +865,6 @@ async def _config_reloader(config: Config, sounds: SoundPlayer, recorder: Record
 
             config.snippets = new_config.snippets
             config.dictionary = new_config.dictionary
-            config.styles = new_config.styles
             config.window_classes = new_config.window_classes
             config.context_screen = new_config.context_screen
             config.sounds_enabled = new_config.sounds_enabled
