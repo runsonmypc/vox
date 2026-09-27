@@ -5,11 +5,13 @@ import pwd
 import socket
 import sys
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
+from test_tray_integration import RecordingTray, daemon_env, start_daemon, stop_daemon, wait_for
 
 import vox.config
-from vox.config import load_config, update_transcription_mode
+from vox.config import Config, load_config
 
 
 def test_home_is_a_scratch_directory():
@@ -25,10 +27,29 @@ def test_default_config_path_is_per_test(tmp_path):
             assert sys.modules[name].DEFAULT_CONFIG_PATH == vox.config.DEFAULT_CONFIG_PATH
 
 
-def test_mode_switch_without_a_config_path_stays_in_the_test(tmp_path):
-    # What the daemon and tray do for a Config() that was not loaded from a file
-    update_transcription_mode(vox.config.DEFAULT_CONFIG_PATH, "streaming")
-    assert load_config(tmp_path / "default-config.toml").mode == "streaming"
+class ModeTray(RecordingTray):
+    def __init__(self):
+        super().__init__()
+        self.mode_changes = 0
+
+    def mode_changed(self):
+        self.mode_changes += 1
+
+
+@pytest.mark.anyio
+async def test_mode_switch_without_a_config_path_stays_in_the_test(tmp_path):
+    # A Config() not loaded from a file makes the daemon save menu choices to DEFAULT_CONFIG_PATH
+    home_config = Path.home() / ".config" / "vox" / "config.toml"
+    before = home_config.read_bytes() if home_config.exists() else None
+    tray = ModeTray()
+    with daemon_env(), patch("vox.daemon.WhisperCppTranscriber"):
+        task = await start_daemon(tray, Config(attenuation_enabled=False))
+        _, queue, _, _ = tray.attached
+        await queue.put("mode:whisper_cpp")
+        await wait_for(lambda: tray.mode_changes == 1)
+        await stop_daemon(task)
+    assert load_config(tmp_path / "default-config.toml").mode == "whisper_cpp"
+    assert (home_config.read_bytes() if home_config.exists() else None) == before
 
 
 def test_pystray_uses_the_dummy_backend():
