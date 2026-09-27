@@ -149,16 +149,22 @@ def _snapshot_pasteboard(pb) -> list[dict] | None:
 
 
 def _write_transient(pb, text: str) -> int:
-    """Write the dictation for this Mac only, marked transient. Returns the pasteboard's changeCount."""
+    """Write the dictation for this Mac only, marked transient. Returns the pasteboard's changeCount.
+
+    The text and its markers go in one item and one write: a clipboard manager polling between
+    separate writes would see the text without the markers, and record it.
+    """
     try:
-        from AppKit import NSPasteboardContentsCurrentHostOnly, NSPasteboardTypeString
+        from AppKit import NSPasteboardContentsCurrentHostOnly, NSPasteboardItem, NSPasteboardTypeString
         from Foundation import NSData
 
-        pb.prepareForNewContentsWithOptions_(NSPasteboardContentsCurrentHostOnly)
-        if not pb.setString_forType_(text, NSPasteboardTypeString):
-            raise InjectionError("NSPasteboard refused the text")
+        item = NSPasteboardItem.alloc().init()
+        item.setString_forType_(text, NSPasteboardTypeString)
         for marker in _TRANSIENT_TYPES:
-            pb.setData_forType_(NSData.data(), marker)
+            item.setData_forType_(NSData.data(), marker)
+        pb.prepareForNewContentsWithOptions_(NSPasteboardContentsCurrentHostOnly)
+        if not pb.writeObjects_([item]):
+            raise InjectionError("NSPasteboard refused the text")
         return pb.changeCount()
     except InjectionError:
         raise
