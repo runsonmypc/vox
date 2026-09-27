@@ -1,6 +1,7 @@
 """Unit tests for the menu bar TrayManager using a fake pystray icon."""
 
 import asyncio
+import subprocess
 import sys
 from unittest.mock import MagicMock, patch
 
@@ -10,8 +11,10 @@ pytest.importorskip("pystray")
 
 from vox.config import Config
 from vox.history import HistoryDB
+from vox.modes import LABELS
 from vox.ui.icons import IconState, make_icon
 from vox.ui.tray import (
+    CONFIG_ERROR,
     HISTORY_WINDOW,
     KEY_WINDOW,
     RECENT_HEADER,
@@ -210,6 +213,19 @@ def test_transcription_submenu_shows_modes_and_availability():
     ]
 
 
+def test_transcription_submenu_follows_vox_modes():
+    problems = {"batch": "Broken setup", "streaming": "Set an OpenAI API key first", "whisper_cpp": None}
+    _, icon = make_tray(Config(mode="batch", openai_api_key="test"))
+    with patch("vox.ui.tray.mode_problem", side_effect=lambda config, mode: problems[mode]) as problem:
+        modes = items(find(icon.menu, "Transcription").submenu)
+        assert [(item.text, item.enabled) for item in modes] == [
+            (LABELS["batch"], True),  # the current mode stays clickable: picking it again retries its setup
+            (LABELS["streaming"], False),
+            (LABELS["whisper_cpp"], True),
+        ]
+    assert {call.args[1] for call in problem.call_args_list} == {"streaming", "whisper_cpp"}
+
+
 @pytest.mark.anyio
 async def test_transcription_menu_sends_mode_to_daemon():
     tray, icon = make_tray(Config(openai_api_key="test"))
@@ -365,6 +381,16 @@ def test_selected_device_resolution():
     assert _selected_device("Default ", linux) == 3
 
 
+@pytest.mark.parametrize("spec", ["default", "Default ", "pulse", "usb audio", "USB Audio", "USB Audio 2", "alc257"])
+def test_checked_device_is_the_one_the_recorder_opens(spec):
+    from vox.audio import resolve_input_device
+
+    names = ["HDA Intel PCH: ALC257 Analog (hw:0,0)", "sysdefault", "pulse", "default", "USB Audio 2", "USB Audio"]
+    with patch("vox.audio.sd.query_devices", return_value=[{"name": n, "max_input_channels": 2} for n in names]):
+        recorded = resolve_input_device(spec)
+    assert _selected_device(spec, list(enumerate(names))) == recorded
+
+
 @pytest.mark.anyio
 async def test_devices_with_the_same_name_check_the_first():
     # Only the name is stored, so either pick checks the first: the device the recorder opens
@@ -418,7 +444,7 @@ def test_history_window_launch_is_single_instance(tmp_path):
     launcher, focus = MagicMock(side_effect=procs), MagicMock()
     tray, icon = make_tray(launcher=launcher, focus=focus)
     tray.attach(MagicMock(), MagicMock(), history, MagicMock())
-    command = [sys.executable, "-m", HISTORY_WINDOW, "--db", str(history.path)]
+    command = [sys.executable, "-P", "-m", HISTORY_WINDOW, "--db", str(history.path)]
 
     find(icon.menu, "Search History…")(icon)
     launcher.assert_called_once_with(command)
@@ -441,7 +467,7 @@ def test_vocab_window_gets_config_path(tmp_path):
     launcher = MagicMock(return_value=_fake_proc())
     _, icon = make_tray(config, launcher=launcher)
     find(icon.menu, "Vocabulary & Snippets…")(icon)
-    launcher.assert_called_once_with([sys.executable, "-m", VOCAB_WINDOW, "--config", str(tmp_path / "config.toml")])
+    launcher.assert_called_once_with([sys.executable, "-P", "-m", VOCAB_WINDOW, "--config", str(tmp_path / "config.toml")])
 
 
 def test_open_windows_are_closed_when_tray_exits(tmp_path):
@@ -576,7 +602,7 @@ def test_key_window_closing_tells_the_daemon_to_reread_the_key():
     tray.attach(loop, queue, None, MagicMock())
     with patch("vox.ui.tray.threading.Thread") as thread:
         find(icon.menu, SET_KEY)(icon)
-    launcher.assert_called_once_with([sys.executable, "-m", KEY_WINDOW])
+    launcher.assert_called_once_with([sys.executable, "-P", "-m", KEY_WINDOW])
     kwargs = thread.call_args.kwargs
     target, args = kwargs["target"], kwargs["args"]
     target(*args)  # what the thread runs: wait for the window, then tell the daemon
@@ -589,7 +615,7 @@ def test_daemon_can_open_the_key_window():
     tray, _ = make_tray(Config(mode="batch"), launcher=launcher)
     with patch("vox.ui.tray.threading.Thread"):
         tray.open_key_window()
-    launcher.assert_called_once_with([sys.executable, "-m", KEY_WINDOW])
+    launcher.assert_called_once_with([sys.executable, "-P", "-m", KEY_WINDOW])
 
 
 # -- Status line problems -----------------------------------------------------------
@@ -597,6 +623,7 @@ def test_daemon_can_open_the_key_window():
 
 def test_status_line_reports_the_most_urgent_problem_while_idle():
     config = Config(mode="batch")
+    config.config_error = "Invalid config.toml: Expected '=' after a key in a key/value pair (at line 3, column 7)"
     config.mode_error = "whisper.cpp model not found: /models/ggml-base.bin"
     tray, icon = make_tray(config)
     tray.set_notice("Microphone is silent: check its permission")
@@ -604,6 +631,11 @@ def test_status_line_reports_the_most_urgent_problem_while_idle():
 
     config.openai_api_key = "test"
     tray.key_changed()
+    assert icon.title == f"Vox · {CONFIG_ERROR}"  # then config.toml; the parser's message is in the log
+    assert items(icon.menu)[0].text == icon.title
+
+    config.config_error = None  # the reloader read the fixed file and told the tray
+    tray.mode_changed()
     assert icon.title == "Vox · whisper.cpp model not found: /models/ggml-base.bin"  # then the mode
     assert items(icon.menu)[0].text == icon.title
 
@@ -618,6 +650,18 @@ def test_status_line_reports_the_most_urgent_problem_while_idle():
     assert icon.title == "Vox · Idle"
 
 
+def test_a_settings_file_error_shows_while_paused_but_not_while_processing():
+    config = Config(openai_api_key="test")
+    config.config_error = "Invalid config.toml"
+    tray, icon = make_tray(config)
+    assert icon.title == f"Vox · {CONFIG_ERROR}"
+    tray.set_paused(True)
+    assert icon.title == f"Vox · {CONFIG_ERROR}"
+    tray.set_paused(False)
+    tray.set_state("PROCESSING")
+    assert icon.title == "Vox · Processing…"
+
+
 def test_a_long_problem_is_shortened_to_one_line():
     config = Config(mode="whisper_cpp")
     config.mode_error = "whisper.cpp model not found:\n" + "/very/long/path" * 10
@@ -627,6 +671,20 @@ def test_a_long_problem_is_shortened_to_one_line():
 
 
 # -- Window processes ---------------------------------------------------------------
+
+
+def test_windows_ignore_a_vox_folder_in_the_working_directory(tmp_path):
+    (tmp_path / "vox").mkdir()
+    (tmp_path / "vox" / "__init__.py").write_text("raise SystemExit('shadowed by the working directory')\n")
+    launcher = MagicMock(return_value=_fake_proc())
+    _, icon = make_tray(launcher=launcher)
+    find(icon.menu, "Vocabulary & Snippets…")(icon)
+    command = launcher.call_args.args[0]
+    interpreter = command[: command.index("-m")]  # the interpreter and its flags, as the window runs them
+    probe = subprocess.run(
+        [*interpreter, "-c", "import vox"], cwd=tmp_path, capture_output=True, text=True, timeout=60,
+    )
+    assert probe.returncode == 0, probe.stderr
 
 
 def test_every_window_process_is_waited_on_so_none_lingers(tmp_path):
