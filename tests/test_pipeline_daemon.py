@@ -16,9 +16,10 @@ import pytest
 import websockets
 
 from vox import daemon as daemon_module
-from vox.config import Config, load_config
+from vox.config import Config, fallback_config, load_config
 from vox.daemon import (
     ACCESSIBILITY_NOTICE,
+    PARTIAL_NOTICE,
     SILENT_MIC_NOTICE,
     WAYLAND_NOTICE,
     State,
@@ -123,7 +124,7 @@ async def running(config, tray=None, *, history=None, cpp=None, streaming=None):
         mocks = {
             "recorder": recorder, "sounds": sounds, "batch": batch, "streaming": streaming, "context": context,
             "hotkey": enter("vox.daemon.HotkeyListener"),
-            "whisper": enter("vox.daemon.WhisperTranscriber", return_value=batch),
+            "whisper": enter("vox.daemon.Transcriber", return_value=batch),
             "cpp": enter("vox.daemon.WhisperCppTranscriber", **(cpp or {})),
             "streaming_cls": enter("vox.daemon.StreamingTranscriber", return_value=streaming),
             "detect": enter("vox.daemon.detect_active_window", return_value=context),
@@ -326,6 +327,34 @@ async def test_a_failed_mode_switch_changes_nothing(tmp_path):
 
 
 @pytest.mark.anyio
+async def test_switching_to_local_transcription_tries_its_setup_once(tmp_path):
+    local = MagicMock()
+    config = openai_config()
+    config._config_path = tmp_path / "config.toml"
+    tray = MagicMock()
+    async with running(config, tray, cpp={"return_value": local}) as h:
+        h.send("mode:whisper_cpp")
+        await until(lambda: tray.mode_changed.called)
+        assert config.mode == "whisper_cpp"
+        assert h.daemon.batch_transcriber is local
+        h.cpp.assert_called_once_with(config)  # building it is the setup check
+    assert tomllib.loads(config.config_path.read_text())["transcription"]["mode"] == "whisper_cpp"
+
+
+@pytest.mark.anyio
+async def test_an_openai_mode_needs_a_key_before_it_can_be_chosen(tmp_path):
+    config = Config(mode="whisper_cpp")
+    config._config_path = tmp_path / "config.toml"
+    tray = MagicMock()
+    async with running(config, tray, cpp={"return_value": MagicMock()}) as h:
+        h.send("mode:streaming")
+        await until(lambda: h.played("error"))
+        assert config.mode == "whisper_cpp"
+        assert not config.config_path.exists()
+        tray.mode_changed.assert_not_called()
+
+
+@pytest.mark.anyio
 async def test_a_mode_that_cannot_run_blocks_recording_and_is_retried_on_each_toggle():
     local = MagicMock()
     cpp = {"side_effect": [ConfigError("model not found"), ConfigError("model not found"), local]}
@@ -407,6 +436,76 @@ async def test_a_limit_picked_from_the_menu_is_saved_and_applies_next_time(tmp_p
         assert tray.limit_changed.call_count == 1
 
 
+# -- A settings file that does not load -------------------------------------------------
+
+
+def broken_settings(tmp_path, text='[transcription]\nmode = "whisper_cpp"\n[attenuation]\nlevel = "loud"\n'):
+    """What __main__ starts on when config.toml does not load: defaults, and why."""
+    path = tmp_path / "config.toml"
+    path.write_text(text)
+    with pytest.raises(ConfigError) as error:
+        load_config(path)
+    return fallback_config(path, error.value)
+
+
+@pytest.mark.anyio
+async def test_a_settings_file_that_does_not_load_blocks_recording_until_it_does(tmp_path, caplog):
+    """The file may choose local-only transcription, so audio must not go to OpenAI on the defaults."""
+    config = broken_settings(tmp_path)
+    tray = MagicMock()
+    async with running(config, tray) as h:
+        h.send("toggle")
+        await until(lambda: h.played("error"))
+        assert h.state is State.IDLE
+        h.recorder.start.assert_not_called()
+        assert '[attenuation] level must be a number from 0 to 1, not "loud"' in caplog.text
+        tray.open_key_window.assert_not_called()  # there is no key, but the file may not need one
+
+        config.config_error = None  # what the reloader does once the file loads
+        config.openai_api_key = KEY
+        h.send("toggle")
+        await until(lambda: h.state is State.RECORDING)
+
+
+@pytest.mark.anyio
+async def test_menu_changes_are_refused_while_the_settings_file_does_not_load(tmp_path):
+    config = broken_settings(tmp_path)
+    config.openai_api_key = KEY
+    before = config.config_path.read_text()
+    tray = MagicMock()
+    async with running(config, tray) as h:
+        h.send("mode:streaming", "limit:600")
+        await until(lambda: h.sounds.play.call_count == 2)
+        assert [c.args for c in h.sounds.play.call_args_list] == [("error",), ("error",)]
+    assert config.config_path.read_text() == before
+    assert (config.mode, config.max_recording_seconds) == ("batch", 900)
+    tray.mode_changed.assert_not_called()
+    tray.limit_changed.assert_not_called()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("broken", ["[audio\nsample_rate = 48000\n", "audio = 5\ntranscription = 1\n"])
+async def test_menu_changes_to_a_file_broken_since_it_loaded_fail_with_the_error_sound(tmp_path, caplog, broken):
+    path = tmp_path / "config.toml"
+    path.write_text("[audio]\nsample_rate = 48000\n")
+    config = load_config(path)
+    config.openai_api_key = KEY
+    tray = MagicMock()
+    async with running(config, tray) as h:
+        path.write_text(broken)  # an edit the reloader rejected, so config_error stays unset
+        h.send("limit:600")
+        await until(lambda: h.played("error"))
+        h.sounds.reset_mock()
+        h.send("mode:streaming")
+        await until(lambda: h.played("error"))
+        assert h.state is State.IDLE and not h.task.done()
+    assert path.read_text() == broken
+    assert (config.mode, config.max_recording_seconds) == ("batch", 900)
+    tray.mode_changed.assert_not_called()
+    tray.limit_changed.assert_not_called()
+    assert "Unexpected error" not in caplog.text
+
+
 # -- Tray notices and devices ----------------------------------------------------------
 
 
@@ -448,6 +547,40 @@ async def test_a_new_event_cancels_a_pending_device_rescan():
 
 
 @pytest.mark.anyio
+async def test_devices_are_rescanned_every_so_often_while_idle_where_that_is_cheap():
+    tray = MagicMock()
+    with patch("vox.daemon._IDLE_DEVICE_SCAN_SECONDS", 0.01), patch("vox.daemon._DEVICE_REFRESH_DELAY", 0.01):
+        async with running(openai_config(), tray) as h:
+            scans = h.recorder.refresh_input_devices
+            await until(lambda: scans.call_count >= 3)
+
+            h.send("toggle")
+            await until(lambda: h.state is State.RECORDING)
+            count = scans.call_count
+            await settle()
+            assert scans.call_count == count  # never while recording
+
+            h.send("cancel")
+            await until(lambda: scans.call_count >= count + 2)
+
+
+@pytest.mark.anyio
+async def test_without_idle_rescans_devices_are_rescanned_only_on_return_to_idle():
+    tray = MagicMock()
+    with patch("vox.daemon._IDLE_DEVICE_SCAN_SECONDS", None), patch("vox.daemon._DEVICE_REFRESH_DELAY", 0.01):
+        async with running(openai_config(), tray) as h:
+            scans = h.recorder.refresh_input_devices
+            await until(lambda: scans.called)
+            await settle()
+            assert scans.call_count == 1
+
+            h.send("toggle", "cancel")
+            await until(lambda: scans.call_count == 2)
+            await settle()
+            assert scans.call_count == 2
+
+
+@pytest.mark.anyio
 async def test_a_silent_microphone_shows_a_notice_until_audio_returns():
     tray = MagicMock()
     async with running(openai_config(), tray) as h:
@@ -467,6 +600,36 @@ async def test_a_silent_microphone_shows_a_notice_until_audio_returns():
         await until(lambda: h.paste.called)
         tray.set_notice.assert_called_with(None)  # back to the platform notice, here none
         assert tray.set_notice.call_count == 2
+
+
+@pytest.mark.anyio
+async def test_a_partly_transcribed_dictation_is_noticed_until_the_next_one_succeeds(tmp_path):
+    history = HistoryDB(tmp_path / "history.db")
+    tray = MagicMock()
+    async with running(openai_config(), tray, history=history) as h:
+        h.batch.transcribe.side_effect = PartialTranscriptionError("part 2 of 2 failed: 500", "the first part")
+        h.send("toggle")
+        await until(lambda: h.state is State.RECORDING)
+        h.send("toggle")
+        await until(lambda: tray.set_notice.called)
+        tray.set_notice.assert_called_once_with(PARTIAL_NOTICE)
+        assert h.played("error")
+        assert history.recent(1)[0].text == "the first part"
+
+        h.batch.transcribe.side_effect = TranscriptionError("Transcription API failed: 500")
+        h.send("toggle")
+        await until(lambda: h.state is State.RECORDING)
+        h.send("toggle")
+        await until(lambda: h.batch.transcribe.await_count == 2 and h.state is State.IDLE)
+        assert tray.set_notice.call_count == 1  # a failed dictation is no reason to drop the notice
+
+        h.batch.transcribe.side_effect = None
+        h.send("toggle")
+        await until(lambda: h.state is State.RECORDING)
+        h.send("toggle")
+        await until(lambda: tray.set_notice.call_count == 2)
+        tray.set_notice.assert_called_with(None)  # back to the platform notice, here none
+    history.close()
 
 
 @pytest.mark.parametrize(
@@ -535,6 +698,20 @@ async def test_batch_recording_captures_the_screen_only_when_screen_context_is_o
 
 
 @pytest.mark.anyio
+async def test_a_screen_capture_that_never_finishes_does_not_hold_up_the_dictation():
+    never = asyncio.get_running_loop().create_future()
+    with patch("vox.daemon._SCREEN_WAIT_SECONDS", 0.01):
+        async with running(openai_config()) as h:
+            h.capture.return_value = never
+            h.send("toggle")
+            await until(lambda: h.state is State.RECORDING)
+            h.send("toggle")
+            await until(lambda: h.paste.called)
+    assert h.batch.transcribe.call_args.args[1].screen_text == ""
+    assert never.cancelled()
+
+
+@pytest.mark.anyio
 async def test_streaming_recording_starts_no_screen_capture():
     async with running(openai_config(mode="streaming")) as h:
         h.send("toggle")
@@ -584,7 +761,7 @@ def process_kwargs(**overrides):
         "wav_data": SPEECH, "config": Config(mode="batch"), "batch_transcriber": batch,
         "streaming_transcriber": None, "stream_task": None, "sounds": MagicMock(),
         "queue": asyncio.Queue(), "context": AppContext("code", "main.py", AppType.EDITOR),
-        "screen_capture_future": None,
+        "screen_capture_future": None, "mode": "batch",
     }
     kwargs.update(overrides)
     return kwargs
@@ -649,6 +826,24 @@ async def test_history_records_the_mode_the_recording_started_in(tmp_path, speec
     paste.assert_called_once_with("streamed text", AppType.EDITOR)
     [rec] = history.search()
     assert rec.transcription_mode == "streaming"
+    history.close()
+
+
+@pytest.mark.anyio
+async def test_history_records_batch_when_a_streaming_recording_fell_back_to_it(tmp_path, speech):
+    history = HistoryDB(tmp_path / "history.db")
+    streaming = fake_streaming()
+    streaming.finish.side_effect = StreamingError("Connection closed before the transcript completed")
+    kwargs = process_kwargs(
+        config=Config(mode="streaming", context_screen=False), streaming_transcriber=streaming,
+        history=history, mode="streaming",
+    )
+    with patch("vox.daemon.detect_active_window", return_value=AppContext("", "", AppType.OTHER)), \
+         patch("vox.daemon.paste") as paste:
+        await _process(**kwargs)
+    paste.assert_called_once_with("hello world", AppType.EDITOR)
+    [rec] = history.search()
+    assert rec.transcription_mode == "batch"
     history.close()
 
 
@@ -719,7 +914,7 @@ async def test_a_failed_live_session_falls_back_to_batch(handler):
         stream_task = asyncio.create_task(asyncio.sleep(0))
         kwargs = process_kwargs(
             config=Config(mode="streaming", openai_api_key=KEY, context_screen=False),
-            streaming_transcriber=transcriber, stream_task=stream_task,
+            streaming_transcriber=transcriber, stream_task=stream_task, mode="streaming",
         )
         kwargs["batch_transcriber"].transcribe.return_value = "from the batch fallback"
         with patch("vox.daemon.paste") as paste, \
@@ -736,37 +931,134 @@ async def test_a_failed_live_session_falls_back_to_batch(handler):
 # -- Config reload -----------------------------------------------------------------------
 
 
+@contextlib.asynccontextmanager
+async def reloading(config, recorder, tray=None):
+    """Run the real config reloader, polling every 10 ms."""
+    with patch("vox.daemon._CONFIG_POLL_SECONDS", 0.01):
+        task = asyncio.create_task(_config_reloader(config, recorder, tray))
+        await asyncio.sleep(0.02)  # it notes the file as it is first
+        try:
+            yield task
+        finally:
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+
+
 @pytest.mark.anyio
 async def test_config_reload_applies_screen_context_and_the_recording_limit(tmp_path):
     path = tmp_path / "config.toml"
     path.write_text("[audio]\nsample_rate = 48000\n")
     config = load_config(path)
     recorder = MagicMock()
-    sounds = MagicMock()
+    tray = MagicMock()
 
     def rewrite(text):
         mtime = path.stat().st_mtime
         path.write_text(text)
         os.utime(path, (mtime + 10, mtime + 10))
 
-    with patch("vox.daemon._CONFIG_POLL_SECONDS", 0.01):
-        task = asyncio.create_task(_config_reloader(config, sounds, recorder))
-        await asyncio.sleep(0.02)  # it notes the file time first
-        try:
-            rewrite("[audio]\nsample_rate = 48000\nmax_recording_seconds = 300\n[context]\nscreen = false\n")
-            await until(lambda: not config.context_screen)
-            assert config.max_recording_seconds == 300
-            recorder.reconfigure.assert_not_called()  # audio settings unchanged
+    async with reloading(config, recorder, tray) as task:
+        rewrite("[audio]\nsample_rate = 48000\nmax_recording_seconds = 300\n[context]\nscreen = false\n")
+        await until(lambda: not config.context_screen)
+        assert config.max_recording_seconds == 300
+        recorder.reconfigure.assert_not_called()  # audio settings unchanged
+        await until(lambda: tray.mode_changed.called)  # the menu shows the new limit
 
-            rewrite("[audio]\nsample_rate = 16000\n[context]\nscreen = false\n")
-            await until(lambda: recorder.reconfigure.called)
-            assert config.sample_rate == 16000
-            assert config.max_recording_seconds == 900
+        rewrite("[audio]\nsample_rate = 16000\n[context]\nscreen = false\n")
+        await until(lambda: recorder.reconfigure.called)
+        assert config.sample_rate == 16000
+        assert config.max_recording_seconds == 900
 
-            rewrite("[transcription]\nmode = 'nonsense'\n")  # an invalid edit keeps the last good settings
-            await asyncio.sleep(0.1)
-            assert config.mode == "batch" and not task.done()
-        finally:
-            task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await task
+        calls = tray.mode_changed.call_count
+        rewrite("[transcription]\nmode = 'nonsense'\n")  # an invalid edit keeps the last good settings
+        await asyncio.sleep(0.1)
+        assert config.mode == "batch" and not task.done()
+        assert config.config_error is None
+        assert tray.mode_changed.call_count == calls
+
+
+@pytest.mark.anyio
+async def test_a_settings_file_that_loads_again_is_applied_and_lets_vox_record(tmp_path, caplog):
+    caplog.set_level(logging.INFO, logger="vox.daemon")
+    config = broken_settings(tmp_path)
+    path = config.config_path
+    tray = MagicMock()
+
+    async with reloading(config, MagicMock(), tray):
+        path.write_text("[transcription]\nmode = 'streaming'\n[attenuation]\nlevel = 'still wrong'\n")
+        await until(lambda: "Config reload failed" in caplog.text)
+        assert config.config_error is not None
+        tray.mode_changed.assert_not_called()
+
+        # A backup moved back into place keeps its older time, so the time alone doesn't show the change
+        backup = tmp_path / "config.toml.bak"
+        backup.write_text('[transcription]\nmode = "streaming"\n[attenuation]\nlevel = 0.3\n[hotkey]\nkey = "right_ctrl"\n')
+        os.utime(backup, (1_000_000, 1_000_000))
+        os.replace(backup, path)
+        await until(lambda: config.config_error is None)
+
+    assert (config.mode, config.attenuation_level) == ("streaming", 0.3)
+    tray.mode_changed.assert_called_once()  # the status line drops "Settings file has an error"
+    assert config.hotkey == "right_shift"  # the listener started with the default, until a restart
+    assert "hotkey settings in" in caplog.text and "take effect when Vox restarts" in caplog.text
+
+
+@pytest.mark.anyio
+async def test_a_broken_settings_file_that_is_deleted_lets_vox_record_on_the_defaults(tmp_path, caplog):
+    caplog.set_level(logging.INFO, logger="vox.daemon")
+    config = broken_settings(tmp_path)
+    tray = MagicMock()
+
+    async with reloading(config, MagicMock(), tray):
+        config.config_path.unlink()
+        await until(lambda: config.config_error is None)
+
+    assert config.mode == "batch"
+    tray.mode_changed.assert_called_once()
+    assert "is gone: Vox is using the default settings" in caplog.text
+
+
+@pytest.mark.anyio
+async def test_a_settings_file_fixed_before_the_reloader_starts_is_applied(tmp_path):
+    config = broken_settings(tmp_path)
+    config.config_path.write_text('[transcription]\nmode = "whisper_cpp"\n[attenuation]\nlevel = 0.2\n')
+
+    async with reloading(config, MagicMock()):  # its first look at the file sees the fixed version
+        await until(lambda: config.config_error is None)
+
+    assert (config.mode, config.attenuation_level) == ("whisper_cpp", 0.2)
+
+
+@pytest.mark.anyio
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads the file whatever its permissions")
+async def test_an_unreadable_settings_file_is_applied_once_it_is_readable(tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_text('[transcription]\nmode = "whisper_cpp"\n')
+    path.chmod(0)
+    with pytest.raises(ConfigError, match="Permission denied") as error:
+        load_config(path)
+    config = fallback_config(path, error.value)
+
+    async with reloading(config, MagicMock()):
+        path.chmod(0o600)  # changes neither the time, the size nor the inode
+        await until(lambda: config.config_error is None)
+
+    assert config.mode == "whisper_cpp"
+
+
+@pytest.mark.anyio
+async def test_a_later_edit_that_still_fails_replaces_the_error_and_is_logged_once(tmp_path, caplog):
+    config = broken_settings(tmp_path)
+    tray = MagicMock()
+
+    async with reloading(config, MagicMock(), tray):
+        await settle()
+        assert "Config reload failed" not in caplog.text  # retries that fail as at startup stay quiet
+
+        config.config_path.write_text("[audio]\nsample_rate = 0\n")
+        await until(lambda: "sample_rate" in config.config_error)
+        await settle()  # several more polls retry the file
+
+    assert caplog.text.count("Config reload failed") == 1
+    tray.mode_changed.assert_not_called()

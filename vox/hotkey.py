@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
 from threading import Lock
+from time import monotonic
 
 from .config import Config
 from .errors import DependencyError
@@ -81,7 +81,7 @@ class HotkeyListener:
             self._listener = None
 
     def _fire_toggle(self, source: str) -> None:
-        now = time.monotonic()
+        now = monotonic()
         if (now - self._last_toggle_time) * 1000 < self._debounce_ms:
             return
         self._last_toggle_time = now
@@ -89,7 +89,7 @@ class HotkeyListener:
         log.info("Toggle fired via %s", source)
 
     def _fire_cancel(self, source: str) -> None:
-        now = time.monotonic()
+        now = monotonic()
         self._last_toggle_time = now
         self._loop.call_soon_threadsafe(self._queue.put_nowait, "cancel")
         log.info("Cancel fired via %s", source)
@@ -104,14 +104,14 @@ class HotkeyListener:
                     return  # ignore auto-repeat
                 self._modifier_pressed = True
                 self._other_key_pressed = False
-                self._press_time = time.monotonic()
+                self._press_time = monotonic()
             return
 
         # Track combo keys for fallback
         if self._fallback_keys:
             self._combo_state.add(key_name)
             if self._fallback_keys <= self._combo_state:
-                now = time.monotonic()
+                now = monotonic()
                 with self._lock:
                     if self._last_fallback_time > 0 and (now - self._last_fallback_time) * 1000 <= self._double_tap_timeout_ms:
                         self._last_fallback_time = 0.0
@@ -139,7 +139,7 @@ class HotkeyListener:
         key_name = self._key_name(key)
 
         if key_name == self._hotkey_name:
-            now = time.monotonic()
+            now = monotonic()
             with self._lock:
                 was_solo = self._modifier_pressed and not self._other_key_pressed
                 held_ms = (now - self._press_time) * 1000

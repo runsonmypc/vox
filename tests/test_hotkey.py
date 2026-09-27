@@ -32,7 +32,7 @@ async def test_hotkey_single_tap_emits_toggle():
     loop = asyncio.get_running_loop()
     listener = HotkeyListener(config, loop, queue)
 
-    with patch("time.monotonic", side_effect=clock.time):
+    with patch("vox.hotkey.monotonic", side_effect=clock.time):
         # Press right_shift
         listener._on_press(keyboard.Key.shift_r)
         clock.advance(0.1)  # 100ms hold (>= 80ms min_hold_ms)
@@ -52,7 +52,7 @@ async def test_hotkey_double_tap_within_timeout_emits_cancel():
     loop = asyncio.get_running_loop()
     listener = HotkeyListener(config, loop, queue)
 
-    with patch("time.monotonic", side_effect=clock.time):
+    with patch("vox.hotkey.monotonic", side_effect=clock.time):
         # Tap 1
         listener._on_press(keyboard.Key.shift_r)
         clock.advance(0.1)
@@ -82,7 +82,7 @@ async def test_hotkey_double_tap_outside_timeout_emits_two_toggles():
     loop = asyncio.get_running_loop()
     listener = HotkeyListener(config, loop, queue)
 
-    with patch("time.monotonic", side_effect=clock.time):
+    with patch("vox.hotkey.monotonic", side_effect=clock.time):
         # Tap 1
         listener._on_press(keyboard.Key.shift_r)
         clock.advance(0.1)
@@ -112,7 +112,7 @@ async def test_hotkey_intervening_key_resets_double_tap():
     loop = asyncio.get_running_loop()
     listener = HotkeyListener(config, loop, queue)
 
-    with patch("time.monotonic", side_effect=clock.time):
+    with patch("vox.hotkey.monotonic", side_effect=clock.time):
         # Tap 1
         listener._on_press(keyboard.Key.shift_r)
         clock.advance(0.1)
@@ -146,7 +146,7 @@ async def test_hotkey_triple_tap_behavior():
     loop = asyncio.get_running_loop()
     listener = HotkeyListener(config, loop, queue)
 
-    with patch("time.monotonic", side_effect=clock.time):
+    with patch("vox.hotkey.monotonic", side_effect=clock.time):
         # Tap 1 -> toggle
         listener._on_press(keyboard.Key.shift_r)
         clock.advance(0.1)
@@ -181,7 +181,7 @@ async def test_hotkey_held_with_other_key_ignored():
     loop = asyncio.get_running_loop()
     listener = HotkeyListener(config, loop, queue)
 
-    with patch("time.monotonic", side_effect=clock.time):
+    with patch("vox.hotkey.monotonic", side_effect=clock.time):
         # Shift held down
         listener._on_press(keyboard.Key.shift_r)
         clock.advance(0.05)
@@ -205,7 +205,7 @@ async def test_hotkey_fallback_combo_double_tap():
     loop = asyncio.get_running_loop()
     listener = HotkeyListener(config, loop, queue)
 
-    with patch("time.monotonic", side_effect=clock.time):
+    with patch("vox.hotkey.monotonic", side_effect=clock.time):
         # First combo
         listener._on_press(keyboard.Key.ctrl_l)
         listener._on_press(keyboard.Key.space)
@@ -235,7 +235,7 @@ async def test_hotkey_quick_tap_responsive():
     loop = asyncio.get_running_loop()
     listener = HotkeyListener(config, loop, queue)
 
-    with patch("time.monotonic", side_effect=clock.time):
+    with patch("vox.hotkey.monotonic", side_effect=clock.time):
         listener._on_press(keyboard.Key.shift_r)
         clock.advance(0.04)  # 40ms hold (>= 30ms min_hold_ms)
         listener._on_release(keyboard.Key.shift_r)
@@ -274,7 +274,7 @@ async def test_hotkey_spellings_match_the_key_pynput_reports(configured, key):
     queue: asyncio.Queue[str] = asyncio.Queue()
     listener = HotkeyListener(Config(hotkey=configured), asyncio.get_running_loop(), queue)
 
-    with patch("time.monotonic", side_effect=clock.time):
+    with patch("vox.hotkey.monotonic", side_effect=clock.time):
         _tap(listener, clock, key)
 
     await asyncio.sleep(0)
@@ -288,7 +288,7 @@ async def test_left_shift_hotkey_ignores_the_right_shift():
     queue: asyncio.Queue[str] = asyncio.Queue()
     listener = HotkeyListener(Config(hotkey="left_shift"), asyncio.get_running_loop(), queue)
 
-    with patch("time.monotonic", side_effect=clock.time):
+    with patch("vox.hotkey.monotonic", side_effect=clock.time):
         _tap(listener, clock, keyboard.Key.shift_r)
 
     await asyncio.sleep(0)
@@ -302,7 +302,7 @@ async def test_hotkey_fallback_combo_accepts_left_modifier_names():
     config = Config(hotkey="right_shift", hotkey_fallback="Left_Ctrl+Space")
     listener = HotkeyListener(config, asyncio.get_running_loop(), queue)
 
-    with patch("time.monotonic", side_effect=clock.time):
+    with patch("vox.hotkey.monotonic", side_effect=clock.time):
         listener._on_press(keyboard.Key.ctrl_l)
         listener._on_press(keyboard.Key.space)
         listener._on_release(keyboard.Key.space)

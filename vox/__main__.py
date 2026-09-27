@@ -6,13 +6,17 @@ import argparse
 import importlib.metadata
 import logging
 import os
+import stat
 import sys
 from pathlib import Path
 
-# A startup problem only the user can fix (sysexits EX_CONFIG), so restarting can't help. The login services
-# restart Vox on it unless their files opt out: RestartPreventExitStatus=78 in vox.service, and on macOS,
-# where launchd has no such setting, a plist wrapper that turns 78 into a clean exit.
+# A startup problem only the user can fix, such as a missing system tool (sysexits EX_CONFIG), so restarting
+# can't help: vox.service has RestartPreventExitStatus=78. launchd has no such setting and retries every 10 s.
+# A broken config.toml is not one of these: Vox starts without recording and picks up the fixed file.
 EXIT_CANNOT_START = os.EX_CONFIG
+
+# launchd appends Vox's output to one log file for good; past this size, a new start begins it afresh
+_LOG_LIMIT_BYTES = 10 * 1024 * 1024
 
 
 def _lock_dir() -> Path:
@@ -44,6 +48,22 @@ def _acquire_instance_lock(directory: Path) -> int | None:
         os.close(fd)
         raise
     return fd
+
+
+def _clear_big_log(fd: int = 2, limit: int = _LOG_LIMIT_BYTES) -> int | None:
+    """Empty the log file ``fd`` (stderr) writes to when it has grown past ``limit``; returns the size it had.
+
+    Only a regular file is touched, such as the LaunchAgent's ~/Library/Logs/Vox/vox.log; journald is not.
+    """
+    try:
+        info = os.fstat(fd)
+        if not stat.S_ISREG(info.st_mode) or info.st_size <= limit:
+            return None
+        os.ftruncate(fd, 0)
+        os.lseek(fd, 0, os.SEEK_SET)  # launchd appends anyway; a plain redirection would leave a hole
+    except OSError:
+        return None
+    return info.st_size
 
 
 def _version() -> str:
@@ -106,15 +126,19 @@ def main() -> None:
     if lock is None:
         log.info("Vox is already running.")
         return
+    cleared = _clear_big_log()  # only now: a second Vox must not empty the running one's log
+    if cleared is not None:
+        log.info("Cleared the log file, which had grown to %.0f MiB", cleared / 1024 / 1024)
 
-    from .config import load_config
+    from .config import fallback_config, load_config
     from .errors import ConfigError, DependencyError
 
     try:
         config = load_config(args.config)
     except ConfigError as e:
-        log.error("%s", e)
-        sys.exit(EXIT_CANNOT_START)
+        # Exiting would only get Vox restarted into the same error; it waits for the fixed file instead
+        config = fallback_config(args.config, e)
+        log.error("%s. Vox won't record until the file is fixed, and loads it as soon as it is.", e)
 
     # Without a key Vox still starts: the menu asks for one, and a service exiting here would only be restarted
     from .keystore import KeystoreError, get_api_key, hide_env_override, migrate_plaintext
@@ -125,16 +149,16 @@ def main() -> None:
     except KeystoreError as e:
         config.api_key_error = str(e)
         log.warning("Couldn't read the OpenAI API key from the keychain: %s", e)
-    if config.uses_openai and not config.openai_api_key and config.api_key_error is None:
+    no_key = config.uses_openai and not config.openai_api_key and config.api_key_error is None
+    if no_key and config.config_error is None:
         log.warning("No OpenAI API key yet. Choose Set API Key… from the Vox menu.")
     if config.mode == "whisper_cpp":
-        from .whisper_cpp import WhisperCppTranscriber
-        try:
-            WhisperCppTranscriber(config)
-        except ConfigError as e:
-            # Start anyway, like without a key: the menu can switch modes, and exiting would only get Vox restarted
-            config.mode_error = str(e)
-            log.error("Local transcription can't run: %s. Choose another mode from the Vox menu.", e)
+        from .modes import mode_problem
+
+        # Start anyway, like without a key: the menu can switch modes, and exiting would only get Vox restarted
+        config.mode_error = mode_problem(config, config.mode)
+        if config.mode_error is not None:
+            log.error("Local transcription can't run: %s. Choose another mode from the Vox menu.", config.mode_error)
 
     # Check system dependencies
     from .injector import check_accessibility_permission, check_dependencies

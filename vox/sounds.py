@@ -1,20 +1,18 @@
-"""Audio feedback — play start/stop/error sounds."""
+"""Audio feedback: start/stop/error and the other cues, each replaceable with a WAV file of your own."""
 
 from __future__ import annotations
 
 import logging
 import sys
-import time
+import wave
 from pathlib import Path
 
 import numpy as np
 import sounddevice as sd
 
-from .config import Config
+from .config import DEFAULT_CONFIG_PATH, Config
 
 log = logging.getLogger(__name__)
-
-_SOUNDS_DIR = Path(__file__).parent.parent / "sounds"
 
 _SAMPLE_RATE = 44100
 
@@ -41,6 +39,20 @@ _TONES = {
 }
 
 
+def sounds_dir(config: Config) -> Path:
+    """Where custom cues go: sounds/ next to config.toml, so ~/.config/vox/sounds/start.wav replaces "start"."""
+    return (config.config_path or DEFAULT_CONFIG_PATH).parent / "sounds"
+
+
+def _custom_files(directory: Path) -> dict[str, Path]:
+    """The cues that have a WAV file of their own in ``directory``."""
+    files = {name: directory / f"{name}.wav" for name in _SYSTEM_SOUNDS}
+    custom = {name: path for name, path in files.items() if path.is_file()}
+    for name, path in custom.items():
+        log.info("Using %s for the %s sound", path, name)
+    return custom
+
+
 def _generate_tone(freq: float, duration: float, sample_rate: int = _SAMPLE_RATE, volume: float = 0.3) -> np.ndarray:
     """Generate a sine wave tone."""
     t = np.linspace(0, duration, int(sample_rate * duration), endpoint=False)
@@ -61,19 +73,45 @@ def _two_tone(first: tuple[float, float, float], gap: float, second: tuple[float
     ])
 
 
-def _macos_sounds() -> dict:
+def _read_wav(path: Path) -> tuple[np.ndarray, int]:
+    """A 16-bit PCM WAV file as float32 frames for sounddevice, and its sample rate."""
+    with wave.open(str(path), "rb") as wf:
+        if wf.getsampwidth() != 2:
+            raise ValueError(f"{8 * wf.getsampwidth()}-bit audio; Vox plays 16-bit PCM")
+        rate, channels = wf.getframerate(), wf.getnchannels()
+        pcm = wf.readframes(wf.getnframes())
+    frames = np.frombuffer(pcm, dtype="<i2").reshape(-1, channels)
+    return frames.astype(np.float32) / 32768, rate
+
+
+def _macos_sounds(custom: dict[str, Path]) -> dict:
     from AppKit import NSSound
 
     sounds = {}
     for name, system_name in _SYSTEM_SOUNDS.items():
-        wav_path = _SOUNDS_DIR / f"{name}.wav"
-        if wav_path.exists():
-            sounds[name] = NSSound.alloc().initWithContentsOfFile_byReference_(str(wav_path), True)
-        else:
+        sound = None
+        if name in custom:
+            sound = NSSound.alloc().initWithContentsOfFile_byReference_(str(custom[name]), True)
+            if sound is None:
+                log.warning("Couldn't load %s; using the built-in %s sound", custom[name], name)
+        if sound is None:
             sound = NSSound.soundNamed_(system_name)
-            if sound is None and name == "cancel":
-                sound = NSSound.soundNamed_("Purr")
-            sounds[name] = sound
+        if sound is None and name == "cancel":
+            sound = NSSound.soundNamed_("Purr")
+        sounds[name] = sound
+    return sounds
+
+
+def _tone_sounds(custom: dict[str, Path]) -> dict[str, tuple[np.ndarray, int]]:
+    sounds = {}
+    for name, spec in _TONES.items():
+        if name in custom:
+            try:
+                sounds[name] = _read_wav(custom[name])
+                continue
+            except (OSError, EOFError, ValueError, wave.Error) as e:
+                log.warning("Couldn't load %s (%s); using the built-in %s sound", custom[name], e, name)
+        sounds[name] = (_two_tone(*spec), _SAMPLE_RATE)
     return sounds
 
 
@@ -81,43 +119,37 @@ class SoundPlayer:
     """Plays audio feedback sounds while config.sounds_enabled is on.
 
     The sound table is always built, so turning sounds on in a reloaded config works at once.
+    Custom WAV files are read once, at startup.
     """
 
     def __init__(self, config: Config) -> None:
         self._config = config
         self._is_darwin = sys.platform == "darwin"
+        custom = _custom_files(sounds_dir(config))
         self._sounds = {}
         if self._is_darwin:
             try:
-                self._sounds = _macos_sounds()
+                self._sounds = _macos_sounds(custom)
             except Exception as e:
                 log.warning("Failed to initialize macOS NSSound: %s", e)
                 self._is_darwin = False
         if not self._is_darwin:
-            self._sounds = {name: _two_tone(*spec) for name, spec in _TONES.items()}
+            self._sounds = _tone_sounds(custom)
 
-    def play(self, name: str, blocking: bool = False) -> None:
-        """Play a named sound. If blocking=True, wait for it to finish."""
+    def play(self, name: str) -> None:
+        """Start playing a named sound; it plays on while the caller carries on."""
         if not self._config.sounds_enabled:
             return
         sound = self._sounds.get(name)
         if sound is None:
             log.warning("Unknown sound: %s", name)
             return
-
-        if self._is_darwin:
-            try:
+        try:
+            if self._is_darwin:
                 sound.stop()
                 sound.play()
-                if blocking:
-                    time.sleep(0.08)  # brief pause so alert finishes before microphone starts
-            except Exception as e:
-                log.warning("Failed to play sound %r: %s", name, e)
-            return
-
-        try:
-            sd.play(sound, samplerate=_SAMPLE_RATE)
-            if blocking:
-                sd.wait()
+            else:
+                samples, rate = sound
+                sd.play(samples, samplerate=rate)
         except Exception as e:
             log.warning("Failed to play sound %r: %s", name, e)

@@ -17,6 +17,7 @@ from vox.config import (
     update_max_recording_seconds,
     update_snippet,
     update_transcription_mode,
+    write_atomically,
 )
 from vox.errors import ConfigError
 
@@ -250,6 +251,34 @@ def test_refuses_to_overwrite_unparseable_config(tmp_path):
     assert path.read_text() == "[audio\nbroken = \n"
 
 
+@pytest.mark.parametrize("text, write", [
+    ("audio = 5\n", lambda path: update_max_recording_seconds(path, 600)),
+    ('transcription = "batch"\n', lambda path: update_transcription_mode(path, "streaming")),
+    ('whisper = 1\n[transcription]\nmodel = "m"\n', lambda path: update_transcription_mode(path, "streaming")),
+    ('[transcription]\nmode = "batch"\nmodel = "m"\n[whisper]\n', None),
+])
+def test_a_section_that_is_not_a_table_is_a_config_error_not_a_crash(tmp_path, text, write):
+    """The daemon reports a ConfigError with the error sound; a TypeError would be an unexpected error."""
+    path = tmp_path / "config.toml"
+    path.write_text(text)
+    if write is None:  # a real [whisper] table is fine
+        update_transcription_mode(path, "streaming")
+        assert tomllib.loads(path.read_text())["whisper"] == {"model": "m"}
+        return
+    with pytest.raises(ConfigError, match="must be a table"):
+        write(path)
+    assert path.read_text() == text
+
+
+def test_write_atomically_can_make_an_existing_file_owner_only(tmp_path):
+    path = tmp_path / "vox.env"
+    path.write_text("OLD=1\n")
+    os.chmod(path, 0o644)
+    write_atomically(path, "NEW=1\n", keep_mode=False)
+    assert path.read_text() == "NEW=1\n"
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
 def test_bumps_mtime_for_reloader(cfg):
     os.utime(cfg, (1_000_000, 1_000_000))
     update_snippet(cfg, "x", "y")
@@ -260,25 +289,20 @@ def test_bumps_mtime_for_reloader(cfg):
 
 
 @asynccontextmanager
-async def running_reloader(config, recorder):
+async def running_reloader(config, recorder, tray=None):
     """Run the daemon's real _config_reloader with its 2s poll shortened."""
     from vox.daemon import _config_reloader
-
-    real_sleep = asyncio.sleep
-
-    async def fast_sleep(_seconds):
-        await real_sleep(0.01)
 
     async def wait_until(predicate, timeout=3.0):
         loop = asyncio.get_running_loop()
         deadline = loop.time() + timeout
         while not predicate():
             assert loop.time() < deadline, "reloader did not pick up the change"
-            await real_sleep(0.01)
+            await asyncio.sleep(0.01)
 
-    with patch("vox.daemon.asyncio.sleep", fast_sleep):
-        task = asyncio.create_task(_config_reloader(config, MagicMock(), recorder))
-        await real_sleep(0.03)  # let it record the starting mtime
+    with patch("vox.daemon._CONFIG_POLL_SECONDS", 0.01):
+        task = asyncio.create_task(_config_reloader(config, recorder, tray))
+        await asyncio.sleep(0.03)  # let it note the file as it is
         try:
             yield wait_until
         finally:
@@ -288,12 +312,12 @@ async def running_reloader(config, recorder):
 @pytest.mark.anyio
 async def test_ui_edits_hot_reload_into_running_daemon(cfg):
     from vox.daemon import _process
-    from vox.transcribe import WhisperTranscriber
+    from vox.transcribe import Transcriber
     from vox.window import AppContext, AppType
 
     config = load_config(cfg)
     config.openai_api_key = "test"
-    transcriber = WhisperTranscriber(config)  # created before the edit, like the running daemon's
+    transcriber = Transcriber(config)  # created before the edit, like the running daemon's
     recorder = MagicMock()
 
     async with running_reloader(config, recorder) as wait_until:
@@ -301,7 +325,7 @@ async def test_ui_edits_hot_reload_into_running_daemon(cfg):
         update_snippet(cfg, "sign off", "Best,\nAlex")
         await wait_until(lambda: "sign off" in config.snippets and config.dictionary == ["Kubernetes"])
 
-    assert "Kubernetes" in transcriber._build_prompt(None)
+    assert "Kubernetes" in transcriber._request(None)[0]["keywords"]
 
     batch = MagicMock()
     batch.transcribe = AsyncMock(return_value="Sign off.")
@@ -309,7 +333,7 @@ async def test_ui_edits_hot_reload_into_running_daemon(cfg):
         await _process(
             wav_data=b"", config=config, batch_transcriber=batch, streaming_transcriber=None,
             stream_task=None, sounds=MagicMock(), queue=asyncio.Queue(),
-            context=AppContext("mail", "Mail", AppType.EMAIL), screen_capture_future=None,
+            context=AppContext("mail", "Mail", AppType.EMAIL), screen_capture_future=None, mode="batch",
         )
     paste.assert_called_once_with("Best,\nAlex", AppType.EMAIL)
     recorder.reconfigure.assert_not_called()

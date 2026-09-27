@@ -51,9 +51,6 @@ class Config:
     # Custom dictionary words to preserve
     dictionary: list[str] = field(default_factory=list)
 
-    # Per-app style overrides (app_type -> style instruction)
-    styles: dict[str, str] = field(default_factory=dict)
-
     # Window class overrides (wm_class -> app_type)
     window_classes: dict[str, str] = field(default_factory=dict)
 
@@ -116,6 +113,14 @@ def load_config(path: Path | None = None) -> Config:
     return config
 
 
+def fallback_config(path: Path | None, error: ConfigError) -> Config:
+    """Default settings for a config.toml that failed to load, remembering why: Vox runs on them but won't record."""
+    config = Config()
+    config._config_path = path or DEFAULT_CONFIG_PATH
+    config.config_error = str(error)
+    return config
+
+
 def _apply(config: Config, data: dict) -> None:
     _apply_section(config, data, "hotkey", {
         "key": ("hotkey", _text),
@@ -167,8 +172,6 @@ def _apply(config: Config, data: dict) -> None:
             break
     if "snippets" in data:
         config.snippets = _text_table("[snippets]", data["snippets"])
-    if "styles" in data:
-        config.styles = _text_table("[styles]", data["styles"])
     if "window_classes" in data:
         config.window_classes = _text_table("[window_classes]", data["window_classes"])
 
@@ -331,20 +334,15 @@ def update_transcription_mode(path: Path, mode: str) -> None:
     if mode not in MODES:
         raise ValueError(f"Invalid transcription mode: {mode}")
     doc = _read_document(path)
-    if "transcription" not in doc:
-        doc["transcription"] = tomlkit.table()
-    transcription = doc["transcription"]
-    old_mode = transcription.get("mode", doc.get("whisper", {}).get("mode", "batch"))
+    transcription = _edited_table(doc, "transcription")
+    old_mode = transcription.get("mode", _edited_table(doc, "whisper", create=False).get("mode", "batch"))
     if old_mode != mode and "model" in transcription:
         # The generic model was the one in effect for the old provider, so it replaces that provider's own setting
         old_model = transcription.pop("model")
         if old_mode == "streaming":
             transcription["streaming_model"] = old_model
         elif old_mode in ("batch", "whisper_cpp"):
-            section = "whisper" if old_mode == "batch" else "whisper_cpp"
-            if section not in doc:
-                doc[section] = tomlkit.table()
-            doc[section]["model"] = old_model
+            _edited_table(doc, "whisper" if old_mode == "batch" else "whisper_cpp")["model"] = old_model
     transcription["mode"] = mode
     _write_document(path, doc)
 
@@ -357,9 +355,7 @@ def update_max_recording_seconds(path: Path, seconds: int) -> None:
     if isinstance(seconds, bool) or not isinstance(seconds, int) or seconds <= 0:
         raise ValueError(f"Invalid recording limit: {seconds!r}")
     doc = _read_document(path)
-    if "audio" not in doc:
-        doc["audio"] = tomlkit.table()
-    doc["audio"]["max_recording_seconds"] = seconds
+    _edited_table(doc, "audio")["max_recording_seconds"] = seconds
     _write_document(path, doc)
 
 
@@ -404,24 +400,42 @@ def _read_document(path: Path) -> tomlkit.TOMLDocument:
         raise ConfigError(f"Failed to parse config file {path}: {e}") from e
 
 
-def _write_document(path: Path, doc: tomlkit.TOMLDocument) -> None:
-    """Write atomically (temp file + os.replace), following symlinks and keeping file permissions.
+def _edited_table(doc: tomlkit.TOMLDocument, name: str, *, create: bool = True) -> dict:
+    """The ``[name]`` table of a document being edited, added if missing (an empty dict if not ``create``).
 
-    A new file is owner-only (0600), in an owner-only directory if that is new too: snippets can be personal.
+    Raises ConfigError when the file has something else under that name, as load_config() does.
     """
+    if name not in doc:
+        if not create:
+            return {}
+        doc[name] = tomlkit.table()
+    return _table(f"[{name}]", doc[name])
+
+
+def _write_document(path: Path, doc: tomlkit.TOMLDocument) -> None:
+    """Write config.toml atomically, keeping its permissions. Snippets can be personal, so a new file is 0600."""
     text = tomlkit.dumps(doc)
     tomllib.loads(text)  # never replace a valid config with an unparseable one
+    write_atomically(path, text)
 
+
+def write_atomically(path: Path, text: str, *, keep_mode: bool = True) -> None:
+    """Replace ``path``, or the file a symlink there points to, with ``text`` (temp file + os.replace).
+
+    A new file is owner-only (0600), in an owner-only directory if that is new too. An existing file
+    keeps its permissions with ``keep_mode``, and is made owner-only without it.
+    """
     target = path.resolve()
     target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=target.parent, prefix=f".{target.name}.", suffix=".tmp")
+    fd, tmp = tempfile.mkstemp(dir=target.parent, prefix=f".{target.name}.", suffix=".tmp")  # created 0600
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(text)
             f.flush()
             os.fsync(f.fileno())
-        with contextlib.suppress(FileNotFoundError):
-            os.chmod(tmp, stat.S_IMODE(target.stat().st_mode))  # new files keep the 0600 from mkstemp
+        if keep_mode:
+            with contextlib.suppress(FileNotFoundError):
+                os.chmod(tmp, stat.S_IMODE(target.stat().st_mode))
         os.replace(tmp, target)
     except BaseException:
         with contextlib.suppress(FileNotFoundError):

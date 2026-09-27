@@ -13,11 +13,17 @@ LABELS: dict[str, str] = {
 assert tuple(LABELS) == MODES
 
 
-def mode_problem(config: Config, mode: str) -> str | None:
-    """Why ``mode`` can't be used right now, or None if it can."""
+def mode_problem(config: Config, mode: str, *, check_setup: bool = True) -> str | None:
+    """Why ``mode`` can't be used right now, or None if it can.
+
+    Without ``check_setup`` the whisper.cpp binary and model aren't tried: for a caller about
+    to build that transcriber, which checks them itself and raises ConfigError.
+    """
     if mode not in MODES:
         return f"Invalid transcription mode: {mode}"
     if mode == "whisper_cpp":
+        if not check_setup:
+            return None
         from .whisper_cpp import WhisperCppTranscriber
 
         try:

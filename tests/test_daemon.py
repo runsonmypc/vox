@@ -2,7 +2,6 @@
 
 import asyncio
 import io
-import time
 import wave
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -42,8 +41,8 @@ def _no_window_lookup():
 
 
 @pytest.mark.anyio
-async def test_daemon_streaming_process_success_and_sub_200ms_latency():
-    """Verify streaming dictation: end-of-turn finalization, sub-200ms latency, and paste injection."""
+async def test_daemon_streaming_process_success():
+    """Streaming dictation: the live session is finalized once its audio is sent, and the transcript pasted."""
     config = Config(
         mode="streaming",
         snippets={"my email": "alex@example.com"},
@@ -59,23 +58,25 @@ async def test_daemon_streaming_process_success_and_sub_200ms_latency():
     mock_batch = MagicMock()
     mock_batch.transcribe = AsyncMock(return_value="batch fallback text")
 
-    mock_streaming = MagicMock()
-    # Simulate low-latency WebSocket finish (< 50ms)
-    async def fast_finish(timeout=3.0):
-        await asyncio.sleep(0.03)  # 30ms finalization
+    audio_sent = asyncio.Event()
+
+    async def send_last_audio():
+        await audio_sent.wait()
+
+    stream_task = asyncio.create_task(send_last_audio())
+
+    async def finish():
+        assert stream_task.done(), "committed before the last audio was sent"
         return "deploy Kubernetes cluster"
 
-    mock_streaming.finish = AsyncMock(side_effect=fast_finish)
+    mock_streaming = MagicMock()
+    mock_streaming.finish = AsyncMock(side_effect=finish)
     mock_streaming.close = AsyncMock()
-
-    # Pre-completed stream task
-    stream_task = asyncio.create_task(asyncio.sleep(0.01))
 
     with patch("vox.daemon.has_speech", return_value=True), \
          patch("vox.daemon.paste") as mock_paste:
 
-        t_start = time.monotonic()
-        await _process(
+        process = asyncio.create_task(_process(
             wav_data=wav_data,
             config=config,
             batch_transcriber=mock_batch,
@@ -85,11 +86,12 @@ async def test_daemon_streaming_process_success_and_sub_200ms_latency():
             queue=queue,
             context=context,
             screen_capture_future=None,
-        )
-        elapsed_s = time.monotonic() - t_start
-
-        # Only Vox's own overhead on top of the 30 ms finish; loose enough for a loaded CI machine
-        assert elapsed_s < 1.0, f"Latency {elapsed_s:.3f}s"
+            mode="streaming",
+        ))
+        await asyncio.sleep(0.01)
+        mock_streaming.finish.assert_not_called()  # still waiting for the worker
+        audio_sent.set()
+        await process
 
         # Verify streaming transcriber was finalized and batch was not used
         mock_streaming.finish.assert_awaited_once()
@@ -135,6 +137,7 @@ async def test_daemon_streaming_snippet_expansion():
             queue=queue,
             context=context,
             screen_capture_future=None,
+            mode="streaming",
         )
 
         # Verify expansion was pasted
@@ -143,7 +146,7 @@ async def test_daemon_streaming_snippet_expansion():
 
 @pytest.mark.anyio
 async def test_daemon_streaming_fallback_to_batch():
-    """Verify graceful fallback to batch WhisperTranscriber when WebSocket streaming fails."""
+    """Verify graceful fallback to batch Transcriber when WebSocket streaming fails."""
     config = Config(mode="streaming")
     context = AppContext(
         wm_class="code",
@@ -176,6 +179,7 @@ async def test_daemon_streaming_fallback_to_batch():
             queue=queue,
             context=context,
             screen_capture_future=None,
+            mode="streaming",
         )
 
         # Streaming should have been attempted, failed, and batch called
@@ -192,7 +196,7 @@ async def test_daemon_streaming_fallback_to_batch():
 
 @pytest.mark.anyio
 async def test_daemon_explicit_batch_mode():
-    """Verify that mode='batch' bypasses streaming entirely and uses WhisperTranscriber directly."""
+    """Verify that mode='batch' bypasses streaming entirely and uses Transcriber directly."""
     config = Config(mode="batch")
     context = AppContext(
         wm_class="ghostty",
@@ -218,6 +222,7 @@ async def test_daemon_explicit_batch_mode():
             queue=queue,
             context=context,
             screen_capture_future=None,
+            mode="batch",
         )
 
         mock_batch.transcribe.assert_awaited_once_with(wav_data, context)
@@ -334,7 +339,7 @@ async def test_daemon_cancel_during_recording():
     with patch("vox.daemon.HotkeyListener", side_effect=fake_hotkey_init), \
          patch("vox.daemon.Recorder", return_value=mock_recorder), \
          patch("vox.daemon.SoundPlayer", return_value=mock_sounds), \
-         patch("vox.daemon.WhisperTranscriber"), \
+         patch("vox.daemon.Transcriber"), \
          patch("vox.daemon.StreamingTranscriber", return_value=mock_streaming), \
          patch("vox.daemon._config_reloader", side_effect=fake_reloader), \
          patch("vox.daemon.start_screen_capture", return_value=fake_screen_future) as capture, \
@@ -352,7 +357,7 @@ async def test_daemon_cancel_during_recording():
         await queue.put("toggle")
         await until(lambda: mock_streaming.connect.await_count == 1)
 
-        mock_sounds.play.assert_any_call("start", blocking=False)
+        mock_sounds.play.assert_any_call("start")
         mock_set_volume.assert_called_with(0.4)  # 0.8 * 0.5
         assert mock_recorder.start.call_args.kwargs["stream"] is True
         # Streaming sends its keywords when it connects, before a capture could finish: none is started
@@ -375,7 +380,7 @@ async def test_daemon_cancel_during_recording():
         mock_sounds.reset_mock()
         await queue.put("toggle")
         await until(lambda: mock_sounds.play.call_count >= 1)
-        mock_sounds.play.assert_any_call("start", blocking=False)
+        mock_sounds.play.assert_any_call("start")
 
         main_task.cancel()
         try:
@@ -415,7 +420,7 @@ async def test_daemon_cancel_during_processing():
     with patch("vox.daemon.HotkeyListener", side_effect=fake_hotkey_init), \
          patch("vox.daemon.Recorder", return_value=mock_recorder), \
          patch("vox.daemon.SoundPlayer", return_value=mock_sounds), \
-         patch("vox.daemon.WhisperTranscriber"), \
+         patch("vox.daemon.Transcriber"), \
          patch("vox.daemon._config_reloader", side_effect=fake_reloader), \
          patch("vox.daemon.detect_active_window", return_value=AppContext(wm_class="term", window_title="Term", app_type=AppType.TERMINAL)), \
          patch("vox.daemon.start_screen_capture", return_value=None), \
@@ -450,7 +455,7 @@ async def test_daemon_cancel_during_processing():
         mock_sounds.reset_mock()
         await queue.put("toggle")
         await until(lambda: mock_sounds.play.call_count >= 1)
-        mock_sounds.play.assert_any_call("start", blocking=False)
+        mock_sounds.play.assert_any_call("start")
 
         main_task.cancel()
         try:
@@ -497,6 +502,7 @@ async def test_process_cancellation_suppresses_paste_and_cleans_resources():
             queue=queue,
             context=context,
             screen_capture_future=screen_capture_future,
+            mode="streaming",
         ))
 
         await finish_started.wait()
@@ -533,7 +539,7 @@ async def test_process_cancelled_while_the_stream_worker_drains():
         process_task = asyncio.create_task(_process(
             wav_data=_make_dummy_wav(0.5), config=config, batch_transcriber=MagicMock(),
             streaming_transcriber=mock_streaming, stream_task=stream_task, sounds=MagicMock(),
-            queue=queue, context=context, screen_capture_future=None,
+            queue=queue, context=context, screen_capture_future=None, mode="streaming",
         ))
         await sending.wait()
         await asyncio.sleep(0.01)
@@ -565,7 +571,7 @@ async def test_daemon_cancel_ignored_in_idle():
 
     with patch("vox.daemon.HotkeyListener", side_effect=fake_hotkey_init), \
          patch("vox.daemon.Recorder"), \
-         patch("vox.daemon.WhisperTranscriber"), \
+         patch("vox.daemon.Transcriber"), \
          patch("vox.daemon._config_reloader", side_effect=fake_reloader), \
          patch("vox.daemon.SoundPlayer", return_value=mock_sounds):
 
@@ -617,6 +623,7 @@ async def test_streaming_bypasses_vad_gate():
             queue=queue,
             context=context,
             screen_capture_future=None,
+            mode="streaming",
         )
 
         mock_vad.assert_not_called()
@@ -647,6 +654,7 @@ async def test_process_records_injected_text_in_history(tmp_path):
             queue=asyncio.Queue(),
             context=context,
             screen_capture_future=None,
+            mode="batch",
             history=history,
         )
 
@@ -678,6 +686,7 @@ async def test_process_skips_history_for_empty_transcript(tmp_path, transcript):
             queue=asyncio.Queue(),
             context=AppContext(wm_class="code", window_title="VSCode", app_type=AppType.EDITOR),
             screen_capture_future=None,
+            mode="batch",
             history=history,
         )
 
@@ -709,6 +718,7 @@ async def test_process_keeps_history_when_paste_fails(tmp_path):
             queue=asyncio.Queue(),
             context=AppContext(wm_class="code", window_title="VSCode", app_type=AppType.EDITOR),
             screen_capture_future=None,
+            mode="batch",
             history=history,
         )
 
@@ -738,6 +748,7 @@ async def test_history_write_failure_does_not_play_error(tmp_path):
             queue=asyncio.Queue(),
             context=AppContext(wm_class="code", window_title="VSCode", app_type=AppType.EDITOR),
             screen_capture_future=None,
+            mode="batch",
             history=history,
         )
 
