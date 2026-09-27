@@ -5,8 +5,7 @@ All notable changes to Vox Transfer are listed here. Vox Transfer follows
 
 ## [1.0.0] - 2026-09-27
 
-The first public release. The app is now called Vox Transfer; the `vox` command, its settings and
-its folders keep their names.
+The first public release. The command is `vox`, and its settings live in `~/.config/vox`.
 
 ### Dictation
 
