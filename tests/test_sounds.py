@@ -164,7 +164,8 @@ def test_the_built_in_sounds_are_all_different(built_in):
     names = sorted(built_in)
     for i, a in enumerate(names):
         for b in names[i + 1 :]:
-            assert len(built_in[a]) != len(built_in[b]) or not np.allclose(built_in[a], built_in[b]), (a, b)
+            n = min(len(built_in[a]), len(built_in[b]))  # not merely a longer or shorter copy
+            assert not np.allclose(built_in[a][:n], built_in[b][:n], atol=0.01), (a, b)
 
 
 def test_the_built_in_sounds_are_audible_and_never_clip(built_in):
