@@ -46,6 +46,10 @@ in `~/.local/bin`, a login service that starts it when you log in, and a Vox lau
 applications. Run the installer as yourself, not with `sudo`; it asks for `sudo` only to install
 missing Linux packages.
 
+On macOS the launcher is `/Applications/Vox.app`, or `~/Applications/Vox.app` when you cannot
+write to `/Applications` or another app there is already called Vox (or VOX). The installer never
+changes or removes an app it did not create.
+
 ### One line
 
 ```sh

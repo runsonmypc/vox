@@ -318,6 +318,113 @@ def test_mac_uninstall_removes_only_the_vox_launcher(home):
     assert "launchctl bootout gui/501/com.runsonmypc.vox" in (home / "calls").read_text()
 
 
+MAC = """
+    APPLICATIONS="$HOME/SystemApplications"
+    uname() { echo Darwin; }
+    id() { echo 501; }
+    launchctl() { :; }
+    app_icon() { echo icon >"$1"; }
+"""
+
+
+def other_app(path: Path) -> dict[str, bytes]:
+    """Another vendor's app bundle at `path`, as {relative path: contents} to compare later."""
+    (path / "Contents/MacOS").mkdir(parents=True)
+    (path / "Contents/Frameworks").mkdir()
+    (path / "Contents/Info.plist").write_text("<string>com.example.vox-player</string>")
+    (path / "Contents/MacOS/VOX").write_text("the player")
+    return bundle(path)
+
+
+def bundle(path: Path) -> dict[str, bytes]:
+    return {str(p.relative_to(path)): p.read_bytes() if p.is_file() else b"" for p in path.rglob("*")}
+
+
+def is_launcher(path: Path) -> bool:
+    return "com.runsonmypc.vox.launcher" in (path / "Contents/Info.plist").read_text()
+
+
+def test_mac_launcher_never_writes_into_another_app_named_vox(home):
+    """The default APFS volume ignores case, so another vendor's VOX.app is the same path as Vox.app."""
+    fake_venv(home)
+    other = home / "SystemApplications/Vox.app"
+    before = other_app(other)
+    result = bash(home, MAC + "mac_launcher")
+    assert result.returncode == 0, result.stderr
+    assert bundle(other) == before
+    assert is_launcher(home / "Applications/Vox.app")
+    assert (home / "Applications/Vox.app/Contents/MacOS/Vox").read_text().startswith("#!/bin/bash")
+
+    # and uninstalling removes only the launcher it added
+    result = bash(home, MAC + "uninstall_vox")
+    assert result.returncode == 0, result.stderr
+    assert bundle(other) == before
+    assert not (home / "Applications/Vox.app").exists()
+
+
+def test_mac_launcher_is_skipped_when_both_places_have_another_app_named_vox(home):
+    fake_venv(home)
+    apps = [home / "SystemApplications/Vox.app", home / "Applications/Vox.app"]
+    before = [other_app(app) for app in apps]
+    result = bash(home, MAC + "mac_launcher")
+    assert result.returncode == 0, result.stderr
+    assert [bundle(app) for app in apps] == before
+    assert "no Vox launcher was added" in result.stderr
+    assert "launchctl kickstart gui/501/com.runsonmypc.vox" in result.stderr
+
+
+def test_mac_launcher_updates_its_own_launcher_in_place(home):
+    fake_venv(home)
+    ours = home / "SystemApplications/Vox.app"
+    (ours / "Contents/MacOS").mkdir(parents=True)
+    (ours / "Contents/Info.plist").write_text("<string>com.runsonmypc.vox.launcher</string>")
+    (ours / "Contents/MacOS/Vox").write_text("an older launcher")
+    result = bash(home, MAC + "mac_launcher")
+    assert result.returncode == 0, result.stderr
+    assert (ours / "Contents/MacOS/Vox").read_text().startswith("#!/bin/bash")
+    assert plistlib.loads((ours / "Contents/Info.plist").read_bytes())["CFBundleIdentifier"] == (
+        "com.runsonmypc.vox.launcher"
+    )
+    assert not (home / "Applications").exists()
+
+
+def test_mac_launcher_goes_to_the_users_applications_when_the_shared_folder_is_read_only(home):
+    fake_venv(home)
+    shared = home / "SystemApplications"
+    shared.mkdir()
+    shared.chmod(0o555)
+    try:
+        result = bash(home, MAC + "mac_launcher")
+    finally:
+        shared.chmod(0o755)
+    assert result.returncode == 0, result.stderr
+    assert is_launcher(home / "Applications/Vox.app")
+    assert not (shared / "Vox.app").exists()
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root can delete a read-only launcher")
+def test_mac_uninstall_carries_on_when_the_launcher_cannot_be_deleted(home):
+    venv = fake_venv(home)
+    (home / ".local/bin").mkdir(parents=True)
+    (home / ".local/bin/vox").symlink_to(venv / "bin/vox")
+    launcher = home / "Applications/Vox.app"
+    (launcher / "Contents/MacOS").mkdir(parents=True)
+    (launcher / "Contents/Info.plist").write_text("<string>com.runsonmypc.vox.launcher</string>")
+    (launcher / "Contents/MacOS/Vox").touch()
+    locked = [launcher / "Contents/MacOS", launcher / "Contents", launcher]
+    for path in locked:
+        path.chmod(0o555)
+    try:
+        result = bash(home, MAC + "uninstall_vox")
+    finally:
+        for path in reversed(locked):
+            path.chmod(0o755)
+    assert result.returncode == 0, result.stderr
+    assert f"could not remove {launcher}" in result.stderr
+    assert not venv.exists() and not (home / ".local/bin/vox").is_symlink()
+    assert "Vox is uninstalled" in result.stdout
+
+
 # --- Bootstrap from a release ----------------------------------------------------------------
 
 def make_release(tmp_path: Path, version: str = "9.9.9", tamper: bool = False) -> Path:
