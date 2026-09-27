@@ -1,4 +1,7 @@
-"""AT-SPI text reader — runs as subprocess to isolate potential segfaults."""
+"""AT-SPI text reader — runs as subprocess to isolate potential segfaults.
+
+Reads only the application's focused window, and only what is showing in it.
+"""
 
 import sys
 
@@ -18,17 +21,29 @@ def main() -> None:
         if app is None:
             continue
         try:
-            if str(app.get_process_id()) == pid:
-                chunks: list[str] = []
-                _collect_text(app, chunks, 0)
-                text = "\n".join(chunks)[:max_chars]
-                print(text, end="")
-                return
+            if str(app.get_process_id()) != pid:
+                continue
+            window = _active_window(app, Atspi)
         except Exception:
             continue
+        if window is None:
+            return
+        chunks: list[str] = []
+        _collect_text(window, chunks, 0, Atspi)
+        print("\n".join(chunks)[:max_chars], end="")
+        return
 
 
-def _collect_text(obj: object, chunks: list[str], depth: int) -> None:
+def _active_window(app, atspi):
+    """The app's focused top-level window, so its other windows are never read."""
+    for i in range(app.get_child_count()):
+        window = app.get_child_at_index(i)
+        if window is not None and window.get_state_set().contains(atspi.StateType.ACTIVE):
+            return window
+    return None
+
+
+def _collect_text(obj, chunks: list[str], depth: int, atspi) -> None:
     if depth > 20 or len(chunks) > 200:
         return
     try:
@@ -38,18 +53,17 @@ def _collect_text(obj: object, chunks: list[str], depth: int) -> None:
     for i in range(n):
         try:
             child = obj.get_child_at_index(i)
-            if child is None:
+            # Skip hidden subtrees: background tabs, collapsed panels, off-screen pages
+            if child is None or not child.get_state_set().contains(atspi.StateType.SHOWING):
                 continue
-            from gi.repository import Atspi
-            ifaces = child.get_interfaces()
-            if "Text" in ifaces:
-                cc = Atspi.Text.get_character_count(child)
+            if "Text" in child.get_interfaces():
+                cc = atspi.Text.get_character_count(child)
                 if cc > 0:
-                    text = Atspi.Text.get_text(child, 0, min(cc, 500))
+                    text = atspi.Text.get_text(child, 0, min(cc, 500))
                     cleaned = text.strip().replace("\ufffc", "").replace("\ufffd", "").strip()
                     if cleaned:
                         chunks.append(cleaned)
-            _collect_text(child, chunks, depth + 1)
+            _collect_text(child, chunks, depth + 1, atspi)
         except Exception:
             continue
 

@@ -68,3 +68,33 @@ def test_nonzero_returncode_warns(caplog):
          caplog.at_level(logging.DEBUG, logger="vox.attenuation"):
         assert _get_volume_macos() is None
     assert any(r.levelno == logging.WARNING for r in caplog.records)
+
+
+# -- Linux (wpctl) -----------------------------------------------------------------
+
+
+def test_linux_reads_overamplified_volume():
+    with patch("vox.attenuation.subprocess.run", return_value=_result("Volume: 1.20\n")):
+        assert attenuation._get_volume_linux() == 1.2
+
+
+def test_linux_restore_preserves_overamplified_volume():
+    """A sink at 120% comes back at 120%, not 100%, after the dictation."""
+    with patch("vox.attenuation.subprocess.run", return_value=_result("")) as run:
+        attenuation._set_volume_linux(1.2)
+    assert run.call_args.args[0] == ["wpctl", "set-volume", "@DEFAULT_AUDIO_SINK@", "1.2"]
+
+
+def test_linux_set_volume_caps_at_max():
+    """A bad attenuation level can never push the sink past GNOME's over-amplification limit."""
+    with patch("vox.attenuation.subprocess.run", return_value=_result("")) as run:
+        attenuation._set_volume_linux(3.0)
+        assert run.call_args.args[0][-1] == "1.5"
+        attenuation._set_volume_linux(-0.5)
+        assert run.call_args.args[0][-1] == "0.0"
+
+
+def test_linux_set_volume_has_timeout():
+    with patch("vox.attenuation.subprocess.run", return_value=_result("")) as run:
+        attenuation._set_volume_linux(0.5)
+    assert run.call_args.kwargs["timeout"] > 0
