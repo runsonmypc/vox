@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import sqlite3
 import threading
 from dataclasses import dataclass
@@ -38,13 +39,25 @@ class HistoryRecord:
 
 
 class HistoryDB:
-    """Append-only dictation log. Safe to share across threads."""
+    """Dictation log. Safe to share across threads."""
 
     def __init__(self, path: Path | None = None) -> None:
         self.path = path or DEFAULT_HISTORY_PATH
-        self.path.parent.mkdir(parents=True, exist_ok=True)
+        # Dictations are private: an owner-only file, whose mode SQLite also gives its journal files
+        self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if self.path.parent == DEFAULT_HISTORY_PATH.parent:  # Vox's own data directory, made 0755 by older versions
+            try:
+                os.chmod(self.path.parent, 0o700)
+            except OSError as e:  # not the user's to change; the database file is still owner-only
+                log.warning("Couldn't make %s owner-only: %s", self.path.parent, e)
+        os.close(os.open(self.path, os.O_RDWR | os.O_CREAT, 0o600))
+        os.chmod(self.path, 0o600)  # tightens a database made before this
         self._lock = threading.Lock()
         self._conn = sqlite3.connect(self.path, check_same_thread=False)
+        self._conn.create_function("casefold", 1, _casefold, deterministic=True)
+        # Delete and Clear History overwrite the text with zeros in the database file. The rollback journal
+        # holds a copy only while the delete runs, and is then removed rather than overwritten.
+        self._conn.execute("PRAGMA secure_delete = ON")
         with self._lock, self._conn:
             self._conn.executescript(_SCHEMA)
 
@@ -69,18 +82,27 @@ class HistoryDB:
         return self.search("", limit=limit)
 
     def search(self, query: str = "", limit: int = 200) -> list[HistoryRecord]:
-        """Case-insensitive substring match on text, newest first."""
+        """Case-insensitive substring match on text, newest first. Folds case beyond ASCII, unlike LIKE."""
         sql = f"SELECT {_COLUMNS} FROM history"
         params: list[object] = []
         if query.strip():
-            escaped = query.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-            sql += " WHERE text LIKE ? ESCAPE '\\'"
-            params.append(f"%{escaped}%")
+            sql += " WHERE instr(casefold(text), ?) > 0"
+            params.append(_casefold(query.strip()))
         sql += " ORDER BY created_at DESC, id DESC LIMIT ?"
         params.append(limit)
         with self._lock:
             rows = self._conn.execute(sql, params).fetchall()
         return [HistoryRecord(*row) for row in rows]
+
+    def delete(self, entry_id: int) -> None:
+        """Remove one dictation."""
+        with self._lock, self._conn:
+            self._conn.execute("DELETE FROM history WHERE id = ?", (entry_id,))
+
+    def clear(self) -> None:
+        """Remove every dictation."""
+        with self._lock, self._conn:
+            self._conn.execute("DELETE FROM history")
 
     def stats(self) -> tuple[int, int | None]:
         """Number of dictations and the newest row id, a cheap way to notice new ones."""
@@ -91,3 +113,7 @@ class HistoryDB:
     def close(self) -> None:
         with self._lock:
             self._conn.close()
+
+
+def _casefold(text: str | None) -> str | None:
+    return text.casefold() if text is not None else None

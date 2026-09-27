@@ -1,0 +1,122 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:  # the release workflow runs these checks on the commit it releases
+    inputs:
+      release:
+        description: Skip the install and package jobs; the release workflow runs them on the files it releases
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  UV_VERSION: "0.12.19"  # the uv that wrote uv.lock; another version may lock differently
+
+jobs:
+  lint:
+    timeout-minutes: 20
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: ${{ env.UV_VERSION }}
+      - name: Ruff
+        run: uv run --locked --only-group dev ruff check vox tests
+      - name: requirements.lock matches uv.lock and has wheels everywhere
+        run: scripts/lock.sh --check
+      - name: Shell scripts
+        run: |
+          for script in install.sh scripts/*.sh packaging/deb/*.sh; do
+              bash -n "$script"
+          done
+          # Maintainer scripts run under /bin/sh (dash)
+          for script in packaging/deb/postinst packaging/deb/prerm packaging/deb/postrm; do
+              sh -n "$script"
+          done
+          shellcheck install.sh scripts/*.sh packaging/deb/*.sh \
+              packaging/deb/postinst packaging/deb/prerm packaging/deb/postrm
+
+  test-linux:
+    timeout-minutes: 20
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install GTK 4, libadwaita, AppIndicator, PortAudio and a virtual display
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 \
+              gir1.2-ayatanaappindicator3-0.1 libportaudio2 xdotool xclip xvfb xauth dbus
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: ${{ env.UV_VERSION }}
+      - name: Environment on the system Python, which has PyGObject
+        run: |
+          uv sync --locked --python /usr/bin/python3
+          site=$(.venv/bin/python -c 'import sysconfig; print(sysconfig.get_path("purelib"))')
+          ln -s /usr/lib/python3/dist-packages/gi "$site/gi"
+          .venv/bin/python -c 'import gi'
+      - name: Tests
+        run: dbus-run-session -- xvfb-run -a uv run --no-sync pytest -m "not gtk"
+      # GTK 4 cannot load in a process that loaded GTK 3 (pystray's tray backends), so the windows get
+      # their own pytest process, and VOX_REQUIRE_GTK=1 turns a missing GTK into a failure, not a skip
+      - name: GTK 4 window tests
+        env:
+          VOX_REQUIRE_GTK: "1"
+          GSK_RENDERER: cairo  # Xvfb has no GPU
+        run: dbus-run-session -- xvfb-run -a uv run --no-sync pytest -m gtk
+
+  test-macos:
+    timeout-minutes: 20
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: "3.12"
+      - name: Tests
+        run: uv run --locked pytest
+
+  install-linux:
+    if: ${{ !inputs.release }}
+    timeout-minutes: 30
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: install.sh in a clean Ubuntu 24.04 without a compiler
+        run: docker run --rm -v "$PWD:/src:ro" ubuntu:24.04 /src/scripts/test-install-linux.sh
+
+  deb:
+    if: ${{ !inputs.release }}
+    timeout-minutes: 40
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          version: ${{ env.UV_VERSION }}
+      - name: Build the package
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends python3-venv
+          version=$(python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')
+          packaging/deb/build-deb.sh "$version" amd64
+          echo "DEB=dist/vox_${version}_amd64.deb" >>"$GITHUB_ENV"
+      - name: Install, upgrade and remove it in a clean Ubuntu 24.04
+        run: docker run --rm -v "$PWD:/src:ro" -w /src ubuntu:24.04 packaging/deb/smoke-test.sh "$DEB"

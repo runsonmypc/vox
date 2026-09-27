@@ -2,10 +2,13 @@
 
 import asyncio
 from unittest.mock import patch
+
 import pytest
 from pynput import keyboard
 
+from vox import hotkey
 from vox.config import Config
+from vox.errors import DependencyError
 from vox.hotkey import HotkeyListener
 
 
@@ -30,7 +33,7 @@ async def test_hotkey_single_tap_emits_toggle():
     loop = asyncio.get_running_loop()
     listener = HotkeyListener(config, loop, queue)
 
-    with patch("time.monotonic", side_effect=clock.time):
+    with patch("vox.hotkey.monotonic", side_effect=clock.time):
         # Press right_shift
         listener._on_press(keyboard.Key.shift_r)
         clock.advance(0.1)  # 100ms hold (>= 80ms min_hold_ms)
@@ -50,7 +53,7 @@ async def test_hotkey_double_tap_within_timeout_emits_cancel():
     loop = asyncio.get_running_loop()
     listener = HotkeyListener(config, loop, queue)
 
-    with patch("time.monotonic", side_effect=clock.time):
+    with patch("vox.hotkey.monotonic", side_effect=clock.time):
         # Tap 1
         listener._on_press(keyboard.Key.shift_r)
         clock.advance(0.1)
@@ -80,7 +83,7 @@ async def test_hotkey_double_tap_outside_timeout_emits_two_toggles():
     loop = asyncio.get_running_loop()
     listener = HotkeyListener(config, loop, queue)
 
-    with patch("time.monotonic", side_effect=clock.time):
+    with patch("vox.hotkey.monotonic", side_effect=clock.time):
         # Tap 1
         listener._on_press(keyboard.Key.shift_r)
         clock.advance(0.1)
@@ -110,7 +113,7 @@ async def test_hotkey_intervening_key_resets_double_tap():
     loop = asyncio.get_running_loop()
     listener = HotkeyListener(config, loop, queue)
 
-    with patch("time.monotonic", side_effect=clock.time):
+    with patch("vox.hotkey.monotonic", side_effect=clock.time):
         # Tap 1
         listener._on_press(keyboard.Key.shift_r)
         clock.advance(0.1)
@@ -144,7 +147,7 @@ async def test_hotkey_triple_tap_behavior():
     loop = asyncio.get_running_loop()
     listener = HotkeyListener(config, loop, queue)
 
-    with patch("time.monotonic", side_effect=clock.time):
+    with patch("vox.hotkey.monotonic", side_effect=clock.time):
         # Tap 1 -> toggle
         listener._on_press(keyboard.Key.shift_r)
         clock.advance(0.1)
@@ -179,7 +182,7 @@ async def test_hotkey_held_with_other_key_ignored():
     loop = asyncio.get_running_loop()
     listener = HotkeyListener(config, loop, queue)
 
-    with patch("time.monotonic", side_effect=clock.time):
+    with patch("vox.hotkey.monotonic", side_effect=clock.time):
         # Shift held down
         listener._on_press(keyboard.Key.shift_r)
         clock.advance(0.05)
@@ -203,7 +206,7 @@ async def test_hotkey_fallback_combo_double_tap():
     loop = asyncio.get_running_loop()
     listener = HotkeyListener(config, loop, queue)
 
-    with patch("time.monotonic", side_effect=clock.time):
+    with patch("vox.hotkey.monotonic", side_effect=clock.time):
         # First combo
         listener._on_press(keyboard.Key.ctrl_l)
         listener._on_press(keyboard.Key.space)
@@ -233,7 +236,7 @@ async def test_hotkey_quick_tap_responsive():
     loop = asyncio.get_running_loop()
     listener = HotkeyListener(config, loop, queue)
 
-    with patch("time.monotonic", side_effect=clock.time):
+    with patch("vox.hotkey.monotonic", side_effect=clock.time):
         listener._on_press(keyboard.Key.shift_r)
         clock.advance(0.04)  # 40ms hold (>= 30ms min_hold_ms)
         listener._on_release(keyboard.Key.shift_r)
@@ -242,3 +245,99 @@ async def test_hotkey_quick_tap_responsive():
     assert queue.qsize() == 1
     assert await queue.get() == "toggle"
 
+
+
+def _tap(listener, clock, key):
+    listener._on_press(key)
+    clock.advance(0.1)
+    listener._on_release(key)
+    clock.advance(1.0)  # well outside the double-tap window
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("configured", "key"),
+    [
+        ("right_shift", keyboard.Key.shift_r),
+        ("Right Shift", keyboard.Key.shift_r),
+        ("Right_Shift", keyboard.Key.shift_r),
+        (" right_ctrl ", keyboard.Key.ctrl_r),
+        ("alt_r", keyboard.Key.alt_r),
+        ("left_shift", keyboard.Key.shift_l),
+        ("shift_l", keyboard.Key.shift_l),
+        ("left_ctrl", keyboard.Key.ctrl_l),
+        ("left_alt", keyboard.Key.alt_l),
+        ("f13", keyboard.Key.f13),
+    ],
+)
+async def test_hotkey_spellings_match_the_key_pynput_reports(configured, key):
+    clock = ControlledClock()
+    queue: asyncio.Queue[str] = asyncio.Queue()
+    listener = HotkeyListener(Config(hotkey=configured), asyncio.get_running_loop(), queue)
+
+    with patch("vox.hotkey.monotonic", side_effect=clock.time):
+        _tap(listener, clock, key)
+
+    await asyncio.sleep(0)
+    assert queue.qsize() == 1
+    assert await queue.get() == "toggle"
+
+
+@pytest.mark.anyio
+async def test_left_shift_hotkey_ignores_the_right_shift():
+    clock = ControlledClock()
+    queue: asyncio.Queue[str] = asyncio.Queue()
+    listener = HotkeyListener(Config(hotkey="left_shift"), asyncio.get_running_loop(), queue)
+
+    with patch("vox.hotkey.monotonic", side_effect=clock.time):
+        _tap(listener, clock, keyboard.Key.shift_r)
+
+    await asyncio.sleep(0)
+    assert queue.empty()
+
+
+@pytest.mark.anyio
+async def test_hotkey_fallback_combo_accepts_left_modifier_names():
+    clock = ControlledClock()
+    queue: asyncio.Queue[str] = asyncio.Queue()
+    config = Config(hotkey="right_shift", hotkey_fallback="Left_Ctrl+Space")
+    listener = HotkeyListener(config, asyncio.get_running_loop(), queue)
+
+    with patch("vox.hotkey.monotonic", side_effect=clock.time):
+        listener._on_press(keyboard.Key.ctrl_l)
+        listener._on_press(keyboard.Key.space)
+        listener._on_release(keyboard.Key.space)
+        listener._on_release(keyboard.Key.ctrl_l)
+
+    await asyncio.sleep(0)
+    assert await queue.get() == "toggle"
+
+
+@pytest.mark.anyio
+async def test_missing_keyboard_backend_is_a_clear_dependency_error():
+    with patch("vox.hotkey.keyboard", None), \
+         patch("vox.hotkey._IMPORT_ERROR", "failed to acquire X connection: Bad display name", create=True):
+        with pytest.raises(DependencyError, match="X11 display") as excinfo:
+            HotkeyListener(Config(), asyncio.get_running_loop(), asyncio.Queue())
+    assert "Bad display name" in str(excinfo.value)
+
+
+PYNPUT_X_ERROR = (
+    "this platform is not supported: ('failed to acquire X connection: Bad display name \"\"', DisplayNameError(''))\n"
+    "\n"
+    "Try one of the following resolutions:\n"
+)
+
+
+def test_import_problem_without_display_says_so(monkeypatch):
+    monkeypatch.setattr("vox.hotkey.sys.platform", "linux")
+    monkeypatch.delenv("DISPLAY", raising=False)
+    assert hotkey._import_problem(ImportError(PYNPUT_X_ERROR)) == "no X display: DISPLAY is not set"
+
+
+def test_import_problem_takes_the_x_error_out_of_pynputs_message(monkeypatch):
+    monkeypatch.setattr("vox.hotkey.sys.platform", "linux")
+    monkeypatch.setenv("DISPLAY", ":7")
+    assert hotkey._import_problem(ImportError(PYNPUT_X_ERROR)) == 'failed to acquire X connection: Bad display name ""'
+    assert hotkey._import_problem(ImportError("No module named 'Xlib'")) == "No module named 'Xlib'"
+    assert hotkey._import_problem(ImportError()) == "ImportError"

@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Template for ~/Library/LaunchAgents/com.runsonmypc.vox.plist. install.sh fills in the @...@
+  placeholders with absolute paths, since launchd expands neither ~ nor $HOME.
+
+  KeepAlive/SuccessfulExit=false restarts Vox after a crash (launchd waits 10 s between
+  starts) but not after Quit or "already running", which exit 0. launchd has no equivalent
+  of systemd's RestartPreventExitStatus, so a startup failure only the user can fix (exit 78,
+  such as a missing system program) is retried every 10 s until it is fixed or Vox is
+  uninstalled. An error in config.toml does not exit: Vox runs and shows it in the menu.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.runsonmypc.vox</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>@VOX_BIN@</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <!-- launchd's default PATH lacks Homebrew, where whisper-cli and tmux usually live -->
+        <key>PATH</key>
+        <string>@PATH@</string>
+    </dict>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>@LOG_FILE@</string>
+    <key>StandardErrorPath</key>
+    <string>@LOG_FILE@</string>
+    <!-- 077: files Vox creates are readable only by the user -->
+    <key>Umask</key>
+    <integer>63</integer>
+    <key>ProcessType</key>
+    <string>Interactive</string>
+</dict>
+</plist>

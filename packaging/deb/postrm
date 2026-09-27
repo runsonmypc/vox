@@ -1,0 +1,32 @@
+#!/bin/sh
+# After removal, make running user managers forget the unit and remove what the venv left behind
+set -e
+
+# Run `systemctl --user "$@"` in the service manager of every logged-in user
+each_user_manager() {
+    for dir in /run/user/*; do
+        uid=${dir##*/}
+        case "$uid" in '' | *[!0-9]*) continue ;; esac
+        systemctl is-active --quiet "user@$uid.service" || continue
+        user=$(getent passwd "$uid" | cut -d: -f1)
+        [ -n "$user" ] || continue
+        runuser -u "$user" -- env XDG_RUNTIME_DIR="$dir" systemctl --user "$@" || true
+    done
+}
+
+case "$1" in
+remove | purge)
+    # A login link left by a failed prerm would point at the removed unit
+    rm -f /etc/systemd/user/graphical-session.target.wants/vox.service
+    if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
+        each_user_manager daemon-reload
+    fi
+    # Bytecode Python wrote at run time is not part of the package
+    rm -rf /opt/vox
+    ;;
+esac
+
+if [ "$1" = purge ]; then
+    # Whether Vox started at login when it was removed (see prerm)
+    rm -rf /var/lib/vox
+fi

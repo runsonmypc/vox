@@ -15,8 +15,22 @@ from .. import keystore
 
 KEYS_URL = "https://platform.openai.com/api-keys"
 
+# What both windows say, so macOS and Linux never drift apart
+INTRO = "Vox sends your dictation to OpenAI to transcribe it, using your own API key."
+CHECKING = "Checking with OpenAI…"
+CHECK_FAILED_TITLE = "Couldn’t Check the Key"
+SAVE_ANYWAY = "Save Anyway"
+SAVE_FAILED_TITLE = "Couldn’t Save the Key"
+REMOVE_TITLE = "Remove the Saved Key?"
+REMOVE_MESSAGE = "Vox can’t transcribe with OpenAI until you save a key again."
+REMOVE_BUTTON = "Remove"
+REMOVE_FAILED_TITLE = "Couldn’t Remove the Key"
+
 # "Check with OpenAI before saving" starts ticked, so a mistyped or revoked key is caught before it is saved
 CHECK_BY_DEFAULT = True
+
+# OpenAI keys are plain ASCII; anything else (a zero-width space, a curly quote) makes every request fail
+BAD_CHARACTER = "The key has a character that isn’t part of an OpenAI key, such as an invisible space. Copy it again."
 
 
 class Outcome(Enum):
@@ -29,6 +43,10 @@ class Outcome(Enum):
 class CheckResult:
     outcome: Outcome
     message: str = ""
+
+    @property
+    def save_anyway_question(self) -> str:
+        return f"{self.message} Save it anyway?"
 
 
 class KeyModel:
@@ -86,6 +104,8 @@ class KeyModel:
             return "Paste your OpenAI API key."
         if any(c.isspace() for c in key):
             return "The key can’t contain spaces or line breaks. Copy it again."
+        if not (key.isascii() and key.isprintable()):
+            return BAD_CHARACTER
         return None
 
     def save(self, key: str) -> None:
@@ -112,6 +132,8 @@ def check_key(key: str, timeout: float = 15.0) -> CheckResult:
         return CheckResult(Outcome.UNCHECKED, "Vox couldn’t reach OpenAI to check the key.")
     except openai.APIStatusError as e:
         return CheckResult(Outcome.UNCHECKED, f"OpenAI couldn’t check the key right now (error {e.status_code}).")
+    except UnicodeEncodeError:  # httpx can't put the key in a header, so no request can ever succeed
+        return CheckResult(Outcome.REJECTED, BAD_CHARACTER)
     except Exception as e:
         return CheckResult(Outcome.UNCHECKED, f"Vox couldn’t check the key: {e}")
     return CheckResult(Outcome.ACCEPTED)

@@ -13,6 +13,10 @@ log = logging.getLogger(__name__)
 # not an error, it just means software attenuation is unavailable on that device.
 _UNSUPPORTED_SENTINEL = "missing value"
 
+# wpctl reports volumes above 1.0 when a sink is over-amplified (GNOME allows up to 150%).
+# Restoring must give that level back, while a bad attenuation_level can never push past it.
+_WPCTL_MAX_VOLUME = 1.5
+
 # Whether we have already told the user attenuation is unavailable. Reset on a
 # successful read so switching back to a supported device logs again if needed.
 _unsupported_notified = False
@@ -73,7 +77,7 @@ def _set_volume_macos(level: float) -> None:
 
 
 def _get_volume_linux() -> float | None:
-    """Get current default sink volume (0.0-1.0) via wpctl."""
+    """Get current default sink volume via wpctl (0.0-1.5; above 1.0 when over-amplified)."""
     try:
         result = subprocess.run(
             ["wpctl", "get-volume", "@DEFAULT_AUDIO_SINK@"],
@@ -97,8 +101,8 @@ def _get_volume_linux() -> float | None:
 
 
 def _set_volume_linux(level: float) -> None:
-    """Set default sink volume (0.0-1.0) via wpctl."""
-    level = max(0.0, min(1.0, level))
+    """Set default sink volume via wpctl (0.0-1.5, so an over-amplified level can be restored)."""
+    level = max(0.0, min(_WPCTL_MAX_VOLUME, level))
     try:
         result = subprocess.run(
             ["wpctl", "set-volume", "@DEFAULT_AUDIO_SINK@", str(round(level, 4))],
@@ -111,14 +115,14 @@ def _set_volume_linux(level: float) -> None:
 
 
 def get_volume() -> float | None:
-    """Get current output volume (0.0-1.0)."""
+    """Get current output volume (0.0-1.0, above 1.0 for an over-amplified Linux sink)."""
     if sys.platform == "darwin":
         return _get_volume_macos()
     return _get_volume_linux()
 
 
 def set_volume(level: float) -> None:
-    """Set output volume (0.0-1.0)."""
+    """Set output volume (0.0-1.0, above 1.0 for an over-amplified Linux sink)."""
     if sys.platform == "darwin":
         _set_volume_macos(level)
     else:

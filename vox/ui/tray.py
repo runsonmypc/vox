@@ -1,4 +1,4 @@
-"""Tray icon (macOS menu bar, Linux AppIndicator): status, input device picker, pause toggle, recent dictations, API key.
+"""Tray icon (macOS menu bar, Linux AppIndicator): status, dictation settings, recent dictations and the windows.
 
 Cocoa and GTK both want the tray on the main thread, so the tray owns the main
 thread while the asyncio daemon runs in its own thread. Menu callbacks run on
@@ -13,17 +13,17 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import sqlite3
 import subprocess
 import sys
 import threading
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
-import sounddevice as sd
-
-from ..config import DEFAULT_CONFIG_PATH, Config
-from ..errors import ConfigError
+from ..audio import match_input_device
+from ..config import DEFAULT_CONFIG_PATH, RECORDING_LIMIT_CHOICES, Config
 from ..history import HistoryDB, HistoryRecord
-from ..whisper_cpp import WhisperCppTranscriber
+from ..modes import LABELS, mode_problem
 from .icons import IconState, is_template, make_icon
 
 log = logging.getLogger(__name__)
@@ -36,8 +36,11 @@ _STATUS_TEXT = {
 }
 _RECENT_COUNT = 3
 _RECENT_LABEL_CHARS = 48
+_PROBLEM_CHARS = 72
+_MENU_RETRY_SECONDS = 0.05
 
 RECENT_HEADER = "Click a recent dictation to copy it"
+CONFIG_ERROR = "Settings file has an error"
 
 HISTORY_WINDOW = "vox.ui.history_window"
 VOCAB_WINDOW = "vox.ui.vocab_window"
@@ -105,6 +108,7 @@ def _has_tray_host() -> bool:
         )
         return reply.unpack()[0]
     except Exception:
+        log.debug("Could not look for a tray host", exc_info=True)
         return True  # unknown: skip the notice
 
 
@@ -136,14 +140,38 @@ def _linux_icon_class(pystray: Any) -> type:
     return VoxIcon
 
 
+def _menu_is_tracking() -> bool:
+    """Whether a menu is open: AppKit runs the main run loop in event-tracking mode while it tracks one."""
+    import AppKit
+
+    return AppKit.NSRunLoop.currentRunLoop().currentMode() == AppKit.NSEventTrackingRunLoopMode
+
+
 def _darwin_icon_class() -> type:
     import AppKit
     import pystray
+    from PyObjCTools import AppHelper
 
     class VoxIcon(pystray.Icon):
         """pystray's macOS icon, drawn at Retina resolution and as a template image when monochrome."""
 
         template = True
+        _menu_update_pending = False
+
+        def _update_menu(self) -> None:
+            # pystray resolves a click by the item's tag in the newest callbacks list, so rebuilding the menu while
+            # it is open makes a click on the menu still on screen run another item. callLater fires only in the
+            # default run-loop mode: after the menu closes and the clicked item's action has run.
+            if _menu_is_tracking():
+                if not self._menu_update_pending:
+                    self._menu_update_pending = True
+                    AppHelper.callLater(_MENU_RETRY_SECONDS, self._deferred_update_menu)
+                return
+            super()._update_menu()
+
+        def _deferred_update_menu(self) -> None:
+            self._menu_update_pending = False
+            self._update_menu()
 
         def _assert_image(self) -> None:
             try:
@@ -180,7 +208,7 @@ def _focus_window(proc: subprocess.Popen, reopen: list[str] | None) -> None:
             _hand_focus_to(proc)
         elif reopen is not None:
             # The windows are single-instance GTK apps: a second launch presents the open window and exits
-            _launch_window(reopen)
+            _reap(_launch_window(reopen))
     except Exception as e:
         log.debug("Could not bring the window forward: %s", e)
 
@@ -244,6 +272,8 @@ class TrayManager:
         # Main thread only
         self._state = IconState.IDLE
         self._paused = False
+        self._notice: str | None = None
+        self._devices: list[tuple[int, str]] | None = None  # daemon snapshot; None until the first one arrives
         self._recent: list[HistoryRecord] = []
         self._windows: dict[str, subprocess.Popen] = {}
         self._images = {state: make_icon(state, light=light) for state in IconState}
@@ -303,6 +333,17 @@ class TrayManager:
         """The daemon re-read the API key."""
         self._dispatch(self._render)
 
+    def set_notice(self, text: str | None) -> None:
+        """Show a persistent problem (e.g. Wayland, a silent microphone) in the status line; None clears it."""
+        self._dispatch(self._apply_notice, text)
+
+    def limit_changed(self) -> None:
+        self._dispatch(self._render)
+
+    def devices_changed(self, devices: list[tuple[int, str]]) -> None:
+        """A fresh input-device snapshot from the daemon thread; the menu renders from it."""
+        self._dispatch(self._apply_devices, devices)
+
     def open_key_window(self) -> None:
         self._dispatch(self._open_key, None, None)
 
@@ -332,9 +373,19 @@ class TrayManager:
             return None
         return "Can’t read the keyring" if self._config.api_key_error else "API key needed"
 
+    def _problem(self) -> str | None:
+        """What the status line reports while idle, most urgent first: config.toml, the key, the mode, a notice.
+
+        A config.toml that didn't load comes first: until it does, the mode (and so whether a key is
+        needed at all) is only the default's.
+        """
+        config = self._config
+        problem = (CONFIG_ERROR if config.config_error else None) or self._key_problem() or config.mode_error or self._notice
+        return _one_line(problem, _PROBLEM_CHARS) if problem else None
+
     def _status_line(self) -> str:
         shown = self._shown
-        problem = self._key_problem() if shown in (IconState.IDLE, IconState.PAUSED) else None
+        problem = self._problem() if shown in (IconState.IDLE, IconState.PAUSED) else None
         return f"Vox · {problem}" if problem else self._title(shown)
 
     def _render(self) -> None:
@@ -348,6 +399,14 @@ class TrayManager:
         self._state = state
         self._render()
 
+    def _apply_notice(self, text: str | None) -> None:
+        self._notice = text
+        self._render()
+
+    def _apply_devices(self, devices: list[tuple[int, str]]) -> None:
+        self._devices = devices
+        self._render()
+
     def _apply_paused(self, paused: bool) -> None:
         self._paused = paused
         self._render()
@@ -357,7 +416,7 @@ class TrayManager:
             return
         try:
             self._recent = self._history.recent(_RECENT_COUNT)
-        except Exception as e:
+        except sqlite3.Error as e:
             log.debug("Could not read recent dictations: %s", e)
             return
         self._icon.update_menu()
@@ -375,6 +434,7 @@ class TrayManager:
         yield Item("Pause Dictation", self._toggle_pause, checked=lambda _: self._paused)
         yield Item("Input Device", Menu(self._device_items))
         yield Item("Transcription", Menu(self._transcription_items))
+        yield Item("Recording Limit", Menu(self._limit_items))
         yield Menu.SEPARATOR
         yield Item(RECENT_HEADER if self._recent else "No dictations yet", None, enabled=False)
         for rec in self._recent:
@@ -388,20 +448,35 @@ class TrayManager:
         yield Item("Quit Vox", self._quit)
 
     def _device_items(self):
+        # Only the daemon's snapshot: querying PortAudio here would block the UI thread and see a stale device list
         Item = self._pystray.MenuItem
-        devices = self._input_devices()
-        selected = _selected_device(self._config.audio_device, devices)
+        spec = self._config.audio_device
+        if self._devices is None:
+            yield Item("System Default", self._device_setter(None), checked=lambda _: spec is None, radio=True)
+            if spec is not None:
+                yield Item(_device_label(spec), self._device_setter(spec), checked=lambda _: True, radio=True)
+            return
+        # Only a name is stored, so of two devices with the same name the first is checked: it's the one that records
+        selected = _selected_device(spec, self._devices)
         yield Item("System Default", self._device_setter(None), checked=_is(selected, None), radio=True)
-        for index, name in devices:
-            yield Item(name, self._device_setter(index), checked=_is(selected, index), radio=True)
+        for index, name in self._devices:
+            yield Item(name, self._device_setter(name), checked=_is(selected, index), radio=True)
+
+    def _limit_items(self):
+        Item = self._pystray.MenuItem
+        choices = set(RECORDING_LIMIT_CHOICES)
+        current = self._config.max_recording_seconds
+        if type(current) is int and current > 0:
+            choices.add(current)  # a custom limit from config.toml still shows as the checked one
+        for seconds in sorted(choices):
+            yield Item(
+                _limit_label(seconds), self._limit_setter(seconds),
+                checked=lambda _, seconds=seconds: self._config.max_recording_seconds == seconds, radio=True,
+            )
 
     def _transcription_items(self):
         Item = self._pystray.MenuItem
-        for label, mode in (
-            ("OpenAI (batch)", "batch"),
-            ("OpenAI (streaming)", "streaming"),
-            ("Local (whisper.cpp)", "whisper_cpp"),
-        ):
+        for mode, label in LABELS.items():
             yield Item(
                 label, self._mode_setter(mode),
                 checked=lambda _, mode=mode: self._config.mode == mode,
@@ -412,15 +487,8 @@ class TrayManager:
     def _can_select_mode(self, mode: str) -> bool:
         if self._state is not IconState.IDLE:
             return False
-        if mode == self._config.mode:
-            return True
-        if mode != "whisper_cpp":
-            return bool(self._config.openai_api_key)
-        try:
-            WhisperCppTranscriber(self._config)
-        except ConfigError:
-            return False
-        return True
+        # The current mode stays clickable: picking it again retries a setup that failed
+        return mode == self._config.mode or mode_problem(self._config, mode) is None
 
     def _mode_setter(self, mode: str):
         def action(icon, item):
@@ -428,19 +496,14 @@ class TrayManager:
 
         return action
 
-    def _input_devices(self) -> list[tuple[int, str]]:
-        try:
-            devices = sd.query_devices()
-        except Exception as e:
-            log.warning("Failed to query audio devices: %s", e)
-            return []
-        return [
-            (i, d.get("name", f"Device {i}"))
-            for i, d in enumerate(devices)
-            if d.get("max_input_channels", 0) >= self._config.channels
-        ]
+    def _limit_setter(self, seconds: int):
+        def action(icon, item):
+            self._send(f"limit:{seconds}")
 
-    def _device_setter(self, spec: int | None):
+        return action
+
+    def _device_setter(self, spec: int | str | None):
+        # A name, not an index: PortAudio renumbers devices when the daemon refreshes the list
         def action(icon, item):
             def apply() -> None:
                 self._config.audio_device = spec
@@ -466,7 +529,8 @@ class TrayManager:
 
     def _open_history(self, icon, item) -> None:
         if self._history is not None:
-            self._open_window(HISTORY_WINDOW, "--db", str(self._history.path))
+            # The window can delete dictations, so re-read the recent ones once it closes
+            self._open_window(HISTORY_WINDOW, "--db", str(self._history.path), on_exit=self.history_changed)
 
     def _open_vocab(self, icon, item) -> None:
         path = self._config.config_path or DEFAULT_CONFIG_PATH
@@ -483,7 +547,8 @@ class TrayManager:
     # -- Plumbing ----------------------------------------------------------
 
     def _open_window(self, module: str, *args: str, on_exit: Callable[[], None] | None = None) -> None:
-        command = [sys.executable, "-m", module, *args]
+        # -P: a vox/ directory in the working directory must not shadow the installed package
+        command = [sys.executable, "-P", "-m", module, *args]
         proc = self._windows.get(module)
         if proc is not None and proc.poll() is None:
             log.info("%s is already open; bringing it forward", module)
@@ -491,11 +556,11 @@ class TrayManager:
             return
         try:
             proc = self._windows[module] = self._launcher(command)
-        except Exception as e:
+        except OSError as e:
             log.warning("Failed to open %s: %s", module, e)
             return
-        if on_exit is not None:
-            threading.Thread(target=_call_after_exit, args=(proc, on_exit), name=f"{module}-exit", daemon=True).start()
+        # Always wait on the window, so a closed one doesn't linger as a zombie
+        threading.Thread(target=_call_after_exit, args=(proc, on_exit), name=f"{module}-exit", daemon=True).start()
         self._focus(proc, None)
 
     def _close_windows(self) -> None:
@@ -518,26 +583,43 @@ class TrayManager:
             log.debug("Daemon loop is closed; ignoring menu action")
 
 
-def _call_after_exit(proc: subprocess.Popen, fn: Callable[[], None]) -> None:
+def _call_after_exit(proc: subprocess.Popen, fn: Callable[[], None] | None) -> None:
     proc.wait()
-    fn()
+    if fn is not None:
+        fn()
+
+
+def _reap(proc: subprocess.Popen) -> None:
+    threading.Thread(target=proc.wait, name="window-reap", daemon=True).start()
+
+
+def _one_line(text: str, limit: int) -> str:
+    flat = " ".join(text.split())
+    return flat if len(flat) <= limit else flat[: limit - 1].rstrip() + "…"
 
 
 def _recent_label(text: str) -> str:
     """Quoted one-line preview, so transcripts read as content rather than commands."""
-    flat = " ".join(text.split())
-    if len(flat) > _RECENT_LABEL_CHARS:
-        flat = flat[: _RECENT_LABEL_CHARS - 1].rstrip() + "…"
-    return f"“{flat}”"
+    return f"“{_one_line(text, _RECENT_LABEL_CHARS)}”"
+
+
+def _limit_label(seconds: int) -> str:
+    return f"{seconds // 60} min" if seconds % 60 == 0 else f"{seconds} sec"
+
+
+def _device_label(spec: int | str) -> str:
+    return spec if isinstance(spec, str) else f"Device {spec}"
 
 
 def _selected_device(spec: int | str | None, devices: list[tuple[int, str]]) -> int | None:
-    """Index of the configured input device among ``devices``, or None for the system default."""
+    """Index of the configured input device among ``devices``, or None for the system default.
+
+    Names resolve as the recorder resolves them, so the checked device is the one that records.
+    """
     if isinstance(spec, int):
         return spec if any(i == spec for i, _ in devices) else None
     if isinstance(spec, str):
-        needle = spec.lower().strip()
-        return next((i for i, name in devices if needle in name.lower()), None)
+        return match_input_device(spec, devices)
     return None
 
 

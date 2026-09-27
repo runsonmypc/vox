@@ -8,13 +8,22 @@ at once.
 from __future__ import annotations
 
 import logging
-from typing import Callable
+from collections.abc import Callable
 
 import AppKit
 import objc
 from Foundation import NSObject
 
-from ..vocab_model import VocabModel
+from ..vocab_model import (
+    LOAD_FAILED_TITLE,
+    NO_SNIPPETS,
+    NO_WORDS,
+    SAVE_FAILED_TITLE,
+    SNIPPETS_INTRO,
+    WORDS_INTRO,
+    VocabModel,
+    clash_warning,
+)
 from . import kit
 
 log = logging.getLogger(__name__)
@@ -24,9 +33,6 @@ _PAD = 20
 _WORD_HEIGHT = 32
 _SNIPPET_HEIGHT = 48
 _NOTE_SECONDS = 3.0
-
-_WORDS_INTRO = "Names, jargon and acronyms Vox should always spell exactly as written."
-_SNIPPETS_INTRO = "Say a trigger phrase on its own and Vox types the expansion instead."
 
 
 class WordCell(kit.RowCell):
@@ -89,7 +95,7 @@ class VocabController(NSObject):
         model.reload()
         self.render()
         if model.load_error:
-            self.show_error("Couldn’t Read Your Settings", model.load_error)
+            self.show_error(LOAD_FAILED_TITLE, model.load_error)
         self._monitor = AppKit.NSEvent.addLocalMonitorForEventsMatchingMask_handler_(
             AppKit.NSEventMaskKeyDown, self.handle_key
         )
@@ -155,12 +161,12 @@ class VocabController(NSObject):
         adder = kit.stack([self.word_field, self.add_button], vertical=False, spacing=8)
 
         view, text, box, self.words_table, self.words_footer, empty = self._pane(
-            _WORDS_INTRO, adder, AppKit.NSTableViewStyleInset
+            WORDS_INTRO, adder, AppKit.NSTableViewStyleInset
         )
         self.words_table.setAllowsMultipleSelection_(True)
         self.words_empty = empty
-        empty[1].setStringValue_("No Words Yet")
-        empty[2].setStringValue_("Add names and terms Vox tends to get wrong.")
+        empty[1].setStringValue_(NO_WORDS[0])
+        empty[2].setStringValue_(NO_WORDS[1])
         kit.constrain(
             view.trailingAnchor().constraintEqualToAnchor_constant_(text.trailingAnchor(), _PAD),
             adder.topAnchor().constraintEqualToAnchor_constant_(text.bottomAnchor(), 12),
@@ -172,19 +178,19 @@ class VocabController(NSObject):
 
     @objc.python_method
     def _build_snippets(self) -> AppKit.NSView:
-        new = AppKit.NSButton.buttonWithTitle_image_target_action_(
+        new = self.new_button = AppKit.NSButton.buttonWithTitle_image_target_action_(
             "New Snippet", kit.symbol("plus", 11, AppKit.NSFontWeightSemibold), self, "newSnippet:"
         )
         new.setImagePosition_(AppKit.NSImageLeading)
         new.setTranslatesAutoresizingMaskIntoConstraints_(False)
         view, text, box, self.snippets_table, self.snippets_footer, empty = self._pane(
-            _SNIPPETS_INTRO, new, AppKit.NSTableViewStyleInset
+            SNIPPETS_INTRO, new, AppKit.NSTableViewStyleInset
         )
         self.snippets_table.setDoubleAction_("editSnippet:")
         self.snippets_empty = empty
         empty[0].views()[0].setImage_(kit.symbol("text.insert", 34, AppKit.NSFontWeightLight))
-        empty[1].setStringValue_("No Snippets Yet")
-        empty[2].setStringValue_("Type an address, a sign-off or a link just by saying a short phrase.")
+        empty[1].setStringValue_(NO_SNIPPETS[0])
+        empty[2].setStringValue_(NO_SNIPPETS[1])
         kit.constrain(
             new.centerYAnchor().constraintEqualToAnchor_(text.centerYAnchor()),
             view.trailingAnchor().constraintEqualToAnchor_constant_(new.trailingAnchor(), _PAD),
@@ -263,7 +269,7 @@ class VocabController(NSObject):
             write()
         except Exception as e:
             log.warning("Config update failed: %s", e)
-            self.show_error("Couldn’t Save", str(e))
+            self.show_error(SAVE_FAILED_TITLE, str(e))
             return False
         self.render()
         return True
@@ -271,6 +277,8 @@ class VocabController(NSObject):
     @objc.python_method
     def remove_words(self, words: list[str]) -> None:
         if self.change(lambda: self.model.remove_words(words)):
+            # The table keeps the selected row numbers, which now point at the words that moved up
+            self.words_table.deselectAll_(None)
             self.note(f"Removed {_quoted(words)}.")
 
     @objc.python_method
@@ -315,7 +323,7 @@ class VocabController(NSObject):
             table.enclosingScrollView().setHidden_(not items)
             empty[0].setHidden_(bool(items))
         writable = self.model.load_error is None
-        for control in (self.word_field, self.add_button):
+        for control in (self.word_field, self.add_button, self.new_button):
             control.setEnabled_(writable)
         self._set_footer(None)
 
@@ -377,15 +385,19 @@ class VocabController(NSObject):
             return event
         if event.window() != self.window:
             return event
-        plain = not flags & ~(AppKit.NSEventModifierFlagFunction | AppKit.NSEventModifierFlagNumericPad)
         responder = self.window.firstResponder()
+        if isinstance(responder, AppKit.NSTextView) and responder.hasMarkedText():
+            return event  # an input method is composing text
+        plain = not flags & ~(AppKit.NSEventModifierFlagFunction | AppKit.NSEventModifierFlagNumericPad)
         if code == kit.KEY_ESCAPE and plain:
             self.window.performClose_(None)
             return None
-        if flags == AppKit.NSEventModifierFlagCommand and (event.charactersIgnoringModifiers() or "").lower() == "n":
+        if flags == AppKit.NSEventModifierFlagCommand and kit.shortcut_key(event) == "n":
             self.open_editor(None)
             return None
         if code in (kit.KEY_DELETE, kit.KEY_FORWARD_DELETE) and plain:
+            if event.isARepeat() and responder in (self.words_table, self.snippets_table):
+                return None  # a held key removes what was selected, not the rows that move up after it
             if responder == self.words_table:
                 rows = self.words_table.selectedRowIndexes()
                 words = [w for i, w in enumerate(self.model.words) if rows.containsIndex_(i)]
@@ -530,7 +542,7 @@ class SnippetEditor(NSObject):
         trigger = self.trigger.stringValue()
         self.save_button.setEnabled_(bool(trigger.strip() and self.expansion.string().strip()))
         clash = self.owner.model.conflict(trigger, self.original)
-        self.warning.setStringValue_(f"This replaces your “{clash}” snippet." if clash else "")
+        self.warning.setStringValue_(clash_warning(clash) if clash else "")
 
 
 def _quoted(words: list[str]) -> str:

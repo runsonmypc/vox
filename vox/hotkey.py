@@ -4,14 +4,42 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
+import os
+import re
+import sys
 from threading import Lock
-
-from pynput import keyboard
+from time import monotonic
 
 from .config import Config
+from .errors import DependencyError
+
+
+def _import_problem(e: ImportError) -> str:
+    """pynput's import error in a few words; its message nests the X error's repr."""
+    if sys.platform.startswith("linux") and not os.environ.get("DISPLAY"):
+        return "no X display: DISPLAY is not set"
+    first = (str(e).splitlines() or [type(e).__name__])[0]
+    inner = re.search(r"\('([^']+)'", first)
+    return inner.group(1) if inner else first
+
+
+try:
+    from pynput import keyboard
+except ImportError as e:  # the X11 backend connects to the display on import
+    keyboard = None
+    _IMPORT_ERROR = _import_problem(e)
 
 log = logging.getLogger(__name__)
+
+# pynput names for the right-hand modifiers -> the names Vox's config uses
+_KEY_NAMES = {"shift_r": "right_shift", "ctrl_r": "right_ctrl", "alt_r": "right_alt"}
+# Other spellings a config may use. pynput reports the left modifiers by their bare names
+# (Key.shift_l is an alias of Key.shift), so "left_shift" has to mean "shift".
+_ALIASES = {
+    "left_shift": "shift", "left_ctrl": "ctrl", "left_alt": "alt",
+    "shift_l": "shift", "ctrl_l": "ctrl", "alt_l": "alt",
+    **_KEY_NAMES,
+}
 
 
 class HotkeyListener:
@@ -24,9 +52,14 @@ class HotkeyListener:
     """
 
     def __init__(self, config: Config, loop: asyncio.AbstractEventLoop, queue: asyncio.Queue) -> None:
+        if keyboard is None:
+            raise DependencyError(
+                f"Global hotkeys are unavailable ({_IMPORT_ERROR}). Vox needs an X11 display; "
+                "on a Wayland-only session, log in with an Xorg session instead."
+            )
         self._loop = loop
         self._queue = queue
-        self._hotkey_name = config.hotkey
+        self._hotkey_name = self._resolve_key(config.hotkey)
         self._fallback = config.hotkey_fallback
         self._double_tap_timeout_ms = config.double_tap_timeout_ms
         self._listener: keyboard.Listener | None = None
@@ -42,8 +75,6 @@ class HotkeyListener:
         self._debounce_ms = 50
         self._min_hold_ms = 30  # filter out synthetic/phantom key events (< 30ms) while keeping quick taps responsive
 
-        # Resolve key
-        self._hotkey_key = self._resolve_key(self._hotkey_name)
         self._fallback_keys = self._parse_combo(self._fallback) if self._fallback else None
         self._combo_state: set[str] = set()
 
@@ -63,7 +94,7 @@ class HotkeyListener:
             self._listener = None
 
     def _fire_toggle(self, source: str) -> None:
-        now = time.monotonic()
+        now = monotonic()
         if (now - self._last_toggle_time) * 1000 < self._debounce_ms:
             return
         self._last_toggle_time = now
@@ -71,7 +102,7 @@ class HotkeyListener:
         log.info("Toggle fired via %s", source)
 
     def _fire_cancel(self, source: str) -> None:
-        now = time.monotonic()
+        now = monotonic()
         self._last_toggle_time = now
         self._loop.call_soon_threadsafe(self._queue.put_nowait, "cancel")
         log.info("Cancel fired via %s", source)
@@ -86,14 +117,14 @@ class HotkeyListener:
                     return  # ignore auto-repeat
                 self._modifier_pressed = True
                 self._other_key_pressed = False
-                self._press_time = time.monotonic()
+                self._press_time = monotonic()
             return
 
         # Track combo keys for fallback
         if self._fallback_keys:
             self._combo_state.add(key_name)
             if self._fallback_keys <= self._combo_state:
-                now = time.monotonic()
+                now = monotonic()
                 with self._lock:
                     if self._last_fallback_time > 0 and (now - self._last_fallback_time) * 1000 <= self._double_tap_timeout_ms:
                         self._last_fallback_time = 0.0
@@ -121,7 +152,7 @@ class HotkeyListener:
         key_name = self._key_name(key)
 
         if key_name == self._hotkey_name:
-            now = time.monotonic()
+            now = monotonic()
             with self._lock:
                 was_solo = self._modifier_pressed and not self._other_key_pressed
                 held_ms = (now - self._press_time) * 1000
@@ -150,13 +181,14 @@ class HotkeyListener:
 
     @staticmethod
     def _resolve_key(name: str) -> str:
-        """Normalize a key name."""
-        return name.lower().replace(" ", "_")
+        """Normalize a configured key name to the name _key_name() reports: "Right Shift" -> "right_shift"."""
+        name = name.strip().lower().replace(" ", "_")
+        return _ALIASES.get(name, name)
 
     @staticmethod
     def _parse_combo(combo: str) -> set[str]:
         """Parse 'ctrl+space' into a set of key names."""
-        return {part.strip().lower().replace(" ", "_") for part in combo.split("+")}
+        return {HotkeyListener._resolve_key(part) for part in combo.split("+")}
 
     @staticmethod
     def _key_name(key: keyboard.Key | keyboard.KeyCode | None) -> str:
@@ -165,17 +197,7 @@ class HotkeyListener:
             return ""
         if isinstance(key, keyboard.Key):
             # e.g. Key.shift_r -> "right_shift"
-            name = key.name
-            # Normalize pynput names to our format
-            remap = {
-                "shift_r": "right_shift",
-                "shift_l": "left_shift",
-                "ctrl_r": "right_ctrl",
-                "ctrl_l": "left_ctrl",
-                "alt_r": "right_alt",
-                "alt_l": "left_alt",
-            }
-            return remap.get(name, name)
+            return _KEY_NAMES.get(key.name, key.name)
         if isinstance(key, keyboard.KeyCode):
             if key.char:
                 return key.char.lower()

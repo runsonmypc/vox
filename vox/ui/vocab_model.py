@@ -10,6 +10,19 @@ import re
 from pathlib import Path
 
 from ..config import load_config, snippet_key, update_dictionary, update_snippet
+from ..errors import ConfigError
+
+# What both windows say, so macOS and Linux never drift apart
+WORDS_INTRO = "Names, jargon and acronyms Vox should always spell exactly as written."
+SNIPPETS_INTRO = "Say a trigger phrase on its own and Vox types the expansion instead."
+NO_WORDS = ("No Words Yet", "Add names and terms Vox tends to get wrong.")
+NO_SNIPPETS = ("No Snippets Yet", "Type an address, a sign-off or a link just by saying a short phrase.")
+LOAD_FAILED_TITLE = "Couldn’t Read Your Settings"
+SAVE_FAILED_TITLE = "Couldn’t Save"
+
+
+def clash_warning(clash: str) -> str:
+    return f"This replaces your “{clash}” snippet."
 
 
 class VocabModel:
@@ -34,8 +47,15 @@ class VocabModel:
         self.words = list(config.dictionary)
         self.snippets = dict(config.snippets)
 
+    def _check_writable(self) -> None:
+        # A file that parses but fails validation leaves the lists empty or stale, so a write could
+        # silently replace a snippet the window never showed
+        if self.load_error is not None:
+            raise ConfigError(self.load_error)
+
     def add_words(self, text: str) -> list[str]:
         """Add one word, or several separated by commas or new lines. Returns those that were new."""
+        self._check_writable()
         words = [w.strip() for w in re.split(r"[,\n]", text) if w.strip()]
         known = {w.lower() for w in self.words}
         if words:
@@ -44,18 +64,21 @@ class VocabModel:
         return [w for w in dict.fromkeys(words) if w.lower() not in known]
 
     def remove_words(self, words: list[str]) -> None:
+        self._check_writable()
         if words:
             update_dictionary(self.path, remove=words)
             self.reload()
 
     def save_snippet(self, trigger: str, expansion: str, original: str | None = None) -> None:
         """Add a snippet, or replace ``original`` with it when editing (renaming if the trigger changed)."""
+        self._check_writable()
         update_snippet(self.path, trigger, expansion)
         if original is not None and snippet_key(original) != snippet_key(trigger):
             update_snippet(self.path, original, None)
         self.reload()
 
     def remove_snippet(self, trigger: str) -> None:
+        self._check_writable()
         update_snippet(self.path, trigger, None)
         self.reload()
 

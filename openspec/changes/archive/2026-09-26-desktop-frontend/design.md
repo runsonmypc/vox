@@ -59,7 +59,7 @@ See `proposal.md` for motivation.
 ### 5. Configuration Mutation and Hot-Reload Integration
 - **Choice**: Implement helper routines in `vox.config` that parse and write back dictionary items and snippet key-value pairs to `~/.config/vox/config.toml` using `tomlkit`, which round-trips the file and preserves the user's comments and formatting.
 - **Transcription selection**: The tray sends a mode event to the daemon. While idle, the daemon checks that the API key or local CLI and model are available, updates its active transcriber, and writes `[transcription].mode` with the same atomic TOML writer. The tray shows the selected mode and disables unavailable choices.
-- **Rationale**: Vox already includes an automatic mtime-polling config reloader (`_config_reloader` in [`vox/daemon.py`](file:///Users/alex/Developer/vox/vox/daemon.py#L268)). Writing valid TOML back to disk causes immediate hot-reloading into the running daemon without restart.
+- **Rationale**: Vox already includes an automatic mtime-polling config reloader (`_config_reloader` in `vox/daemon.py`). Writing valid TOML back to disk causes immediate hot-reloading into the running daemon without restart.
 
 ### 6. Linux Tray: pystray's AppIndicator Backend on the System PyGObject
 - **Choice**: On Linux, pystray's `_appindicator` backend exports a StatusNotifierItem with a DBusMenu, so the same `TrayManager` menu works unchanged. It needs PyGObject (`python3-gi`) and the Ayatana AppIndicator typelib, which ship with Debian/Ubuntu desktops. The venv is created from the system `python3` and gets only the system `gi` package symlinked in; everything else comes from pip. Idle and paused glyphs are drawn light because Linux trays have no template images and are usually dark.

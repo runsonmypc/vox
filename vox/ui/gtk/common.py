@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import gi
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
-from gi.repository import Adw, Gdk, Gio, GLib, Gtk, Pango  # noqa: E402
+from gi.repository import Adw, Gdk, Gio, GLib, Gtk, Pango  # noqa: E402, F401 (Pango is re-exported)
 
 APP_ICONS = {
     "TERMINAL": "utilities-terminal-symbolic",
@@ -69,6 +71,20 @@ def run_app(app_id: str, make_window) -> None:
 def error_dialog(parent: Gtk.Widget, heading: str, body: str) -> None:
     dialog = Adw.AlertDialog(heading=heading, body=body)
     dialog.add_response("ok", "OK")
+    dialog.present(parent)
+
+
+def confirm(parent: Gtk.Widget, title: str, message: str, button: str, destructive: bool,
+            then: Callable[[], None]) -> None:
+    """Ask with ``button`` and Cancel, and call ``then`` only when the user picks ``button``."""
+    dialog = Adw.AlertDialog(heading=title, body=message)
+    dialog.add_response("cancel", "Cancel")
+    dialog.add_response("confirm", button)
+    dialog.set_response_appearance(
+        "confirm", Adw.ResponseAppearance.DESTRUCTIVE if destructive else Adw.ResponseAppearance.SUGGESTED
+    )
+    dialog.set_default_response("cancel" if destructive else "confirm")
+    dialog.connect("response", lambda _dialog, response: then() if response == "confirm" else None)
     dialog.present(parent)
 
 

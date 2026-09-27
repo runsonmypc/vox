@@ -3,15 +3,22 @@
 from __future__ import annotations
 
 import logging
+import sqlite3
+from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import date, datetime, timezone
-from typing import Callable
+from datetime import UTC, date, datetime
 
 from ..history import HistoryDB, HistoryRecord
 
 log = logging.getLogger(__name__)
 
 _APP_NAMES = {"TERMINAL": "Terminal", "EDITOR": "Editor", "CHAT": "Chat", "EMAIL": "Email", "BROWSER": "Browser"}
+
+# The newest results a window lists at once; searching reaches older dictations
+PAGE_SIZE = 200
+
+NO_SELECTION = ("No Selection", "Choose a dictation to read it here.")
+CLEAR_BUTTON = "Clear History"
 
 
 def default_copy(text: str) -> None:
@@ -23,7 +30,7 @@ def default_copy(text: str) -> None:
 def local_datetime(created_at: str) -> datetime | None:
     """A UTC SQLite timestamp as local time, or None when it can't be parsed."""
     try:
-        utc = datetime.strptime(created_at, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+        utc = datetime.strptime(created_at, "%Y-%m-%d %H:%M:%S").replace(tzinfo=UTC)
     except (TypeError, ValueError):
         return None
     return utc.astimezone()
@@ -118,6 +125,7 @@ class HistoryModel:
         self._stats: tuple[int, int | None] = (0, None)
         self.query = ""
         self.rows: list[Row] = []
+        self.truncated = False  # more matches exist than the list shows
 
     @property
     def entries(self) -> list[Entry]:
@@ -132,11 +140,22 @@ class HistoryModel:
     def placeholder(self) -> str:
         return f"Search {self.total:,} dictation{'s' if self.total != 1 else ''}" if self.total else "Search"
 
+    @property
+    def footer(self) -> str | None:
+        """A note under the list when it shows only the newest results, or None."""
+        if not self.truncated:
+            return None
+        if self.query.strip():
+            return f"Showing the newest {PAGE_SIZE} matches. Refine the search to find older ones."
+        return f"Showing the newest {PAGE_SIZE} dictations. Search to find older ones."
+
     def search(self, query: str) -> None:
         """Newest-first matches for ``query``; an empty query lists everything."""
         self.query = query
         self._stats = self._db.stats()
-        self.rows = build_rows(self._db.search(query), self._today(), self._clock24)
+        found = self._db.search(query, limit=PAGE_SIZE + 1)  # one extra shows whether there are more
+        self.truncated = len(found) > PAGE_SIZE
+        self.rows = build_rows(found[:PAGE_SIZE], self._today(), self._clock24)
 
     def refresh_if_changed(self) -> bool:
         """Re-run the search when dictations were added since the last one."""
@@ -153,11 +172,56 @@ class HistoryModel:
             return "No Results", f"Nothing matches “{self.query.strip()}”."
         return "No Dictations Yet", "Everything you dictate shows up here."
 
+    def detail_placeholder(self) -> tuple[str, str]:
+        """Title and message for the reading pane when no dictation is selected."""
+        return self.empty_state() or NO_SELECTION
+
     def copy(self, entry: Entry) -> str | None:
         """Put the full dictation on the clipboard. Returns an error message on failure."""
+        return self.copy_text(entry.text)
+
+    def copy_text(self, text: str) -> str | None:
+        """Put ``text`` on the clipboard. Returns an error message on failure."""
         try:
-            self._copy(entry.text)
+            self._copy(text)
         except Exception as e:
             log.warning("Copy failed: %s", e)
             return str(e) or type(e).__name__
+        return None
+
+    def neighbor_id(self, entry: Entry) -> int | None:
+        """The dictation to select once ``entry`` is gone: the next one down, else the one above."""
+        ids = [e.record.id for e in self.entries]
+        if entry.record.id not in ids:
+            return None
+        i = ids.index(entry.record.id)
+        if i + 1 < len(ids):
+            return ids[i + 1]
+        return ids[i - 1] if i > 0 else None
+
+    def delete(self, entry: Entry) -> str | None:
+        """Delete one dictation for good and search again. Returns an error message on failure."""
+        try:
+            self._db.delete(entry.record.id)
+        except sqlite3.Error as e:
+            log.warning("Could not delete the dictation: %s", e)
+            return str(e) or type(e).__name__
+        log.info("Deleted a dictation from history")
+        self.search(self.query)
+        return None
+
+    def clear_confirmation(self) -> tuple[str, str]:
+        """Title and message for the question asked before clearing the history."""
+        what = "your dictation" if self.total == 1 else f"all {self.total:,} dictations"
+        return "Clear History?", f"This permanently deletes {what}. You can’t undo this."
+
+    def clear(self) -> str | None:
+        """Delete every dictation for good. Returns an error message on failure."""
+        try:
+            self._db.clear()
+        except sqlite3.Error as e:
+            log.warning("Could not clear the history: %s", e)
+            return str(e) or type(e).__name__
+        log.info("Cleared the dictation history")
+        self.search(self.query)
         return None
