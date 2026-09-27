@@ -77,7 +77,7 @@ Tasks marked (wave 2, Gn) are assigned to that group, which works in parallel on
 ## 8. Tray and devices
 
 - [x] 8.1 Show the most urgent problem on the idle status line, shortened to one line; verified by `test_status_line_reports_the_most_urgent_problem_while_idle`, `test_a_long_problem_is_shortened_to_one_line` and `test_recording_shows_the_state_not_the_key`
-- [ ] 8.2 (wave 2, G3) Put "Settings file has an error" between the key problem and `mode_error` on the status line; verified by G3's tests in `tests/test_tray.py`
+- [ ] 8.2 (wave 2, G3) Put "Settings file has an error" first on the status line, before the key problem and `mode_error`; verified by G3's tests in `tests/test_tray.py`
 - [x] 8.3 Send the Wayland and Accessibility notices to the tray, and log the Wayland details; verified by `test_linux_platform_notice`, `test_macos_platform_notice` and `test_run_puts_the_platform_notice_in_the_tray`
 - [x] 8.4 Build the Input Device menu from the daemon's snapshot, and store the device name; verified by `test_device_submenu_follows_the_latest_snapshot_and_never_asks_portaudio`, `test_device_submenu_shows_the_current_device_until_the_first_snapshot`, `test_selecting_device_stores_its_name_on_daemon_loop`, `test_devices_with_the_same_name_check_the_first` and `test_resolve_input_device_prefers_an_exact_name`
 - [ ] 8.5 (wave 2, G3) Resolve the checked device in the tray with `audio.match_input_device`, the rule the recorder uses; verified by G3's tests in `tests/test_tray.py` next to `test_selected_device_resolution`

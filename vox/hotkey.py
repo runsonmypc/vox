@@ -4,17 +4,30 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import re
+import sys
 from threading import Lock
 from time import monotonic
 
 from .config import Config
 from .errors import DependencyError
 
+
+def _import_problem(e: ImportError) -> str:
+    """pynput's import error in a few words; its message nests the X error's repr."""
+    if sys.platform.startswith("linux") and not os.environ.get("DISPLAY"):
+        return "no X display: DISPLAY is not set"
+    first = (str(e).splitlines() or [type(e).__name__])[0]
+    inner = re.search(r"\('([^']+)'", first)
+    return inner.group(1) if inner else first
+
+
 try:
     from pynput import keyboard
 except ImportError as e:  # the X11 backend connects to the display on import
     keyboard = None
-    _IMPORT_ERROR = str(e).splitlines()[0]
+    _IMPORT_ERROR = _import_problem(e)
 
 log = logging.getLogger(__name__)
 

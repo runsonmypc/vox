@@ -45,7 +45,7 @@ _WAV_HEADER_BYTES = 44
 STREAM_RATE = 24000
 
 # Resampling low-pass (Kaiser-windowed sinc): flat to 85% of the lower rate's Nyquist
-# frequency and at least 70 dB down from it on, so nothing above the new band aliases into it
+# frequency and about 70 dB down from it on, so nothing above the new band aliases into it
 _PASSBAND = 0.85
 _STOPBAND_DB = 70.0
 # Rate pairs whose exact ratio needs more filter phases than this (11.025 and 22.05 kHz,

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Callable
 from pathlib import Path
 
 import keyring
@@ -126,24 +127,28 @@ def migrate_plaintext(config_path: Path | None = None) -> None:
     Never raises.
     """
     config_path = config_path or DEFAULT_CONFIG_PATH
-    sources = (
-        (config_path, read_api_key_setting, remove_api_key_setting),
-        (FALLBACK_PATH, _env_key_to_move, _remove_env_key),
-    )
     try:
         if not has_keychain():
             # Nothing to move a config.toml key into, so at least say it goes unused
-            if read_api_key_setting(config_path):
+            if _plaintext_key(config_path, read_api_key_setting):
                 log.warning(
                     "Vox doesn't read openai_api_key from %s, and it stays there in plain text. Save the key "
                     "with Set API Key… from the Vox menu, then delete the setting.", _shown(config_path),
                 )
             return
+        # Each source on its own, so a config.toml that doesn't parse still lets the .env key move
+        found = [
+            (path, key, remove)
+            for path, read, remove in (
+                (config_path, read_api_key_setting, remove_api_key_setting),
+                (FALLBACK_PATH, _env_key_to_move, _remove_env_key),
+            )
+            if (key := _plaintext_key(path, read))
+        ]
+        if not found:
+            return  # without touching the keychain, which may be locked and would ask to be unlocked
         stored = (keyring.get_password(SERVICE, USERNAME) or "").strip()
-        for path, read, remove in sources:
-            key = read(path)
-            if not key:
-                continue
+        for path, key, remove in found:
             if not stored:
                 keyring.set_password(SERVICE, USERNAME, key)
                 if (keyring.get_password(SERVICE, USERNAME) or "").strip() != key:
@@ -162,6 +167,15 @@ def migrate_plaintext(config_path: Path | None = None) -> None:
                 )
     except Exception as e:
         log.warning("Couldn't move the plain-text OpenAI API key into the keychain: %s", _reason(e))
+
+
+def _plaintext_key(path: Path, read: Callable[[Path], str]) -> str:
+    """The plain-text key ``read`` finds in ``path``, or "" when there is none or the file can't be read."""
+    try:
+        return read(path)
+    except Exception as e:
+        log.warning("Couldn't check %s for a plain-text OpenAI API key: %s", _shown(path), _reason(e))
+        return ""
 
 
 # -- The plain-text file ---------------------------------------------------------

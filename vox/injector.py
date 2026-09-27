@@ -36,8 +36,9 @@ _CMD_KEY_STATE = 1  # Carbon cmdKey >> 8, the modifier state UCKeyTranslate expe
 # restore goes ahead anyway (a slow app, or a window that ignores the paste).
 _X11_REQUEST_TIMEOUT = 1.0
 # A target fetches the text once (xclip does not count TARGETS requests). This grace covers an
-# app that asks twice, or a clipboard manager's late fetch that was counted as the target's.
-_X11_FOLLOW_UP_TIMEOUT = 0.1
+# app that asks twice (xclip also counts a refused request for a target it does not offer), or a
+# clipboard manager's late fetch that was counted as the target's. It delays only the restore.
+_X11_FOLLOW_UP_TIMEOUT = 0.5
 _TOOL_TIMEOUT = 2.0
 
 # X11 restore preference. xclip serves one target, so a clipboard that offered several comes
@@ -319,6 +320,7 @@ class _ClipboardOwner:
             stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
         )
         self._output = b""
+        self._eof = False  # xclip closes stderr only by exiting
         self.served = -1  # 0 once xclip owns the selection
         try:
             self._proc.stdin.write(data)
@@ -345,6 +347,7 @@ class _ClipboardOwner:
             return False
         chunk = os.read(fd, 4096)
         if not chunk:
+            self._eof = True
             return False
         self._output += chunk
         numbers = self._REQUEST.findall(self._output)
@@ -353,7 +356,8 @@ class _ClipboardOwner:
         return True
 
     def exited(self) -> bool:
-        return self._proc.poll() is not None
+        # After EOF xclip may not have been reaped yet, and poll() alone would call it alive
+        return self._eof or self._proc.poll() is not None
 
     def error(self) -> str:
         if output := self._output.decode(errors="replace").strip():
@@ -401,12 +405,13 @@ def _x11_snapshot() -> _Selection | None:
     offered = targets.decode("ascii", errors="replace").split()
     candidates = ["text/uri-list", *_X11_TEXT_TARGETS, *_X11_RICH_TARGETS]
     candidates += [t for t in offered if t.startswith("image/")]
+    has_text = any(t in offered for t in _X11_TEXT_TARGETS)
     for target in dict.fromkeys(c for c in candidates if c in offered):
         data = _x11_read(target, timeout=_TOOL_TIMEOUT)
         if data is None:
             continue
-        # Copied files go back as files; a copied web link is better restored as text
-        if target == "text/uri-list" and not _only_file_uris(data):
+        # Copied files go back as files; a copied web link is better restored as text, if there is any
+        if target == "text/uri-list" and has_text and not _only_file_uris(data):
             continue
         return _Selection(target, data)
     log.debug("None of the clipboard targets could be saved: %s", offered)

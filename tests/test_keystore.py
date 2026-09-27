@@ -200,6 +200,25 @@ def test_nothing_is_deleted_and_nothing_raises_when_the_keychain_is_locked(locke
     assert keystore.FALLBACK_PATH.read_text() == f"OPENAI_API_KEY={KEY}\n"
 
 
+def test_without_plain_text_keys_the_keychain_is_never_touched(locked, cfg, caplog):
+    """A locked keyring would ask to be unlocked at every start, with nothing to move."""
+    cfg.write_text('[audio]\nsample_rate = 48000\n')
+    with caplog.at_level(logging.WARNING, logger="vox.keystore"):
+        keystore.migrate_plaintext(cfg)
+    assert caplog.text == ""
+
+
+def test_env_file_key_moves_even_when_config_toml_does_not_parse(memory_keyring, cfg, caplog):
+    cfg.write_text("[audio\n")
+    keystore.FALLBACK_PATH.write_text(f"OPENAI_API_KEY={KEY}\n")
+    with caplog.at_level(logging.WARNING, logger="vox.keystore"):
+        keystore.migrate_plaintext(cfg)
+    assert stored(memory_keyring) == KEY
+    assert not keystore.FALLBACK_PATH.exists()
+    assert cfg.read_text() == "[audio\n"
+    assert "Couldn't check" in caplog.text
+
+
 def test_without_a_keychain_the_plain_text_file_is_the_store(no_keychain, cfg):
     keystore.FALLBACK_PATH.write_text(f"OPENAI_API_KEY={KEY}\n")
     keystore.migrate_plaintext(cfg)

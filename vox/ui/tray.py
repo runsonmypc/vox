@@ -374,9 +374,13 @@ class TrayManager:
         return "Can’t read the keyring" if self._config.api_key_error else "API key needed"
 
     def _problem(self) -> str | None:
-        """What the status line reports while idle, most urgent first: the key, config.toml, the mode, a notice."""
+        """What the status line reports while idle, most urgent first: config.toml, the key, the mode, a notice.
+
+        A config.toml that didn't load comes first: until it does, the mode (and so whether a key is
+        needed at all) is only the default's.
+        """
         config = self._config
-        problem = self._key_problem() or (CONFIG_ERROR if config.config_error else None) or config.mode_error or self._notice
+        problem = (CONFIG_ERROR if config.config_error else None) or self._key_problem() or config.mode_error or self._notice
         return _one_line(problem, _PROBLEM_CHARS) if problem else None
 
     def _status_line(self) -> str:

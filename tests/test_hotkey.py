@@ -6,6 +6,7 @@ from unittest.mock import patch
 import pytest
 from pynput import keyboard
 
+from vox import hotkey
 from vox.config import Config
 from vox.errors import DependencyError
 from vox.hotkey import HotkeyListener
@@ -319,3 +320,24 @@ async def test_missing_keyboard_backend_is_a_clear_dependency_error():
         with pytest.raises(DependencyError, match="X11 display") as excinfo:
             HotkeyListener(Config(), asyncio.get_running_loop(), asyncio.Queue())
     assert "Bad display name" in str(excinfo.value)
+
+
+PYNPUT_X_ERROR = (
+    "this platform is not supported: ('failed to acquire X connection: Bad display name \"\"', DisplayNameError(''))\n"
+    "\n"
+    "Try one of the following resolutions:\n"
+)
+
+
+def test_import_problem_without_display_says_so(monkeypatch):
+    monkeypatch.setattr("vox.hotkey.sys.platform", "linux")
+    monkeypatch.delenv("DISPLAY", raising=False)
+    assert hotkey._import_problem(ImportError(PYNPUT_X_ERROR)) == "no X display: DISPLAY is not set"
+
+
+def test_import_problem_takes_the_x_error_out_of_pynputs_message(monkeypatch):
+    monkeypatch.setattr("vox.hotkey.sys.platform", "linux")
+    monkeypatch.setenv("DISPLAY", ":7")
+    assert hotkey._import_problem(ImportError(PYNPUT_X_ERROR)) == 'failed to acquire X connection: Bad display name ""'
+    assert hotkey._import_problem(ImportError("No module named 'Xlib'")) == "No module named 'Xlib'"
+    assert hotkey._import_problem(ImportError()) == "ImportError"

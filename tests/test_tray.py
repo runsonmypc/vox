@@ -627,15 +627,17 @@ def test_status_line_reports_the_most_urgent_problem_while_idle():
     config.mode_error = "whisper.cpp model not found: /models/ggml-base.bin"
     tray, icon = make_tray(config)
     tray.set_notice("Microphone is silent: check its permission")
-    assert icon.title == "Vox · API key needed"  # the key first
-
-    config.openai_api_key = "test"
-    tray.key_changed()
-    assert icon.title == f"Vox · {CONFIG_ERROR}"  # then config.toml; the parser's message is in the log
+    # config.toml first: until it loads, the mode, and whether it needs a key, is only the default's.
+    # The parser's message is in the log.
+    assert icon.title == f"Vox · {CONFIG_ERROR}"
     assert items(icon.menu)[0].text == icon.title
 
     config.config_error = None  # the reloader read the fixed file and told the tray
     tray.mode_changed()
+    assert icon.title == "Vox · API key needed"  # then the key
+
+    config.openai_api_key = "test"
+    tray.key_changed()
     assert icon.title == "Vox · whisper.cpp model not found: /models/ggml-base.bin"  # then the mode
     assert items(icon.menu)[0].text == icon.title
 

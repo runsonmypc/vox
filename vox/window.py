@@ -129,13 +129,22 @@ def _is_number(value: str) -> bool:
     return re.fullmatch(r"[0-9]+", value) is not None
 
 
-def _run_tool(args: list[str], timeout: float = _TOOL_TIMEOUT) -> str | None:
-    """A local tool's stdout, decoded leniently; None when it fails, hangs or is missing."""
+def _run_tool(args: list[str], timeout: float = _TOOL_TIMEOUT, latin1_fallback: bool = False) -> str | None:
+    """A local tool's stdout, decoded leniently; None when it fails, hangs or is missing.
+
+    ``latin1_fallback`` reads output that is not UTF-8 as Latin-1, as a legacy X client's
+    STRING-typed WM_NAME is, instead of replacing its accented letters.
+    """
     try:
         result = subprocess.run(args, capture_output=True, check=True, timeout=timeout)
     except (subprocess.SubprocessError, OSError) as e:
         log.debug("%s failed: %s", args[0], e)
         return None
+    if latin1_fallback:
+        try:
+            return result.stdout.decode("utf-8")
+        except UnicodeDecodeError:
+            return result.stdout.decode("latin-1")
     return result.stdout.decode("utf-8", errors="replace")
 
 
@@ -257,7 +266,7 @@ def _detect_active_window_linux(config: Config) -> AppContext:
         # One query per field, keyed by the window id: a title can contain line breaks,
         # so it must never be parsed by its position in shared output
         wm_class, pid = _parse_xprop(_run_tool(["xprop", "-id", win_id, "WM_CLASS", "_NET_WM_PID"]) or "")
-        title = (_run_tool(["xdotool", "getwindowname", win_id]) or "").removesuffix("\n")
+        title = (_run_tool(["xdotool", "getwindowname", win_id], latin1_fallback=True) or "").removesuffix("\n")
 
     app_type = _classify(wm_class, title, config)
     log.debug("Window: class=%r title=%r type=%s", wm_class, title, app_type.value)

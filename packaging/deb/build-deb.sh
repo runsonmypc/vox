@@ -66,7 +66,7 @@ sed 's|^ExecStart=.*|ExecStart=/usr/bin/vox|' "$repo/packaging/linux/vox.service
 grep -qx 'ExecStart=/usr/bin/vox' "$root/usr/lib/systemd/user/vox.service" || die "vox.service has no ExecStart to replace"
 install -m 644 "$here/vox.desktop" "$root/usr/share/applications/vox.desktop"
 install -m 644 "$here/vox-autostart.desktop" "$root/etc/xdg/autostart/vox.desktop"
-"$venv/bin/python" -c 'import sys; from vox.ui.icons import make_app_icon; make_app_icon(256).save(sys.argv[1])' \
+"$venv/bin/python" -P -c 'import sys; from vox.ui.icons import make_app_icon; make_app_icon(256).save(sys.argv[1])' \
     "$root/usr/share/icons/hicolor/256x256/apps/vox.png"
 install -m 644 "$here/copyright" "$root/usr/share/doc/vox/copyright"
 for script in postinst prerm postrm; do

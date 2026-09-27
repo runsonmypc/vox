@@ -118,7 +118,7 @@ After pasting, the system SHALL restore what was on the clipboard before, for ev
 
 #### Scenario: Restore on Linux (X11)
 - **WHEN** a paste finishes on Linux
-- **THEN** the previous clipboard comes back in its most useful single form (copied files as a file list, otherwise plain text, otherwise a PNG image or HTML, otherwise another image type), once the target has fetched the dictation or after about one second if it never asks
+- **THEN** the previous clipboard comes back in its most useful single form (copied files as a file list, otherwise plain text, otherwise a PNG image or HTML, otherwise another image type, otherwise a list of links), once the target has fetched the dictation or after about one second if it never asks
 
 #### Scenario: Copy during the paste
 - **WHEN** the user or another app copies something while a paste is finishing

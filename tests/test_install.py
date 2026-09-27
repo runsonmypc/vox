@@ -161,6 +161,20 @@ def test_smoke_test_imports_vox_without_a_display(home):
     assert result.returncode == 0, result.stderr
 
 
+def test_smoke_test_never_imports_the_source_tree(home):
+    """Run from the unpacked release, python -c would import its vox/ and pass a venv that lacks modules."""
+    venv = fake_venv(home)
+    calls = home / "calls"
+    (venv / "bin/python").write_text(f'#!/bin/sh\necho "$PWD $*" >> {shlex.quote(str(calls))}\n')
+    (venv / "bin/vox").write_text("#!/bin/sh\n")
+    (venv / "bin/vox").chmod(0o755)
+    result = bash(home, f"cd {shlex.quote(str(REPO))}\nsmoke_test")
+    assert result.returncode == 0, result.stderr
+    cwd, args = calls.read_text().splitlines()[0].split(" ", 1)
+    assert cwd == "/"
+    assert args.startswith("-P -c import vox.")
+
+
 # --- Linux -----------------------------------------------------------------------------------
 
 def test_linux_launchers_add_an_autostart_entry(home):

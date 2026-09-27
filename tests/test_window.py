@@ -69,12 +69,20 @@ def test_linux_title_can_never_shift_window_id_or_pid(title):
     assert ctx.window_title == title
 
 
-def test_linux_non_utf8_title_does_not_raise():
+def test_linux_latin1_title_is_read_as_latin1():
+    """A legacy client's STRING-typed WM_NAME is Latin-1, not UTF-8."""
     tools = _x11_tools(b"caf\xe9 - xterm")
     with patch("vox.window.subprocess.run", tools.run):
         ctx = window._detect_active_window_linux(Config())
-    assert ctx.window_title == "caf\ufffd - xterm"
+    assert ctx.window_title == "caf\u00e9 - xterm"
     assert ctx.wm_class == "kitty"
+
+
+def test_linux_utf8_title_is_read_as_utf8():
+    tools = _x11_tools("caf\u00e9 \u2013 na\u00efve".encode())
+    with patch("vox.window.subprocess.run", tools.run):
+        ctx = window._detect_active_window_linux(Config())
+    assert ctx.window_title == "caf\u00e9 \u2013 na\u00efve"
 
 
 def test_linux_window_without_pid_keeps_its_class():

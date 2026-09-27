@@ -34,7 +34,7 @@ The first public release.
 - History can be searched, and entries deleted one at a time or all at once; deleted text is
   overwritten. The history database is readable only by you.
 - Pasting puts back what was on the clipboard before: on macOS all of it, including images, files
-  and rich text, and on Linux one form of it (copied files, text, or an image). On macOS Vox's
+  and rich text, and on Linux one form of it (copied files, else text, else an image or HTML). On macOS Vox's
   temporary copy is hidden from clipboard managers and Universal Clipboard.
 
 ### Desktop

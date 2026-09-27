@@ -127,7 +127,8 @@ smoke_test() {
     Darwin) modules="$modules,vox.daemon" ;;  # pynput needs an X display on Linux
     Linux) modules="$modules,gi" ;;
     esac
-    "$VENV/bin/python" -c "import $modules" || die "the new Vox environment does not work"
+    # -P and cd /: run from the source tree, python -c would import its vox/ instead of the venv's
+    (cd / && "$VENV/bin/python" -P -c "import $modules") || die "the new Vox environment does not work"
     "$VENV/bin/vox" --help >/dev/null || die "the new vox command does not run"
 }
 
@@ -235,7 +236,7 @@ linux_tray_host() {
 }
 
 app_icon() {
-    "$VENV/bin/python" -c 'import sys; from vox.ui.icons import make_app_icon; make_app_icon().save(sys.argv[1])' "$1"
+    "$VENV/bin/python" -P -c 'import sys; from vox.ui.icons import make_app_icon; make_app_icon().save(sys.argv[1])' "$1"
 }
 
 # Launchers start the login service rather than vox itself: opening one while Vox runs does nothing,

@@ -402,6 +402,11 @@ class FakeOwnerProcess:
         """Another client took CLIPBOARD: xclip exits."""
         self._exit(0)
 
+    def lose_selection_not_yet_reaped(self) -> None:
+        """xclip exited and its stderr closed, but poll() does not report it yet."""
+        os.close(self._write_fd)
+        self._write_fd = None
+
     def poll(self):
         return self.returncode
 
@@ -519,6 +524,8 @@ def test_linux_other_app_pastes_via_xtest_and_restores(x11):
       "UTF8_STRING": b"/tmp/a.txt"}, ("text/uri-list", b"file:///tmp/a.txt\r\n")),
     # A copied web link is better restored as text
     ({"text/uri-list": b"https://example.com/\r\n", "UTF8_STRING": b"https://example.com/"}, ("UTF8_STRING", b"https://example.com/")),
+    # ...but when a link list is all there is, it goes back as it was
+    ({"text/uri-list": b"https://example.com/\r\n"}, ("text/uri-list", b"https://example.com/\r\n")),
     ({"STRING": b"legacy"}, ("STRING", b"legacy")),
 ])
 def test_linux_restores_the_most_useful_target(x11, clipboard, restored):
@@ -643,6 +650,16 @@ def test_linux_copy_during_paste_is_not_overwritten(x11):
     """Another client took the clipboard while Vox waited: its contents win over the restore."""
     x11.clipboard = {"UTF8_STRING": b"original"}
     x11.on_paste = lambda: x11.owner.lose_selection()
+
+    injector.paste("dictated", AppType.EDITOR)
+
+    assert x11.writes == []
+
+
+def test_linux_copy_during_paste_wins_before_xclip_is_reaped(x11):
+    """xclip's stderr closes as it exits, a moment before poll() reports the exit."""
+    x11.clipboard = {"UTF8_STRING": b"original"}
+    x11.on_paste = lambda: x11.owner.lose_selection_not_yet_reaped()
 
     injector.paste("dictated", AppType.EDITOR)
 

@@ -215,7 +215,7 @@ The Vox menu, from the menu bar icon on macOS or the tray icon on Linux:
   [Menu messages](#menu-messages)).
 - **Pause Dictation**: ignore the hotkey until you resume.
 - **Input Device**: the microphone to record from, or the system default. A microphone connected
-  while Vox runs appears once Vox is idle again (on macOS also within 30 seconds while idle).
+  while Vox runs appears after your next dictation, and on macOS also within 30 seconds while idle.
 - **Transcription**: OpenAI (batch), OpenAI (streaming) or Local (whisper.cpp). A mode that is not
   set up (no API key, or no whisper.cpp model) is greyed out.
 - **Recording Limit**: 5, 10, 15, 30 or 60 minutes.
@@ -320,13 +320,13 @@ on Xorg**. macOS is not affected.
 ### Menu messages
 
 While Vox is idle, the first line of its menu names the most urgent problem that stops or affects
-dictation:
+dictation, in this order:
 
 | Message | What to do |
 | --- | --- |
+| Settings file has an error | Fix `~/.config/vox/config.toml`; the log names the setting. Vox does not record until then. |
 | API key needed | Choose **Set API Key…**, or switch to Local (whisper.cpp). |
 | Can’t read the keyring | Unlock your login keychain or keyring; Vox tries again on the next hotkey press. |
-| Settings file has an error | Fix `~/.config/vox/config.toml`; the log names the setting. Vox does not record until then. |
 | A whisper.cpp problem, such as a missing model | Fix `[whisper_cpp]`, or choose an OpenAI mode. |
 | Accessibility access needed | macOS: allow python3.12 under Accessibility, then quit and reopen Vox. |
 | Microphone is silent: check its permission | Allow the microphone (macOS: Microphone for python3.12) and check the Input Device menu. |
