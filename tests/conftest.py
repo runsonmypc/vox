@@ -64,7 +64,7 @@ def _isolate_config(tmp_path, monkeypatch):
     """Give each test its own default config.toml, in every module that imported the name."""
     path = tmp_path / "default-config.toml"  # the same file the keystore migration fixture uses
     monkeypatch.setattr("vox.config.DEFAULT_CONFIG_PATH", path)
-    for name in ("vox.daemon", "vox.ui.tray", "vox.ui.vocab_window"):
+    for name in ("vox.daemon", "vox.ui.tray", "vox.ui.vocab_window", "vox.ui.hotkey_window"):
         module = sys.modules.get(name)  # importing vox.daemon here would need an X display on Linux
         if module is not None:
             monkeypatch.setattr(module, "DEFAULT_CONFIG_PATH", path)
