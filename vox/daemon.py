@@ -514,11 +514,11 @@ class _Daemon:
             await self._restore_volume()
             self.recorder.discard()
             self._end_session()
+            self.sounds.play("error")  # before set_state, so the IDLE-return rescan waits for it
             # A transcription already under way finishes on its own and reports process_done
             if self.process_task is None or self.process_task.done():
                 self._end_processing()
                 self.set_state(State.IDLE)
-            self.sounds.play("error")
         except Exception:
             log.exception("Could not recover from the error")
 

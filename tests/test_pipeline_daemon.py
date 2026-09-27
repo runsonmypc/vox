@@ -625,6 +625,34 @@ async def test_the_rescan_on_return_to_idle_waits_for_a_sound_still_playing():
 
 
 @pytest.mark.anyio
+async def test_the_rescan_after_an_unexpected_error_waits_for_the_error_sound():
+    tray = MagicMock()
+    scanned = []
+    error_ends = []
+
+    def scan():
+        scanned.append(time.monotonic())
+        return [(0, "Built-in Mic")]
+
+    def play(name):
+        if name == "error":  # a long custom error.wav, 0.3 s here
+            error_ends.append(time.monotonic() + 0.3)
+            sounds_module._sd_playing_until = error_ends[-1]
+
+    with patch("vox.daemon._DEVICE_REFRESH_DELAY", 0.01), patch.object(sounds_module, "_sd_playing_until", 0.0):
+        async with running(openai_config(), tray) as h:
+            h.recorder.refresh_input_devices.side_effect = scan
+            h.sounds.play.side_effect = play
+            await until(lambda: scanned)
+            h.detect.side_effect = RuntimeError("window lookup exploded")  # the toggle ends in _recover
+            h.send("toggle")
+            await until(lambda: error_ends)
+            assert h.state is State.IDLE
+            await until(lambda: len(scanned) == 2)
+    assert scanned[1] >= error_ends[0] + 0.1
+
+
+@pytest.mark.anyio
 async def test_a_silent_microphone_shows_a_notice_until_audio_returns():
     tray = MagicMock()
     async with running(openai_config(), tray) as h:
