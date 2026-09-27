@@ -202,6 +202,34 @@ def test_non_debian_systems_get_a_readable_package_list(home):
     assert "sudo" not in result.stderr
 
 
+@pytest.mark.parametrize("has_xprop", [True, False])
+def test_linux_deps_install_xprop(home, has_xprop):
+    """Without xprop every terminal looks like an ordinary window and gets Ctrl+V, which does not paste there."""
+    hide = "xprop() { :; }" if has_xprop else 'command() { [ "$2" != xprop ] && builtin command "$@"; }'
+    script = f"""
+        xdotool() {{ :; }}; xclip() {{ :; }}
+        {hide}
+        apt-get() {{ :; }}
+        sudo() {{ echo "$*" >>"$HOME/calls"; }}
+        linux_deps /nonexistent/python3
+    """
+    result = bash(home, script)
+    assert result.returncode == 0, result.stderr
+    installed = (home / "calls").read_text().split()
+    assert ("x11-utils" in installed) is not has_xprop
+    assert "xdotool" not in installed and "libportaudio2" in installed
+
+
+def test_other_distributions_are_told_to_install_xprop(home):
+    script = """
+        command() { [ "$2" != apt-get ] && [ "$2" != xprop ] && builtin command "$@"; }
+        linux_deps /nonexistent/python3
+    """
+    result = bash(home, script)
+    assert result.returncode == 1
+    assert "xprop (X11 utilities) (Debian/Ubuntu: x11-utils)" in result.stderr
+
+
 def test_apt_refreshes_its_package_lists_when_install_fails(home):
     script = """
         apt-get() { :; }
@@ -242,6 +270,28 @@ def test_linux_uninstall_removes_vox_and_keeps_settings_and_history(home):
     assert all(p.exists() for p in kept)
     assert "systemctl --user disable --now vox.service" in (home / "calls").read_text()
     assert "~/.config/vox" in result.stdout
+
+
+def install_script(repo: Path) -> str:
+    return f"""
+        uname() {{ echo Linux; }}
+        linux_install() {{ :; }}
+        install_vox {shlex.quote(str(repo))} 0
+    """
+
+
+def test_install_ends_with_the_full_command_path(home, tmp_path):
+    """~/.local/bin is not on macOS's default PATH, so a bare `vox` is often "command not found"."""
+    result = bash(home, install_script(tmp_path))
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines()[-1] == f"==> Done. Run '{home}/.local/bin/vox --help' for options."
+    assert f"{home}/.local/bin is not on your PATH" in result.stderr
+
+
+def test_install_says_nothing_about_path_when_the_command_is_on_it(home, tmp_path):
+    result = bash(home, install_script(tmp_path), PATH=f"{home}/.local/bin:{os.environ['PATH']}")
+    assert result.returncode == 0, result.stderr
+    assert "PATH" not in result.stderr
 
 
 def test_vox_service_restarts_on_crashes_but_not_on_config_errors():
@@ -316,6 +366,113 @@ def test_mac_uninstall_removes_only_the_vox_launcher(home):
     assert not agent.exists() and not venv.exists()
     assert logs.exists()
     assert "launchctl bootout gui/501/com.runsonmypc.vox" in (home / "calls").read_text()
+
+
+MAC = """
+    APPLICATIONS="$HOME/SystemApplications"
+    uname() { echo Darwin; }
+    id() { echo 501; }
+    launchctl() { :; }
+    app_icon() { echo icon >"$1"; }
+"""
+
+
+def other_app(path: Path) -> dict[str, bytes]:
+    """Another vendor's app bundle at `path`, as {relative path: contents} to compare later."""
+    (path / "Contents/MacOS").mkdir(parents=True)
+    (path / "Contents/Frameworks").mkdir()
+    (path / "Contents/Info.plist").write_text("<string>com.example.vox-player</string>")
+    (path / "Contents/MacOS/VOX").write_text("the player")
+    return bundle(path)
+
+
+def bundle(path: Path) -> dict[str, bytes]:
+    return {str(p.relative_to(path)): p.read_bytes() if p.is_file() else b"" for p in path.rglob("*")}
+
+
+def is_launcher(path: Path) -> bool:
+    return "com.runsonmypc.vox.launcher" in (path / "Contents/Info.plist").read_text()
+
+
+def test_mac_launcher_never_writes_into_another_app_named_vox(home):
+    """The default APFS volume ignores case, so another vendor's VOX.app is the same path as Vox.app."""
+    fake_venv(home)
+    other = home / "SystemApplications/Vox.app"
+    before = other_app(other)
+    result = bash(home, MAC + "mac_launcher")
+    assert result.returncode == 0, result.stderr
+    assert bundle(other) == before
+    assert is_launcher(home / "Applications/Vox.app")
+    assert (home / "Applications/Vox.app/Contents/MacOS/Vox").read_text().startswith("#!/bin/bash")
+
+    # and uninstalling removes only the launcher it added
+    result = bash(home, MAC + "uninstall_vox")
+    assert result.returncode == 0, result.stderr
+    assert bundle(other) == before
+    assert not (home / "Applications/Vox.app").exists()
+
+
+def test_mac_launcher_is_skipped_when_both_places_have_another_app_named_vox(home):
+    fake_venv(home)
+    apps = [home / "SystemApplications/Vox.app", home / "Applications/Vox.app"]
+    before = [other_app(app) for app in apps]
+    result = bash(home, MAC + "mac_launcher")
+    assert result.returncode == 0, result.stderr
+    assert [bundle(app) for app in apps] == before
+    assert "no Vox launcher was added" in result.stderr
+    assert "launchctl kickstart gui/501/com.runsonmypc.vox" in result.stderr
+
+
+def test_mac_launcher_updates_its_own_launcher_in_place(home):
+    fake_venv(home)
+    ours = home / "SystemApplications/Vox.app"
+    (ours / "Contents/MacOS").mkdir(parents=True)
+    (ours / "Contents/Info.plist").write_text("<string>com.runsonmypc.vox.launcher</string>")
+    (ours / "Contents/MacOS/Vox").write_text("an older launcher")
+    result = bash(home, MAC + "mac_launcher")
+    assert result.returncode == 0, result.stderr
+    assert (ours / "Contents/MacOS/Vox").read_text().startswith("#!/bin/bash")
+    assert plistlib.loads((ours / "Contents/Info.plist").read_bytes())["CFBundleIdentifier"] == (
+        "com.runsonmypc.vox.launcher"
+    )
+    assert not (home / "Applications").exists()
+
+
+def test_mac_launcher_goes_to_the_users_applications_when_the_shared_folder_is_read_only(home):
+    fake_venv(home)
+    shared = home / "SystemApplications"
+    shared.mkdir()
+    shared.chmod(0o555)
+    try:
+        result = bash(home, MAC + "mac_launcher")
+    finally:
+        shared.chmod(0o755)
+    assert result.returncode == 0, result.stderr
+    assert is_launcher(home / "Applications/Vox.app")
+    assert not (shared / "Vox.app").exists()
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root can delete a read-only launcher")
+def test_mac_uninstall_carries_on_when_the_launcher_cannot_be_deleted(home):
+    venv = fake_venv(home)
+    (home / ".local/bin").mkdir(parents=True)
+    (home / ".local/bin/vox").symlink_to(venv / "bin/vox")
+    launcher = home / "Applications/Vox.app"
+    (launcher / "Contents/MacOS").mkdir(parents=True)
+    (launcher / "Contents/Info.plist").write_text("<string>com.runsonmypc.vox.launcher</string>")
+    (launcher / "Contents/MacOS/Vox").touch()
+    locked = [launcher / "Contents/MacOS", launcher / "Contents", launcher]
+    for path in locked:
+        path.chmod(0o555)
+    try:
+        result = bash(home, MAC + "uninstall_vox")
+    finally:
+        for path in reversed(locked):
+            path.chmod(0o755)
+    assert result.returncode == 0, result.stderr
+    assert f"could not remove {launcher}" in result.stderr
+    assert not venv.exists() and not (home / ".local/bin/vox").is_symlink()
+    assert "Vox is uninstalled" in result.stdout
 
 
 # --- Bootstrap from a release ----------------------------------------------------------------

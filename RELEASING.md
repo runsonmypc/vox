@@ -53,15 +53,17 @@ gh run download <run-id> --name release
 2. <a id="relock"></a>**Relock.** `uv.lock` records Vox's own version, so it must be regenerated,
    with the uv version that CI pins (`UV_VERSION` in `.github/workflows/ci.yml` and `release.yml`,
    now 0.12.19); another uv may write a different lock. `scripts/lock.sh` calls `uv` itself, so
-   put the pinned uv first on `PATH`:
+   put the pinned uv first on `PATH`, from a new private directory (a fixed path under `/tmp` could
+   be created, and the script in it swapped, by another account):
 
    ```sh
-   mkdir -p /tmp/uv-pinned
-   printf '#!/bin/sh\nexec uvx uv@0.12.19 "$@"\n' >/tmp/uv-pinned/uv
-   chmod +x /tmp/uv-pinned/uv
-   PATH="/tmp/uv-pinned:$PATH" uv lock
-   PATH="/tmp/uv-pinned:$PATH" scripts/lock.sh
-   PATH="/tmp/uv-pinned:$PATH" scripts/lock.sh --check
+   d=$(mktemp -d)
+   printf '#!/bin/sh\nexec uvx uv@0.12.19 "$@"\n' >"$d/uv"
+   chmod +x "$d/uv"
+   PATH="$d:$PATH" uv lock
+   PATH="$d:$PATH" scripts/lock.sh
+   PATH="$d:$PATH" scripts/lock.sh --check
+   rm -r "$d"
    ```
 
    To move to a newer uv, change `UV_VERSION` in both workflows and relock with it.

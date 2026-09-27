@@ -42,9 +42,13 @@ Vox is free software under the GNU GPL, version 3.
 ## Install
 
 Vox installs for your user only: its own virtualenv in `~/.local/share/vox/venv`, a `vox` command
-in `~/.local/bin`, a login service that starts it when you log in, and a Vox launcher in your
-applications. Run the installer as yourself, not with `sudo`; it asks for `sudo` only to install
-missing Linux packages.
+in `~/.local/bin` (the installer tells you when that folder is not on your `PATH`), a login service
+that starts it when you log in, and a Vox launcher in your applications. Run the installer as
+yourself, not with `sudo`; it asks for `sudo` only to install missing Linux packages.
+
+On macOS the launcher is `/Applications/Vox.app`, or `~/Applications/Vox.app` when you cannot
+write to `/Applications` or another app there is already called Vox (or VOX). The installer never
+changes or removes an app it did not create.
 
 ### One line
 
@@ -130,7 +134,7 @@ lists in System Settings.
 ### Linux
 
 Linux has no permission prompts. Vox needs an X11 session (see [Wayland](#wayland)), `xdotool`
-and `xclip` for pasting, and on GNOME the
+and `xclip` for pasting, `xprop` (x11-utils) to tell terminals from other windows, and on GNOME the
 [AppIndicator extension](https://extensions.gnome.org/extension/615/appindicator-support/) for its
 tray icon. The installer enables that extension, or asks GNOME to install it; click **Install** in
 the dialog that appears.
@@ -152,22 +156,31 @@ telemetry or update checks.
 The spelling hints are your dictionary words plus, when screen hints are on, up to 10 words from
 the focused window's title and up to 25 words from the text visible in it: at most 40 words in
 total. Streaming mode sends its hints as it connects, before the window's text could be read, so
-it uses only the dictionary and the title. Words that look like passwords, tokens or API keys (for
-example `sk-…`, `ghp_…`, `AKIA…`, JSON web tokens, long random strings, or the value after a name
-such as `API_KEY=` or `password:`) are removed before anything is sent. Your API key goes to OpenAI
-with each request, as any OpenAI client's does. OpenAI's API terms and data usage policies apply to
-what it receives.
+it uses only the dictionary and the title. Words that look like passwords, tokens or API keys are
+removed before anything is sent, and before they reach whisper.cpp:
+
+- keys and tokens such as `sk-…`, `ghp_…`, `AKIA…`, JSON web tokens, and long random strings;
+- the value after a name such as `API_KEY=`, `token:`, `DB_PASS=`, `MYSQL_PWD=` or `password:`,
+  and for a password the rest of its line when the value is not in quotes;
+- the user name and password in a URL, as in `postgres://user:password@host` (the host stays);
+- passwords on a command line, as in `--password VALUE`, `--pass=VALUE`, `-pVALUE` and
+  `-u user:VALUE`.
+
+The filter works from patterns and cannot catch every password, so turn screen hints off while
+secrets are on screen. Your API key goes to OpenAI with each request, as any OpenAI client's does.
+OpenAI's API terms and data usage policies apply to what it receives.
 
 ### Screen hints (`[context] screen`)
 
 Screen hints help the transcriber spell names and terms that are on screen. With them on (the
 default), Vox reads text from the focused window only, never the whole screen or other windows:
 
-- **macOS**: the pane text of tmux when the focused app is a terminal running it; otherwise a
+- **macOS**: the text of the tmux pane when the focused app is a terminal running tmux in its only
+  session (one window, one tab, no splits), so the pane is the one on screen; otherwise a
   screenshot of the focused window, read with Apple's on-device text recognition.
 - **Linux**: the window's text through the accessibility interface (AT-SPI). If that finds little,
   a screenshot of the window read with `tesseract` when `maim` and `tesseract` are installed, or,
-  in a terminal running tmux, the pane text.
+  in a terminal running tmux in its only session, the pane text.
 
 Screenshots are never kept: on macOS the temporary file is deleted as soon as it is read, and on
 Linux the image goes straight from `maim` to `tesseract`. Text recognition runs on your computer,
@@ -335,26 +348,32 @@ dictation, in this order:
 
 ### Common problems
 
+The commands below use `~/.local/bin/vox`, where the installer puts Vox, since `~/.local/bin` is
+often not on your `PATH`. With the `.deb`, use `/usr/bin/vox`.
+
 - **The hotkey does nothing (macOS).** Check that python3.12 is allowed under Accessibility and
   Input Monitoring in System Settings > Privacy & Security, then quit and reopen Vox. After an
   update that changed Python, remove the old entries and allow the new ones.
 - **Recordings come back empty.** Allow the microphone (macOS: Microphone permission for
-  python3.12), check the Input Device menu, and try `vox --list-devices`.
+  python3.12), check the Input Device menu, and try `~/.local/bin/vox --list-devices`.
 - **A paste did not arrive.** Vox plays the error sound and still saves the text in history: open
   **Search History…** to copy it.
+- **Nothing pastes into a terminal (Linux).** Install `xprop` (x11-utils on Debian and Ubuntu).
+  Without it Vox cannot tell a terminal from other windows and presses Ctrl+V instead of
+  Ctrl+Shift+V; the log warns about it when Vox starts.
 - **No tray icon on GNOME.** Enable "AppIndicator and KStatusNotifierItem Support" in the Extensions
   app, or run the installer again. Vox keeps working without the icon.
 - **Vox does not start at login (Linux).** The installer adds both a systemd user service and an
-  autostart entry. On a bare window manager that runs neither, start `vox` from your session startup
-  file. If Vox starts but cannot reach the display, run
+  autostart entry. On a bare window manager that runs neither, start `~/.local/bin/vox` from your
+  session startup file. If Vox starts but cannot reach the display, run
   `systemctl --user import-environment DISPLAY XAUTHORITY` in your session startup first.
 - **Local (whisper.cpp) is greyed out.** Set `[whisper_cpp] model`, and `binary` as a full path.
   Once whisper.cpp is the selected mode, the menu's first line shows what is missing.
 - **"Vox needs Python 3.12 or 3.13".** Some of Vox's dependencies do not yet publish packages for
   newer Pythons, and building them would need a compiler.
 - **Something else.** Read the log (`~/Library/Logs/Vox/vox.log` on macOS,
-  `journalctl --user -u vox -e` on Linux). For more detail, quit Vox and run `vox -v` in a terminal;
-  note that verbose logs include what you dictate.
+  `journalctl --user -u vox -e` on Linux). For more detail, quit Vox and run
+  `~/.local/bin/vox -v` in a terminal; note that verbose logs include what you dictate.
 
 ## Uninstall
 

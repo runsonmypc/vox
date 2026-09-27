@@ -149,6 +149,7 @@ describe_package() {
     gir1.2-gtk-4.0) echo "GTK 4 introspection data" ;;
     gir1.2-adw-1) echo "libadwaita 1.5+ introspection data" ;;
     gir1.2-ayatanaappindicator3-0.1) echo "Ayatana AppIndicator introspection data" ;;
+    x11-utils) echo "xprop (X11 utilities)" ;;
     *) echo "$1" ;;
     esac
 }
@@ -158,6 +159,8 @@ linux_deps() {
     local py=$1 missing=() pkg
     command -v xdotool >/dev/null || missing+=(xdotool)
     command -v xclip >/dev/null || missing+=(xclip)
+    # Without xprop every window looks like an ordinary app, so terminals get Ctrl+V and nothing pastes
+    command -v xprop >/dev/null || missing+=(x11-utils)
     "$py" -c 'import ctypes.util, sys; sys.exit(not ctypes.util.find_library("portaudio"))' || missing+=(libportaudio2)
     "$py" -c 'import ensurepip' 2>/dev/null || missing+=(python3-venv)
     "$py" -c 'import gi' 2>/dev/null || missing+=(python3-gi)
@@ -314,10 +317,36 @@ mac_install() {
     fi
 }
 
+# A launcher this user's install.sh wrote. The default APFS volume ignores case, so another
+# vendor's VOX.app is the same path as Vox.app: match the bundle id, and only in files the user owns
+is_our_launcher() {
+    [ -O "$1/Contents/Info.plist" ] && grep -qs "$LABEL.launcher" "$1/Contents/Info.plist"
+}
+
+# Where the launcher goes: /Applications when the user can write it, since Finder, Launchpad and
+# Spotlight show apps there and admins need no sudo, otherwise ~/Applications. An app already
+# there that is not our launcher is never written into.
+launcher_path() {
+    local dir
+    for dir in "$APPLICATIONS" "$HOME/Applications"; do
+        if [ -e "$dir/Vox.app" ] || [ -L "$dir/Vox.app" ]; then
+            is_our_launcher "$dir/Vox.app" || continue
+        elif [ "$dir" = "$APPLICATIONS" ] && [ ! -w "$dir" ]; then
+            continue
+        fi
+        printf '%s\n' "$dir/Vox.app"
+        return 0
+    done
+    return 1
+}
+
 mac_launcher() {
-    local dir="$HOME/Applications"
-    [ -w "$APPLICATIONS" ] && dir=$APPLICATIONS  # where Finder, Launchpad and Spotlight show apps; admins need no sudo
-    local app="$dir/Vox.app"
+    local app
+    if ! app=$(launcher_path); then
+        warn "another app is already named Vox, so no Vox launcher was added." \
+            "After Quit, start Vox again with: launchctl kickstart gui/$(id -u)/$LABEL"
+        return 0
+    fi
     mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
     cat >"$app/Contents/Info.plist" <<'EOF'
 <?xml version="1.0" encoding="UTF-8"?>
@@ -351,6 +380,7 @@ EOF
     chmod +x "$app/Contents/MacOS/Vox"
     app_icon "$app/Contents/Resources/Vox.icns"
     touch "$app"  # so Finder shows a changed icon
+    say "After Quit, start it again from Vox in Applications or Spotlight"
 }
 
 # Write the LaunchAgent from its template; launchd expands neither ~ nor $HOME, so paths are absolute
@@ -406,13 +436,22 @@ mac_service() {
         sleep 1
     done
     [ "$started" -eq 1 ] || die "could not start the Vox LaunchAgent"
-    mac_launcher
     say "Vox is running (logs: $MAC_LOGS/vox.log)"
-    say "After Quit, start it again from Vox in Applications or Spotlight"
+    mac_launcher
     say "macOS asks once for Microphone, Accessibility and Input Monitoring access, and for Screen Recording while screen hints are on"
 }
 
 # --- Install and uninstall -------------------------------------------------------------------
+
+# macOS's default PATH lacks ~/.local/bin, and Ubuntu's adds it only at a login after it exists
+path_warning() {
+    local dir
+    dir=$(dirname "$BIN")
+    case ":$PATH:" in
+    *":$dir:"*) ;;
+    *) warn "$dir is not on your PATH, so a plain 'vox' is not found; run $BIN, or add $dir to PATH" ;;
+    esac
+}
 
 install_vox() {
     local repo=$1 service=$2
@@ -434,7 +473,8 @@ install_vox() {
     fi
     say "Vox asks for your OpenAI API key when it needs one; change it later with Set API Key… in its menu"
     wayland_warning
-    say "Done. Run 'vox --help' for options."
+    path_warning
+    say "Done. Run '$BIN --help' for options."
 }
 
 uninstall_vox() {
@@ -455,7 +495,8 @@ uninstall_vox() {
         launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
         rm -f "$HOME/Library/LaunchAgents/$LABEL.plist"
         for app in "$APPLICATIONS/Vox.app" "$HOME/Applications/Vox.app"; do
-            if grep -qs "$LABEL.launcher" "$app/Contents/Info.plist"; then rm -rf "$app"; fi
+            # One launcher that can't be deleted must not keep the rest of Vox installed
+            if is_our_launcher "$app"; then rm -rf "$app" || warn "could not remove $app"; fi
         done
         ;;
     esac

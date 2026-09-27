@@ -1,8 +1,11 @@
 """Checks on what a release ships besides the code: metadata, locks, docs and workflows."""
 
 import dataclasses
+import os
 import re
+import shlex
 import subprocess
+import textwrap
 import tomllib
 from pathlib import Path
 
@@ -205,3 +208,84 @@ def test_a_manual_release_run_publishes_nothing():
     assert re.search(r"^    if: github.event_name == 'push'$", jobs["publish"], flags=re.MULTILINE)
     assert "gh release create" in jobs["publish"]
     assert not any("gh release" in lines for job, lines in jobs.items() if job != "publish")
+
+
+def deb_depends() -> set[str]:
+    control = re.search(r"^Depends: (.+)$", (REPO / "packaging/deb/build-deb.sh").read_text(), flags=re.MULTILINE)
+    return {dependency.split()[0] for dependency in control.group(1).split(",")}
+
+
+def install_sh_packages() -> set[str]:
+    """The Debian packages install.sh's linux_deps checks for."""
+    body = (REPO / "install.sh").read_text().split("\nlinux_deps() {\n", 1)[1].split("\n}\n", 1)[0]
+    return {package for group in re.findall(r"missing\+=\(([^)]+)\)", body) for package in group.split()}
+
+
+def test_deb_and_install_sh_need_the_same_system_packages():
+    # xprop tells terminals, which paste with Ctrl+Shift+V, from other windows
+    assert "x11-utils" in deb_depends() and "x11-utils" in install_sh_packages()
+    # The .deb ships its virtualenv, so only install.sh needs python3-venv
+    assert install_sh_packages() - {"python3-venv"} <= deb_depends()
+
+
+def test_deb_smoke_test_imports_the_packaged_vox_not_the_checkout():
+    """CI runs the smoke test from the checkout, where python -c would import its vox/ instead of /opt/vox."""
+    script = (REPO / "packaging/deb/smoke-test.sh").read_text()
+    lines = script.splitlines()
+    cd = lines.index("cd /")
+    assert lines.index('deb=$(realpath "$1")') < cd
+    runs = [i for i, line in enumerate(lines) if '"$py"' in line]
+    assert runs and all(i > cd and '"$py" -P -c' in lines[i] for i in runs)
+    assert 'assert vox.__file__.startswith("/opt/vox/venv/")' in script
+
+
+def relock_commands() -> str:
+    """The shell block in RELEASING.md's relock step."""
+    step = (REPO / "RELEASING.md").read_text().split('<a id="relock"></a>', 1)[1]
+    return textwrap.dedent(re.search(r"```sh\n(.*?\n)\s*```", step, flags=re.DOTALL).group(1))
+
+
+def test_relock_runs_the_pinned_uv_from_a_private_directory(tmp_path):
+    """Another account could create a fixed /tmp directory first and swap the uv in it."""
+    commands = relock_commands()
+    assert "mktemp -d" in commands and "/tmp" not in commands
+    uv_version = re.search(r'^  UV_VERSION: "([^"]+)"', (WORKFLOWS / "ci.yml").read_text(), flags=re.MULTILINE).group(1)
+    bin_dir, checkout = tmp_path / "bin", tmp_path / "checkout"
+    bin_dir.mkdir()
+    (checkout / "scripts").mkdir(parents=True)
+    log = tmp_path / "log"
+    fakes = {
+        bin_dir / "uvx": f'#!/bin/sh\necho "uvx $*" >>{shlex.quote(str(log))}\n',
+        # Logs the directory's mode and path, then calls uv as the real lock.sh does
+        checkout / "scripts/lock.sh": (
+            '#!/bin/sh\nshim=$(command -v uv)\n'
+            f'echo "$(ls -ld "${{shim%/uv}}" | cut -c1-10) $shim" >>{shlex.quote(str(log))}\nuv export "$@"\n'
+        ),
+    }
+    for path, text in fakes.items():
+        path.write_text(text)
+        path.chmod(0o755)
+    shims = set()
+    for _ in range(2):
+        log.unlink(missing_ok=True)
+        subprocess.run(
+            ["bash", "-euc", commands], cwd=checkout, check=True,
+            env={"PATH": f"{bin_dir}:{os.environ['PATH']}", "TMPDIR": str(tmp_path), "HOME": str(tmp_path)},
+        )
+        calls = log.read_text().splitlines()
+        pinned = f"uvx uv@{uv_version}"
+        assert calls[0::2] == [f"{pinned} lock", f"{pinned} export", f"{pinned} export --check"]
+        for call in calls[1::2]:
+            mode, shim = call.split(" ", 1)
+            assert mode == "drwx------", call
+            assert not Path(shim).parent.exists()  # removed afterwards
+            shims.add(shim)
+    assert len(shims) == 2  # a new directory each time, not a fixed path
+
+
+def test_readme_troubleshooting_gives_the_full_command_path():
+    """~/.local/bin is not on macOS's default PATH, so a bare `vox` is often "command not found"."""
+    readme = (REPO / "README.md").read_text()
+    troubleshooting = readme.split("\n## Troubleshooting\n", 1)[1].split("\n## ", 1)[0]
+    assert not re.search(r"`vox[ `]", troubleshooting)
+    assert "`~/.local/bin/vox -v`" in troubleshooting and "`/usr/bin/vox`" in troubleshooting
