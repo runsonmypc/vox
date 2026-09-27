@@ -4,6 +4,7 @@ import io
 import logging
 import subprocess
 import sys
+import threading
 import wave
 from unittest.mock import AsyncMock, patch
 
@@ -11,7 +12,7 @@ import numpy as np
 import pytest
 from openai import OpenAIError
 
-from vox.audio import to_16k_mono
+from vox.audio import has_speech, to_16k_mono
 from vox.config import Config
 from vox.errors import TranscriptionError
 from vox.transcribe import (
@@ -169,7 +170,8 @@ async def test_a_long_recording_goes_up_in_parts_joined_with_a_space(fake_openai
     transcriber._openai()
     create_mock(fake_openai).side_effect = ["First part.", "  ", "second part."]
 
-    with patch("vox.transcribe.upload_wavs", return_value=[b"one", b"two", b"three"]):
+    with patch("vox.transcribe.upload_wavs", return_value=[b"one", b"two", b"three"]), \
+         patch("vox.transcribe.has_speech", return_value=True):
         assert await transcriber.transcribe(WAV) == "First part. second part."
     uploads = [c.kwargs["file"][1] for c in create_mock(fake_openai).call_args_list]
     assert uploads == [b"one", b"two", b"three"]
@@ -181,11 +183,48 @@ async def test_a_failed_part_keeps_the_text_already_transcribed(fake_openai):
     transcriber._openai()
     create_mock(fake_openai).side_effect = ["First part.", OpenAIError("rate limited")]
 
-    with patch("vox.transcribe.upload_wavs", return_value=[b"one", b"two", b"three"]):
+    with patch("vox.transcribe.upload_wavs", return_value=[b"one", b"two", b"three"]), \
+         patch("vox.transcribe.has_speech", return_value=True):
         with pytest.raises(PartialTranscriptionError, match="part 2 of 3") as excinfo:
             await transcriber.transcribe(WAV)
     assert excinfo.value.text == "First part."
     assert create_mock(fake_openai).await_count == 2
+
+
+def _tone(seconds, amplitude, rate=16000):
+    t = np.arange(int(rate * seconds)) / rate
+    return make_wav(np.sin(2 * np.pi * 300 * t) * amplitude, rate)
+
+
+@pytest.mark.anyio
+async def test_a_part_without_speech_is_not_uploaded(fake_openai, caplog):
+    """A recording left running until the limit can end in a silent part; it would be billed for nothing."""
+    transcriber = Transcriber(Config(openai_api_key=KEY))
+    transcriber._openai()
+    create_mock(fake_openai).side_effect = ["First part.", "Third part."]
+    speech, quiet = _tone(1, 3000), _tone(1, 3)
+    loop_thread = threading.get_ident()
+    checked_on = []
+
+    def check(part):
+        checked_on.append(threading.get_ident())
+        return has_speech(part)
+
+    with patch("vox.transcribe.upload_wavs", return_value=[speech, quiet, speech]), \
+         patch("vox.transcribe.has_speech", side_effect=check), caplog.at_level(logging.INFO, logger="vox.transcribe"):
+        assert await transcriber.transcribe(WAV) == "First part. Third part."
+    assert [c.kwargs["file"][1] for c in create_mock(fake_openai).call_args_list] == [speech, speech]
+    assert "Skipped 1 of 3 parts with no speech" in caplog.text
+    assert len(checked_on) == 3 and loop_thread not in checked_on  # off the event loop
+
+
+@pytest.mark.anyio
+async def test_a_recording_in_one_part_is_not_checked_again(fake_openai):
+    """The daemon already checked it for speech before calling the transcriber."""
+    with patch("vox.transcribe.has_speech") as check:
+        assert await Transcriber(Config(openai_api_key=KEY)).transcribe(_tone(1, 3)) == "hello there"
+    check.assert_not_called()
+    assert create_mock(fake_openai).await_count == 1
 
 
 @pytest.mark.anyio

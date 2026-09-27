@@ -9,7 +9,7 @@ import threading
 import wave
 from typing import TYPE_CHECKING, Any
 
-from .audio import upload_wavs
+from .audio import has_speech, upload_wavs
 from .config import Config
 from .errors import TranscriptionError
 from .window import AppContext
@@ -226,6 +226,12 @@ class Transcriber:
             log.debug("Transcription prompt: %d chars", len(echo))
         if len(parts) > 1:
             log.info("Recording is over the upload limit; sending it in %d parts", len(parts))
+            # The daemon checked the whole recording for speech; a long one can still end in a
+            # silent part (a recording left running until the limit), which would be billed for nothing
+            speech = await asyncio.to_thread(lambda: [part for part in parts if has_speech(part)])
+            if len(speech) < len(parts):
+                log.info("Skipped %d of %d parts with no speech", len(parts) - len(speech), len(parts))
+            parts = speech
 
         texts: list[str] = []
         for number, part in enumerate(parts, 1):
