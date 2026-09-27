@@ -11,6 +11,7 @@ import numpy as np
 import pytest
 from openai import OpenAIError
 
+from vox.audio import to_16k_mono
 from vox.config import Config
 from vox.errors import TranscriptionError
 from vox.transcribe import (
@@ -140,7 +141,7 @@ async def test_upload_is_16k_mono(fake_openai):
     with wave.open(io.BytesIO(data), "rb") as wf:
         assert (wf.getframerate(), wf.getnchannels(), wf.getsampwidth()) == (16000, 1, 2)
         samples = np.frombuffer(wf.readframes(wf.getnframes()), dtype=np.int16)
-    np.testing.assert_array_equal(samples, ramp[::3])
+    np.testing.assert_array_equal(samples, to_16k_mono(ramp, 48000))
 
 
 @pytest.mark.anyio

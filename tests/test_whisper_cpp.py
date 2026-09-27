@@ -119,7 +119,7 @@ async def test_local_mode_uses_batch_pipeline_and_records_mode(tmp_path):
         await _process(
             wav_data=_wav(), config=config, batch_transcriber=transcriber,
             streaming_transcriber=None, stream_task=None, sounds=MagicMock(),
-            queue=queue, context=context, screen_capture_future=None, history=history,
+            queue=queue, context=context, screen_capture_future=None, mode="whisper_cpp", history=history,
         )
     transcriber.transcribe.assert_awaited_once()
     paste.assert_called_once_with("alex@example.com", AppType.EMAIL)

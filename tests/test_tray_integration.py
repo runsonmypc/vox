@@ -103,15 +103,10 @@ def daemon_env(transcript="hello world", screen_capture=None):
         future.set_result("")
         return future
 
-    from vox import daemon
-
-    # The daemon's OpenAI transcriber class; drop the fallback once the WhisperTranscriber alias is gone everywhere
-    transcriber = "Transcriber" if hasattr(daemon, "Transcriber") else "WhisperTranscriber"
-
     with patch("vox.daemon.HotkeyListener"), \
          patch("vox.daemon.Recorder", return_value=env["recorder"]), \
          patch("vox.daemon.SoundPlayer", return_value=env["sounds"]), \
-         patch.object(daemon, transcriber, return_value=env["batch"]), \
+         patch("vox.daemon.Transcriber", return_value=env["batch"]), \
          patch("vox.daemon._config_reloader", side_effect=idle_reloader), \
          patch("vox.daemon.start_screen_capture", side_effect=screen_capture or captured), \
          patch("vox.daemon.detect_active_window", return_value=AppContext("code", "VSCode", AppType.EDITOR)), \
