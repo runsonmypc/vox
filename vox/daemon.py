@@ -52,6 +52,9 @@ _POST_ROLL_SECONDS = 0.12
 _SCREEN_WAIT_SECONDS = 1.5
 # The device re-scan restarts PortAudio, which on Linux also plays Vox's sounds: let them finish first
 _DEVICE_REFRESH_DELAY = 1.0
+# macOS also re-scans while idle, since the restart costs about 1 ms there. On Linux it costs about 45 ms,
+# and PipeWire's or PulseAudio's "default" device already follows hotplugs, so the re-scan after a recording does.
+_IDLE_DEVICE_SCAN_SECONDS: float | None = 30.0 if sys.platform == "darwin" else None
 _CONFIG_POLL_SECONDS = 2.0
 
 
@@ -229,6 +232,7 @@ class _Daemon:
                 except Exception:
                     log.exception("Unexpected error handling %r", event)
                     await self._recover()
+                self._scan_devices_while_idle()
         except asyncio.CancelledError:
             pass
         finally:
@@ -603,6 +607,11 @@ class _Daemon:
         if self.tray is not None:
             self.tray.set_notice(SILENT_MIC_NOTICE if silent else _platform_notice())
 
+    def _scan_devices_while_idle(self) -> None:
+        """Where a re-scan is cheap, keep one scheduled while idle, so a new microphone shows up without a recording."""
+        if _IDLE_DEVICE_SCAN_SECONDS is not None and self.state is State.IDLE and self._device_timer is None:
+            self._schedule_device_refresh(_IDLE_DEVICE_SCAN_SECONDS)
+
     def _schedule_device_refresh(self, delay: float) -> None:
         """Send the tray a fresh input-device list soon: PortAudio only sees new devices after a restart."""
         if self.tray is None:
@@ -623,15 +632,16 @@ class _Daemon:
                 self.tray.devices_changed(devices)
         except Exception:
             log.exception("Could not refresh the input device list")
+        self._scan_devices_while_idle()
 
     async def _settle_devices(self) -> None:
-        """Keep the PortAudio restart clear of new streams and sounds: drop a pending one, finish a running one."""
-        if self._device_timer is not None:
-            self._device_timer.cancel()
-            self._device_timer = None
+        """Keep the PortAudio restart clear of new streams and sounds: finish a running one, drop a pending one."""
         job, self._device_job = self._device_job, None
         if job is not None and not job.done():
-            await job
+            await job  # at most one re-scan: about 1 ms on macOS, 45 ms on Linux
+        if self._device_timer is not None:  # including the idle re-scan the job just scheduled
+            self._device_timer.cancel()
+            self._device_timer = None
 
 
 def _open_history() -> HistoryDB | None:

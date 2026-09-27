@@ -476,6 +476,40 @@ async def test_a_new_event_cancels_a_pending_device_rescan():
 
 
 @pytest.mark.anyio
+async def test_devices_are_rescanned_every_so_often_while_idle_where_that_is_cheap():
+    tray = MagicMock()
+    with patch("vox.daemon._IDLE_DEVICE_SCAN_SECONDS", 0.01), patch("vox.daemon._DEVICE_REFRESH_DELAY", 0.01):
+        async with running(openai_config(), tray) as h:
+            scans = h.recorder.refresh_input_devices
+            await until(lambda: scans.call_count >= 3)
+
+            h.send("toggle")
+            await until(lambda: h.state is State.RECORDING)
+            count = scans.call_count
+            await settle()
+            assert scans.call_count == count  # never while recording
+
+            h.send("cancel")
+            await until(lambda: scans.call_count >= count + 2)
+
+
+@pytest.mark.anyio
+async def test_without_idle_rescans_devices_are_rescanned_only_on_return_to_idle():
+    tray = MagicMock()
+    with patch("vox.daemon._IDLE_DEVICE_SCAN_SECONDS", None), patch("vox.daemon._DEVICE_REFRESH_DELAY", 0.01):
+        async with running(openai_config(), tray) as h:
+            scans = h.recorder.refresh_input_devices
+            await until(lambda: scans.called)
+            await settle()
+            assert scans.call_count == 1
+
+            h.send("toggle", "cancel")
+            await until(lambda: scans.call_count == 2)
+            await settle()
+            assert scans.call_count == 2
+
+
+@pytest.mark.anyio
 async def test_a_silent_microphone_shows_a_notice_until_audio_returns():
     tray = MagicMock()
     async with running(openai_config(), tray) as h:
