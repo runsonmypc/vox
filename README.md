@@ -214,8 +214,9 @@ Your choices in the menu are saved in `~/.config/vox/config.toml`.
 
 Vox works without a config file. To change a setting, create `~/.config/vox/config.toml` (a
 commented copy of every setting is in [`config.example.toml`](config.example.toml)). Vox applies
-most changes within a few seconds; changes to `[hotkey]`, `[context]`, `channels` and the
-recording limit apply after you quit and reopen Vox.
+changes within a few seconds of a save, except `[hotkey]`, which applies after you quit and reopen
+Vox. Screen hints and the recording limit apply from the next dictation, and `[audio]` changes
+wait for a recording in progress to end.
 
 | Setting | Default | Meaning |
 | --- | --- | --- |

@@ -1,7 +1,8 @@
 # Vox configuration: copy to ~/.config/vox/config.toml and uncomment what you want to change.
-# Every commented-out setting shows its default. Vox applies most changes within a few seconds of a
-# save; changes to [hotkey], [context], channels and the recording limit apply after a restart
-# (Quit Vox, then open it again).
+# Every commented-out setting shows its default. Vox applies changes within a few seconds of a save,
+# except [hotkey], which applies after a restart (Quit Vox, then open it again). Screen hints and the
+# recording limit apply from the next dictation, and [audio] changes wait for a recording in progress
+# to end.
 #
 # The OpenAI API key does not go here. Choose Set API Key… from the Vox menu; Vox keeps it in the
 # macOS Keychain or your Linux login keyring. OPENAI_API_KEY in the environment overrides it.
