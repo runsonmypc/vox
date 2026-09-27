@@ -9,4 +9,5 @@ build/
 .ruff_cache/
 .env
 *.wav
-!sounds/*.wav
+# Claude Code's per-task git worktrees
+.claude/worktrees/
