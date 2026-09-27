@@ -533,26 +533,27 @@ class _Daemon:
     def _ensure_transcriber(self) -> bool:
         """Have a transcriber for the current mode, which a config edit may have changed.
 
-        While the mode can't run (config.mode_error), each hotkey press tries
-        again, so fixing the setup needs no restart.
+        A whisper.cpp setup is checked on every press (a PATH lookup and a stat), since its binary or
+        model can go away while Vox runs. While the mode can't run (config.mode_error), each hotkey
+        press tries again, so fixing the setup needs no restart.
         """
         config = self.config
         local = config.mode == "whisper_cpp"
-        if config.mode_error is None and self.batch_transcriber is not None and self.transcriber_local == local:
+        if not local and config.mode_error is None and self.batch_transcriber is not None and not self.transcriber_local:
             return True
-        had_error = config.mode_error is not None
+        old_error = config.mode_error
         try:
             transcriber = self._build_transcriber(config.mode)
         except ConfigError as e:
             config.mode_error = str(e)
             log.warning("Not recording: %s", e)
             self.sounds.play("error")
-            if self.tray is not None and not had_error:
+            if self.tray is not None and config.mode_error != old_error:
                 self.tray.mode_changed()
             return False
         config.mode_error = None
         self._use_transcriber(transcriber, config.mode)
-        if self.tray is not None and had_error:
+        if self.tray is not None and old_error is not None:
             self.tray.mode_changed()
         return True
 
@@ -946,6 +947,12 @@ async def _config_reloader(config: Config, recorder: Recorder, tray: TrayManager
             config.whisper_cpp_model = new_config.whisper_cpp_model
             config.whisper_language = new_config.whisper_language
             config.whisper_prompt = new_config.whisper_prompt
+            # The status line names a problem with the mode the file now selects, not one it moved away
+            # from; without a key an OpenAI mode is reported apart from this
+            mode_error = mode_problem(config, "whisper_cpp") if config.mode == "whisper_cpp" else None
+            if mode_error is not None and mode_error != config.mode_error:
+                log.warning("Local transcription can't run: %s", mode_error)
+            config.mode_error = mode_error
 
             # Apply audio settings only when the file changed them, so a device picked
             # from the menu bar survives unrelated edits such as vocabulary changes.

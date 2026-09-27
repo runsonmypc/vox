@@ -378,6 +378,23 @@ async def test_a_mode_that_cannot_run_blocks_recording_and_is_retried_on_each_to
 
 
 @pytest.mark.anyio
+async def test_a_local_setup_that_breaks_while_vox_runs_is_caught_before_recording():
+    local = MagicMock()
+    cpp = {"side_effect": [local, ConfigError("whisper.cpp model not found: /models/ggml.bin")]}
+    config = Config(mode="whisper_cpp")
+    tray = MagicMock()
+
+    async with running(config, tray, cpp=cpp) as h:
+        assert config.mode_error is None
+        h.send("toggle")  # the model was moved since the last dictation
+        await until(lambda: h.played("error"))
+        assert h.state is State.IDLE
+        h.recorder.start.assert_not_called()  # nothing is recorded only to be lost at the end
+        assert config.mode_error == "whisper.cpp model not found: /models/ggml.bin"
+        tray.mode_changed.assert_called_once()  # the status line names the problem
+
+
+@pytest.mark.anyio
 async def test_a_mode_edited_in_the_file_gets_its_own_transcriber_at_the_next_toggle():
     local = MagicMock()
     config = openai_config()
@@ -1106,3 +1123,53 @@ async def test_a_later_edit_that_still_fails_replaces_the_error_and_is_logged_on
 
     assert caplog.text.count("Config reload failed") == 1
     tray.mode_changed.assert_not_called()
+
+
+def local_setup(tmp_path, model="ggml.bin"):
+    """config.toml text for a whisper.cpp setup whose binary exists; the model exists as ggml.bin."""
+    binary = tmp_path / "whisper-cli"
+    binary.write_text("#!/bin/sh\n")
+    binary.chmod(0o755)
+    (tmp_path / "ggml.bin").write_bytes(b"model")
+    return f'[transcription]\nmode = "whisper_cpp"\n[whisper_cpp]\nbinary = "{binary}"\nmodel = "{tmp_path / model}"\n'
+
+
+def rewrite(path, text):
+    """Edit the file so the reloader sees a change, even within the file system's time resolution."""
+    mtime = path.stat().st_mtime
+    path.write_text(text)
+    os.utime(path, (mtime + 10, mtime + 10))
+
+
+@pytest.mark.anyio
+async def test_a_reload_that_breaks_the_local_setup_shows_the_problem_at_once(tmp_path, caplog):
+    path = tmp_path / "config.toml"
+    path.write_text(local_setup(tmp_path))
+    config = load_config(path)
+    tray = MagicMock()
+
+    async with reloading(config, MagicMock(), tray):
+        rewrite(path, local_setup(tmp_path, model="ggml.binx"))  # a typo in the model path
+        await until(lambda: tray.mode_changed.called)
+        assert config.mode_error == f"whisper.cpp model not found: {tmp_path / 'ggml.binx'}"
+        assert "Local transcription can't run: whisper.cpp model not found" in caplog.text
+
+        rewrite(path, local_setup(tmp_path))
+        await until(lambda: tray.mode_changed.call_count == 2)
+        assert config.mode_error is None
+
+
+@pytest.mark.anyio
+async def test_a_reload_away_from_a_broken_local_setup_clears_its_problem(tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_text('[transcription]\nmode = "whisper_cpp"\n[whisper_cpp]\nmodel = "/nonexistent/ggml.bin"\n')
+    config = load_config(path)
+    config.mode_error = "whisper.cpp model not found: /nonexistent/ggml.bin"  # what __main__ found at startup
+    tray = MagicMock()
+
+    async with reloading(config, MagicMock(), tray):
+        rewrite(path, '[transcription]\nmode = "batch"\n')
+        await until(lambda: tray.mode_changed.called)
+
+    assert config.mode == "batch"
+    assert config.mode_error is None  # the status line no longer names the whisper.cpp problem
