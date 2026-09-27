@@ -248,6 +248,43 @@ def test_screen_vocabulary_never_includes_secrets():
         assert word in vocab
 
 
+@pytest.mark.parametrize("secret, pieces", [
+    # A bare AWS secret key: the word split used to cut it at "/" into short harmless-looking words
+    ("wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", ["wJalr", "K7MDENG", "bPxRfi"]),
+    ("AccountKey Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==",
+     ["Eby8", "K1SZ", "KBHB"]),
+    ("QyNTUxOQAAACB+jTgB5sFpf4Mn/PlGvXq9t3YkR2wZ8hL0cN1mJ6uA7QAAAJgAbCdeAGwn", ["QyNTU", "jTgB", "PlGv"]),
+    ("api key a1b2c3d4e5f60718293a4b5c6d7e8f90", ["a1b2"]),
+    ("token 3f2504e0-4f89-11d3-9a0c-0305e82c3301", ["3f25", "f2504e0"]),
+])
+def test_screen_vocabulary_drops_base64_hex_and_uuid_keys_whole(secret, pieces):
+    joined = " ".join(_extract_vocab(f"Kubernetes {secret} FastAPI"))
+    for piece in pieces:
+        assert piece not in joined
+    assert "Kubernetes" in joined and "FastAPI" in joined
+
+
+def test_a_private_key_on_screen_sends_none_of_its_lines():
+    screen = "\n".join([
+        "cat ~/.ssh/id_ed25519",
+        "-----BEGIN OPENSSH PRIVATE KEY-----",
+        "b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW",
+        "QyNTUxOQAAACB+jTgB5sFpf4Mn/PlGvXq9t3YkR2wZ8hL0cN1mJ6uA7QAAAJgAbCdeAGwn",
+        "jTgB5sFpf4Mn/PlGv",  # a short last line
+        "-----END OPENSSH PRIVATE KEY-----",
+        "KubeClient",
+    ])
+    context = AppContext(wm_class="term", window_title="Terminal", app_type=AppType.TERMINAL, screen_text=screen)
+    vocab = build_vocabulary(Config(), context)
+    assert "KubeClient" in vocab
+    assert not any(piece in " ".join(vocab) for piece in ["b3Bl", "QyNT", "jTgB", "PlGv"])
+
+
+def test_long_words_without_digits_and_dashed_words_are_not_mistaken_for_keys():
+    vocab = _extract_vocab("snake_case_identifier_name Task-Management-Dashboard monkeyJumpsOverTheLazyDog")
+    assert vocab == ["snake_case_identifier_name", "Task-Management-Dashboard", "monkeyJumpsOverTheLazyDog"]
+
+
 def _context(title="main.py - Visual Studio Code", screen="def handleRequest(): KubeClient"):
     return AppContext(wm_class="code", window_title=title, app_type=AppType.EDITOR, screen_text=screen)
 

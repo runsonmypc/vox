@@ -44,13 +44,36 @@ _TECHNICAL_RE = re.compile(r"[a-z][A-Z]|[A-Z]{2,}|_|\d")
 # Credential formats a terminal, .env file or dashboard on screen may show. They rank high as
 # "technical" words, so without this filter they would be sent to the provider as hints.
 _SECRET_RE = re.compile(
-    r"sk-[\w-]{16,}|gh[po]_\w{16,}|github_pat_\w{16,}|xox[abprs]-[\w-]{8,}"
-    r"|A(?:KIA|SIA)[0-9A-Z]{12,}|AIza[\w-]{20,}|eyJ[\w.-]{10,}"
+    r"(?<![A-Za-z0-9])(?:sk-[\w-]{16,}|gh[po]_\w{16,}|github_pat_\w{16,}|xox[abprs]-[\w-]{8,}"
+    r"|A(?:KIA|SIA)[0-9A-Z]{12,}|AIza[\w-]{20,}|eyJ[\w.-]{10,})"
 )
 # The value in "API_KEY=...", "password: ...", '"token": "..."' and the like
 _SECRET_VALUE_RE = re.compile(
     r"""(?i)(\w*(?:key|token|secret|passw(?:or)?d)\w*)["']?\s*[=:]\s*(?:"[^"\n]*"|'[^'\n]*'|[^\s"',;]+)"""
 )
+# A PEM or OpenSSH key block, whose last line can be too short for the run rule below
+_PEM_BLOCK_RE = re.compile(r"-----BEGIN [^-\n]+-----.*?(?:-----END [^-\n]+-----|\Z)", re.S)
+# Text between whitespace and quotes. Secrets are judged per token, before the word split cuts
+# a base64 key apart at "/", "+" and "=" into pieces too short to look random.
+_TOKEN_RE = re.compile(r"""[^\s"'`]+""")
+# 20+ characters of the base64/base64url alphabet mixing letters and digits: an AWS or Azure
+# key, a private-key line, a hex or UUID token. Long identifiers with digits go too; nobody
+# dictates those.
+_KEY_RUN_RE = re.compile(r"[A-Za-z0-9+/=_-]{20,}")
+
+
+def _is_secret_token(token: str) -> bool:
+    if _SECRET_RE.search(token):
+        return True
+    return any(
+        any(c.isdigit() for c in run) and any(c.isalpha() for c in run) for run in _KEY_RUN_RE.findall(token)
+    )
+
+
+def _drop_secrets(text: str) -> str:
+    text = _PEM_BLOCK_RE.sub(" ", text)
+    text = _SECRET_VALUE_RE.sub(r"\1", text)
+    return _TOKEN_RE.sub(lambda m: "" if _is_secret_token(m.group()) else m.group(), text)
 
 
 def _looks_secret(word: str) -> bool:
@@ -67,8 +90,7 @@ def _looks_secret(word: str) -> bool:
 
 def _extract_vocab(screen_text: str, max_words: int = 25) -> list[str]:
     """Extract unique, technical words from screen text for Whisper vocabulary hints, never secrets."""
-    screen_text = _SECRET_VALUE_RE.sub(r"\1", screen_text)
-    words = re.findall(r"[A-Za-z][\w.-]*[A-Za-z\d]|[A-Za-z]+", screen_text)
+    words = re.findall(r"[A-Za-z][\w.-]*[A-Za-z\d]|[A-Za-z]+", _drop_secrets(screen_text))
     seen: set[str] = set()
     vocab: list[str] = []
     for w in words:
