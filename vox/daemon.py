@@ -679,17 +679,11 @@ async def _process(
     ``mode`` is the mode the recording started in; a config reload may change config.mode meanwhile.
     """
     mode = mode or config.mode
-    use_streaming = mode == "streaming" and streaming_transcriber is not None
+    use_streaming = streaming_transcriber is not None  # only a streaming recording has one
     try:
         t0 = time.monotonic()
 
         if not use_streaming:
-            if streaming_transcriber is not None:
-                if stream_task is not None:
-                    stream_task.cancel()
-                    await asyncio.wait([stream_task])
-                await streaming_transcriber.close()
-                streaming_transcriber = stream_task = None
             # VAD gate only for batch modes. Streaming has its own silence/hallucination
             # guard and the local VAD produces false negatives that drop real speech.
             if not await asyncio.to_thread(has_speech, wav_data):
@@ -745,7 +739,7 @@ async def _process(
         raise
     except PartialTranscriptionError as e:
         # The parts that did transcribe are billed: keep them where the user can copy them
-        log.error("Transcription failed partway (%s); the first part is saved in history", e)
+        log.error("Transcription failed partway (%s); the parts transcribed so far are saved in history", e)
         sounds.play("error")
         if history is not None and await _record_history(history, e.text, context, wav_data, mode) and tray is not None:
             tray.history_changed()

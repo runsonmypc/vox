@@ -239,14 +239,8 @@ async def test_daemon_silence_aborts_without_pasting():
     mock_batch = MagicMock()
     mock_batch.transcribe = AsyncMock()
 
-    mock_streaming = MagicMock()
-    mock_streaming.finish = AsyncMock()
-    mock_streaming.close = AsyncMock()
-
-    # Active stream task and screen capture future
-    stream_task = asyncio.create_task(asyncio.sleep(10.0))
-    loop = asyncio.get_running_loop()
-    screen_capture_future = loop.create_future()
+    # A batch recording has no live session, only the screen capture started with it
+    screen_capture_future = asyncio.get_running_loop().create_future()
 
     with patch("vox.daemon.has_speech", return_value=False), \
          patch("vox.daemon.paste") as mock_paste:
@@ -255,19 +249,19 @@ async def test_daemon_silence_aborts_without_pasting():
             wav_data=wav_data,
             config=config,
             batch_transcriber=mock_batch,
-            streaming_transcriber=mock_streaming,
-            stream_task=stream_task,
+            streaming_transcriber=None,
+            stream_task=None,
             sounds=MagicMock(),
             queue=queue,
             context=context,
             screen_capture_future=screen_capture_future,
+            mode="batch",
         )
 
-        mock_streaming.finish.assert_not_called()
-        mock_streaming.close.assert_awaited_once()
         mock_batch.transcribe.assert_not_called()
         mock_paste.assert_not_called()
-        assert stream_task.cancelled()
+        assert screen_capture_future.cancelled()
+        assert queue.get_nowait() == "process_done"
         assert screen_capture_future.cancelled()
 
 
