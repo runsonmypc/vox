@@ -2,7 +2,7 @@
 
 All notable changes to Vox are listed here. Vox follows [semantic versioning](https://semver.org/).
 
-## [1.0.0] - 2026-09-26
+## [1.0.0] - 2026-09-27
 
 The first public release.
 
