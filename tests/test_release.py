@@ -225,6 +225,17 @@ def test_deb_and_install_sh_need_the_same_system_packages():
     assert install_sh_packages() - {"python3-venv"} <= deb_depends()
 
 
+def test_deb_smoke_test_imports_the_packaged_vox_not_the_checkout():
+    """CI runs the smoke test from the checkout, where python -c would import its vox/ instead of /opt/vox."""
+    script = (REPO / "packaging/deb/smoke-test.sh").read_text()
+    lines = script.splitlines()
+    cd = lines.index("cd /")
+    assert lines.index('deb=$(realpath "$1")') < cd
+    runs = [i for i, line in enumerate(lines) if '"$py"' in line]
+    assert runs and all(i > cd and '"$py" -P -c' in lines[i] for i in runs)
+    assert 'assert vox.__file__.startswith("/opt/vox/venv/")' in script
+
+
 def test_readme_troubleshooting_gives_the_full_command_path():
     """~/.local/bin is not on macOS's default PATH, so a bare `vox` is often "command not found"."""
     readme = (REPO / "README.md").read_text()

@@ -14,6 +14,8 @@ die() { printf 'error: %s\n' "$*" >&2; exit 1; }
 [ $# -eq 1 ] || die "usage: smoke-test.sh DEB"
 [ "$(id -u)" -eq 0 ] || die "run this as root in a throwaway container or VM"
 deb=$(realpath "$1")
+# CI runs this from the checkout, whose vox/ python would otherwise import instead of the package's
+cd /
 version=$(dpkg-deb --field "$deb" Version)
 unit=/usr/lib/systemd/user/vox.service
 login_link=/etc/systemd/user/graphical-session.target.wants/vox.service
@@ -41,15 +43,18 @@ grep -qx 'ExecStart=/usr/bin/vox' "$unit" || die "$unit does not run /usr/bin/vo
 # pynput and GTK need a display to import; xvfb is not a dependency, so it comes after the check above
 apt-get install -y -q xvfb xauth
 py=/opt/vox/venv/bin/python
-xvfb-run -a "$py" -c '
+# -P keeps the working directory off sys.path as well
+xvfb-run -a "$py" -P -c '
 import sys
-import gi, vox.daemon, vox.ui.tray, pystray
+import gi, vox, vox.daemon, vox.ui.tray, pystray
+assert vox.__file__.startswith("/opt/vox/venv/"), "imported Vox from " + vox.__file__
 assert "pystray._appindicator" in sys.modules, "pystray fell back from AppIndicator: " + pystray.Icon.__module__
 '
 # GTK 3 (the tray) and GTK 4 (the windows) cannot share a process
-xvfb-run -a "$py" -c '
+xvfb-run -a "$py" -P -c '
 import importlib, pkgutil
 import vox.ui.gtk as windows
+assert windows.__file__.startswith("/opt/vox/venv/"), "imported Vox from " + windows.__file__
 for module in pkgutil.iter_modules(windows.__path__, windows.__name__ + "."):
     importlib.import_module(module.name)
 '
