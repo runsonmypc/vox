@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from vox.config import load_config
+from vox.errors import ConfigError
 from vox.ui.vocab_model import VocabModel
 
 CONFIG = """\
@@ -110,7 +111,7 @@ def test_broken_config_is_reported_not_overwritten(tmp_path):
     path.write_text("[snippets\n")
     model = loaded(path)
     assert model.load_error and "Failed to parse" in model.load_error
-    with pytest.raises(Exception):
+    with pytest.raises(ConfigError, match="Failed to parse"):
         model.add_words("Vox")
     assert path.read_text() == "[snippets\n"
 
@@ -169,6 +170,45 @@ def test_mac_remove_word_from_its_row(appkit, cfg, mac_window):
     assert load_config(cfg).dictionary == []
     assert mac_window.words_table.enclosingScrollView().isHidden()
     assert not mac_window.words_empty[0].isHidden()
+
+
+def _key(AppKit, window, chars, code, flags=0, repeat=False):
+    return AppKit.NSEvent.keyEventWithType_location_modifierFlags_timestamp_windowNumber_context_characters_charactersIgnoringModifiers_isARepeat_keyCode_(
+        AppKit.NSEventTypeKeyDown, (0, 0), flags, 0, window.windowNumber(), None, chars, chars, repeat, code
+    )
+
+
+def test_mac_delete_key_removes_the_selection_once(appkit, cfg, mac_window):
+    mac_window.model.add_words("a, b, c")
+    mac_window.render()
+    window, table = mac_window.window, mac_window.words_table
+    window.makeFirstResponder_(table)
+    table.selectRowIndexes_byExtendingSelection_(appkit.NSIndexSet.indexSetWithIndex_(1), False)  # "a"
+
+    assert mac_window.handle_key(_key(appkit, window, "\x7f", 51)) is None
+    assert load_config(cfg).dictionary == ["FastAPI", "b", "c"]
+    assert table.selectedRowIndexes().count() == 0  # nothing left selected for a second press to remove
+
+    table.selectRowIndexes_byExtendingSelection_(appkit.NSIndexSet.indexSetWithIndex_(1), False)  # "b"
+    assert mac_window.handle_key(_key(appkit, window, "\x7f", 51, repeat=True)) is None
+    assert load_config(cfg).dictionary == ["FastAPI", "b", "c"]  # key repeat removes nothing
+
+
+def test_mac_escape_while_an_input_method_composes_keeps_the_window(appkit, mac_window):
+    window = mac_window.window
+    window.makeFirstResponder_(mac_window.word_field)
+    editor = mac_window.word_field.currentEditor()
+    if editor is None:
+        pytest.skip("The field needs a field editor")
+    editor.setMarkedText_selectedRange_replacementRange_("かな", (2, 0), (0, 0))
+    event = _key(appkit, window, "\x1b", 53)
+    assert mac_window.handle_key(event) is event  # the input method gets Escape; the window stays open
+
+
+def test_mac_command_n_opens_a_new_snippet_on_a_cyrillic_layout(appkit, mac_window):
+    command = appkit.NSEventModifierFlagCommand
+    assert mac_window.handle_key(_key(appkit, mac_window.window, "т", 45, command)) is None  # Cyrillic te on N
+    assert mac_window.editor is not None
 
 
 def test_mac_snippet_editor_adds_a_multiline_snippet(appkit, cfg, mac_window):

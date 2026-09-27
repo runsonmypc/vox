@@ -22,11 +22,7 @@ from vox.ui.tray import (
     _selected_device,
 )
 
-DEVICES = [
-    {"name": "MacBook Pro Microphone", "max_input_channels": 1},
-    {"name": "MacBook Pro Speakers", "max_input_channels": 0},
-    {"name": "USB Audio Interface", "max_input_channels": 2},
-]
+DEVICES = [(0, "MacBook Pro Microphone"), (2, "USB Audio Interface")]  # the daemon's input-device snapshot
 
 
 class FakeIcon:
@@ -152,30 +148,45 @@ def test_menu_actions_before_attach_are_ignored():
     find(icon.menu, "Pause Dictation")(icon)  # no loop yet: must not raise
 
 
+def device_items(icon):
+    return [(i.text, i.checked) for i in items(find(icon.menu, "Input Device").submenu)]
+
+
 def test_device_submenu_lists_input_devices_with_default_checked():
-    with patch("vox.ui.tray.sd.query_devices", return_value=DEVICES):
-        _, icon = make_tray(Config(audio_device=None))
-        submenu = find(icon.menu, "Input Device").submenu
-        names = [(i.text, i.checked) for i in items(submenu)]
-    assert names == [
+    tray, icon = make_tray(Config(audio_device=None))
+    tray.devices_changed(DEVICES)
+    assert device_items(icon) == [
         ("System Default", True),
         ("MacBook Pro Microphone", False),
         ("USB Audio Interface", False),
     ]
 
 
-@pytest.mark.parametrize("spec", [2, "usb audio"])
+@pytest.mark.parametrize("spec", [2, "usb audio", "USB Audio Interface"])
 def test_device_submenu_checks_configured_device(spec):
-    with patch("vox.ui.tray.sd.query_devices", return_value=DEVICES):
-        _, icon = make_tray(Config(audio_device=spec))
-        checked = [i.text for i in items(find(icon.menu, "Input Device").submenu) if i.checked]
-    assert checked == ["USB Audio Interface"]
+    tray, icon = make_tray(Config(audio_device=spec))
+    tray.devices_changed(DEVICES)
+    assert [text for text, checked in device_items(icon) if checked] == ["USB Audio Interface"]
 
 
-def test_device_submenu_survives_query_failure():
-    with patch("vox.ui.tray.sd.query_devices", side_effect=RuntimeError("PortAudio")):
-        _, icon = make_tray()
-        assert [i.text for i in items(find(icon.menu, "Input Device").submenu)] == ["System Default"]
+@pytest.mark.parametrize("spec, shown", [
+    (None, [("System Default", True)]),
+    ("USB Audio Interface", [("System Default", False), ("USB Audio Interface", True)]),
+    (3, [("System Default", False), ("Device 3", True)]),
+])
+def test_device_submenu_shows_the_current_device_until_the_first_snapshot(spec, shown):
+    _, icon = make_tray(Config(audio_device=spec))
+    assert device_items(icon) == shown
+
+
+def test_device_submenu_follows_the_latest_snapshot_and_never_asks_portaudio():
+    with patch("sounddevice.query_devices") as query:
+        tray, icon = make_tray(Config(audio_device=None))
+        tray.devices_changed(DEVICES)
+        tray.devices_changed([(0, "MacBook Pro Microphone"), (1, "AirPods Microphone")])  # plugged in later
+        assert [text for text, _ in device_items(icon)] == ["System Default", "MacBook Pro Microphone", "AirPods Microphone"]
+    query.assert_not_called()
+    assert icon.update_menu_calls >= 2
 
 
 def test_transcription_submenu_shows_modes_and_availability():
@@ -210,19 +221,56 @@ async def test_transcription_menu_sends_mode_to_daemon():
 
 
 @pytest.mark.anyio
-async def test_selecting_device_updates_config_on_daemon_loop():
+async def test_selecting_device_stores_its_name_on_daemon_loop():
     config = Config(audio_device=None)
-    with patch("vox.ui.tray.sd.query_devices", return_value=DEVICES):
-        tray, icon = make_tray(config)
-        tray.attach(asyncio.get_running_loop(), asyncio.Queue(), None, MagicMock())
-        find(find(icon.menu, "Input Device").submenu, "USB Audio Interface")(icon)
-        assert config.audio_device is None  # applied on the daemon loop, not the UI thread
-        await settle()
-        assert config.audio_device == 2
+    tray, icon = make_tray(config)
+    tray.attach(asyncio.get_running_loop(), asyncio.Queue(), None, MagicMock())
+    tray.devices_changed(DEVICES)
+    find(find(icon.menu, "Input Device").submenu, "USB Audio Interface")(icon)
+    assert config.audio_device is None  # applied on the daemon loop, not the UI thread
+    await settle()
+    assert config.audio_device == "USB Audio Interface"  # the name survives PortAudio renumbering devices
 
-        find(find(icon.menu, "Input Device").submenu, "System Default")(icon)
-        await settle()
-        assert config.audio_device is None
+    tray.devices_changed([(0, "AirPods Microphone"), (1, "USB Audio Interface")])
+    assert [text for text, checked in device_items(icon) if checked] == ["USB Audio Interface"]
+
+    find(find(icon.menu, "Input Device").submenu, "System Default")(icon)
+    await settle()
+    assert config.audio_device is None
+
+
+# -- Recording limit --------------------------------------------------------------
+
+
+def limit_items(icon):
+    return [(i.text, i.checked) for i in items(find(icon.menu, "Recording Limit").submenu)]
+
+
+def test_recording_limit_submenu_checks_the_current_limit():
+    config = Config(openai_api_key="test", max_recording_seconds=900)
+    tray, icon = make_tray(config)
+    assert limit_items(icon) == [
+        ("5 min", False), ("10 min", False), ("15 min", True), ("30 min", False), ("60 min", False),
+    ]
+    config.max_recording_seconds = 1800
+    tray.limit_changed()
+    assert [text for text, checked in limit_items(icon) if checked] == ["30 min"]
+
+
+def test_recording_limit_from_config_file_is_listed_and_checked():
+    _, icon = make_tray(Config(openai_api_key="test", max_recording_seconds=120))
+    assert [text for text, _ in limit_items(icon)] == ["2 min", "5 min", "10 min", "15 min", "30 min", "60 min"]
+    assert [text for text, checked in limit_items(icon) if checked] == ["2 min"]
+
+
+@pytest.mark.anyio
+async def test_recording_limit_item_sends_the_limit_to_the_daemon():
+    tray, icon = make_tray()
+    queue: asyncio.Queue[str] = asyncio.Queue()
+    tray.attach(asyncio.get_running_loop(), queue, None, MagicMock())
+    find(find(icon.menu, "Recording Limit").submenu, "10 min")(icon)
+    await settle()
+    assert queue.get_nowait() == "limit:600"
 
 
 @pytest.mark.anyio
@@ -290,7 +338,7 @@ async def test_recent_dictations_are_their_own_menu_section(tmp_path):
     tray.attach(asyncio.get_running_loop(), asyncio.Queue(), history, MagicMock())
     assert _sections(icon.menu) == [
         ["Vox · Idle"],
-        ["Pause Dictation", "Input Device", "Transcription"],
+        ["Pause Dictation", "Input Device", "Transcription", "Recording Limit"],
         [RECENT_HEADER, "“three”", "“two”", "“one”"],
         ["Search History…", "Vocabulary & Snippets…", "Set API Key…"],
         ["Quit Vox"],
@@ -310,6 +358,24 @@ def test_selected_device_resolution():
     assert _selected_device(5, devices) is None
     assert _selected_device("usb", devices) == 2
     assert _selected_device("missing", devices) is None
+    # A stored name picks its own device, not an earlier one whose name contains it
+    assert _selected_device("USB Audio", [(1, "USB Audio 2"), (4, "USB Audio")]) == 4
+    linux = [(0, "HDA Intel PCH: ALC257 Analog (hw:0,0)"), (1, "sysdefault"), (2, "pulse"), (3, "default")]
+    assert _selected_device("default", linux) == 3
+    assert _selected_device("Default ", linux) == 3
+
+
+@pytest.mark.anyio
+async def test_devices_with_the_same_name_check_the_first():
+    # Only the name is stored, so either pick checks the first: the device the recorder opens
+    config = Config(audio_device=None)
+    tray, icon = make_tray(config)
+    tray.attach(asyncio.get_running_loop(), asyncio.Queue(), None, MagicMock())
+    tray.devices_changed([(1, "USB Microphone"), (3, "USB Microphone")])
+    items(find(icon.menu, "Input Device").submenu)[2](icon)
+    await settle()
+    assert config.audio_device == "USB Microphone"
+    assert device_items(icon) == [("System Default", False), ("USB Microphone", True), ("USB Microphone", False)]
 
 
 @pytest.mark.anyio
@@ -524,3 +590,111 @@ def test_daemon_can_open_the_key_window():
     with patch("vox.ui.tray.threading.Thread"):
         tray.open_key_window()
     launcher.assert_called_once_with([sys.executable, "-m", KEY_WINDOW])
+
+
+# -- Status line problems -----------------------------------------------------------
+
+
+def test_status_line_reports_the_most_urgent_problem_while_idle():
+    config = Config(mode="batch")
+    config.mode_error = "whisper.cpp model not found: /models/ggml-base.bin"
+    tray, icon = make_tray(config)
+    tray.set_notice("Microphone is silent: check its permission")
+    assert icon.title == "Vox · API key needed"  # the key first
+
+    config.openai_api_key = "test"
+    tray.key_changed()
+    assert icon.title == "Vox · whisper.cpp model not found: /models/ggml-base.bin"  # then the mode
+    assert items(icon.menu)[0].text == icon.title
+
+    config.mode_error = None
+    tray.mode_changed()
+    assert icon.title == "Vox · Microphone is silent: check its permission"  # then the notice
+
+    tray.set_state("RECORDING")
+    assert icon.title == "Vox · Recording…"
+    tray.set_state("IDLE")
+    tray.set_notice(None)
+    assert icon.title == "Vox · Idle"
+
+
+def test_a_long_problem_is_shortened_to_one_line():
+    config = Config(mode="whisper_cpp")
+    config.mode_error = "whisper.cpp model not found:\n" + "/very/long/path" * 10
+    _, icon = make_tray(config)
+    assert "\n" not in icon.title
+    assert len(icon.title) <= len("Vox · ") + 72 and icon.title.endswith("…")
+
+
+# -- Window processes ---------------------------------------------------------------
+
+
+def test_every_window_process_is_waited_on_so_none_lingers(tmp_path):
+    config = Config()
+    config._config_path = tmp_path / "config.toml"
+    proc = _fake_proc()
+    tray, icon = make_tray(config, launcher=MagicMock(return_value=proc))
+    with patch("vox.ui.tray.threading.Thread") as thread:
+        find(icon.menu, "Vocabulary & Snippets…")(icon)
+    kwargs = thread.call_args.kwargs
+    kwargs["target"](*kwargs["args"])  # what the thread runs
+    proc.wait.assert_called_once_with()
+
+
+def test_closing_the_history_window_refreshes_recent_dictations(tmp_path):
+    history = HistoryDB(tmp_path / "history.db")
+    history.insert("kept")
+    history.insert("deleted in the window")
+    tray, icon = make_tray(launcher=MagicMock(return_value=_fake_proc()))
+    tray.attach(MagicMock(), MagicMock(), history, MagicMock())
+    with patch("vox.ui.tray.threading.Thread") as thread:
+        find(icon.menu, "Search History…")(icon)
+    history.delete(history.recent(1)[0].id)
+    kwargs = thread.call_args.kwargs
+    kwargs["target"](*kwargs["args"])  # the window exits
+    labels = [item.text for item in items(icon.menu)]
+    assert "“kept”" in labels and "“deleted in the window”" not in labels
+    history.close()
+
+
+def test_linux_reopen_process_is_waited_on():
+    from vox.ui import tray
+
+    reopened = _fake_proc()
+    with patch.object(tray.sys, "platform", "linux"), \
+         patch.object(tray, "_launch_window", return_value=reopened), \
+         patch.object(tray.threading, "Thread") as thread:
+        tray._focus_window(_fake_proc(), ["python", "-m", VOCAB_WINDOW])
+    assert thread.call_args.kwargs["target"] == reopened.wait
+    thread.return_value.start.assert_called_once_with()
+
+
+# -- macOS menu ---------------------------------------------------------------------
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="pystray's macOS backend")
+def test_darwin_menu_is_not_rebuilt_while_it_is_open():
+    """pystray maps a click to the item's tag in the newest callbacks list, so an open menu must keep its own."""
+    import pystray._darwin
+
+    from vox.ui import tray
+
+    VoxIcon = tray._darwin_icon_class()
+    icon = VoxIcon.__new__(VoxIcon)  # no __init__: never put a real item in the menu bar
+    icon._visible = False
+    with patch.object(pystray._darwin.Icon, "_update_menu") as rebuild, \
+         patch.object(tray, "_menu_is_tracking", return_value=True) as tracking, \
+         patch("PyObjCTools.AppHelper.callLater") as later:
+        icon.update_menu()
+        icon.update_menu()
+        rebuild.assert_not_called()  # the open menu and its callbacks stay as they are
+        later.assert_called_once()  # one rebuild, however many updates arrived
+
+        tracking.return_value = False  # the menu closed and the clicked item's action ran
+        delay, deferred = later.call_args.args
+        assert delay > 0  # a delayed call runs only in the default run-loop mode, never during tracking
+        deferred()
+        rebuild.assert_called_once_with()
+
+        icon.update_menu()
+        assert rebuild.call_count == 2  # closed: rebuilt at once

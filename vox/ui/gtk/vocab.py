@@ -10,15 +10,21 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 
-from ..vocab_model import VocabModel
+from ..vocab_model import (
+    LOAD_FAILED_TITLE,
+    NO_SNIPPETS,
+    NO_WORDS,
+    SAVE_FAILED_TITLE,
+    SNIPPETS_INTRO,
+    WORDS_INTRO,
+    VocabModel,
+    clash_warning,
+)
 from .common import Adw, GLib, Gtk, error_dialog, label, run_app
 
 log = logging.getLogger(__name__)
 
 APP_ID = "com.runsonmypc.vox.Vocabulary"
-
-_WORDS_INTRO = "Names, jargon and acronyms Vox should always spell exactly as written."
-_SNIPPETS_INTRO = "Say a trigger phrase on its own and Vox types the expansion instead."
 
 
 def _boxed_list(placeholder_title: str, placeholder_body: str) -> Gtk.ListBox:
@@ -70,13 +76,13 @@ class VocabWindow(Adw.ApplicationWindow):
         model.reload()
         self.render()
         if model.load_error:
-            error_dialog(self, "Couldn’t Read Your Settings", model.load_error)
+            error_dialog(self, LOAD_FAILED_TITLE, model.load_error)
 
     # -- Layout -------------------------------------------------------------
 
     def _build_words(self) -> Gtk.Widget:
         page = Adw.PreferencesPage()
-        adder = Adw.PreferencesGroup(description=_WORDS_INTRO)
+        adder = Adw.PreferencesGroup(description=WORDS_INTRO)
         self.word_entry = Adw.EntryRow(title="Add a word, or several separated by commas", show_apply_button=True)
         self.word_entry.set_use_markup(False)
         self.word_entry.connect("apply", lambda _row: self.add_words())
@@ -85,7 +91,7 @@ class VocabWindow(Adw.ApplicationWindow):
         page.add(adder)
 
         self.words_group = Adw.PreferencesGroup(title="Words")
-        self.words_list = _boxed_list("No Words Yet", "Add names and terms Vox tends to get wrong.")
+        self.words_list = _boxed_list(*NO_WORDS)
         self.words_group.add(self.words_list)
         page.add(self.words_group)
         self.words_footer = self._footer(page)
@@ -97,8 +103,8 @@ class VocabWindow(Adw.ApplicationWindow):
                                      valign=Gtk.Align.CENTER)
         self.new_button.add_css_class("flat")
         self.new_button.connect("clicked", lambda _button: self.open_editor(None))
-        group = Adw.PreferencesGroup(description=_SNIPPETS_INTRO, header_suffix=self.new_button)
-        self.snippets_list = _boxed_list("No Snippets Yet", "Type an address, a sign-off or a link just by saying a short phrase.")
+        group = Adw.PreferencesGroup(description=SNIPPETS_INTRO, header_suffix=self.new_button)
+        self.snippets_list = _boxed_list(*NO_SNIPPETS)
         group.add(self.snippets_list)
         page.add(group)
         self.snippets_footer = self._footer(page)
@@ -147,7 +153,7 @@ class VocabWindow(Adw.ApplicationWindow):
             write()
         except Exception as e:
             log.warning("Config update failed: %s", e)
-            error_dialog(self.editor or self, "Couldn’t Save", str(e))
+            error_dialog(self.editor or self, SAVE_FAILED_TITLE, str(e))
             return False
         self.render()
         return True
@@ -263,7 +269,7 @@ class SnippetEditor(Adw.Dialog):
         trigger = self.trigger.get_text()
         self.save_button.set_sensitive(bool(trigger.strip() and self.expansion_text().strip()))
         clash = self.owner.model.conflict(trigger, self.original)
-        self.warning.set_label(f"This replaces your “{clash}” snippet." if clash else "")
+        self.warning.set_label(clash_warning(clash) if clash else "")
         self.warning.set_visible(bool(clash))
 
     def save(self) -> None:

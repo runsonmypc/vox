@@ -15,6 +15,17 @@ from .. import keystore
 
 KEYS_URL = "https://platform.openai.com/api-keys"
 
+# What both windows say, so macOS and Linux never drift apart
+INTRO = "Vox sends your dictation to OpenAI to transcribe it, using your own API key."
+CHECKING = "Checking with OpenAI…"
+CHECK_FAILED_TITLE = "Couldn’t Check the Key"
+SAVE_ANYWAY = "Save Anyway"
+SAVE_FAILED_TITLE = "Couldn’t Save the Key"
+REMOVE_TITLE = "Remove the Saved Key?"
+REMOVE_MESSAGE = "Vox can’t transcribe with OpenAI until you save a key again."
+REMOVE_BUTTON = "Remove"
+REMOVE_FAILED_TITLE = "Couldn’t Remove the Key"
+
 # "Check with OpenAI before saving" starts ticked, so a mistyped or revoked key is caught before it is saved
 CHECK_BY_DEFAULT = True
 
@@ -29,6 +40,10 @@ class Outcome(Enum):
 class CheckResult:
     outcome: Outcome
     message: str = ""
+
+    @property
+    def save_anyway_question(self) -> str:
+        return f"{self.message} Save it anyway?"
 
 
 class KeyModel:

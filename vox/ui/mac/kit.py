@@ -23,6 +23,15 @@ DEFAULT_APP_SYMBOL = "waveform"
 
 KEY_RETURN, KEY_ENTER, KEY_ESCAPE, KEY_DELETE, KEY_FORWARD_DELETE = 36, 76, 53, 51, 117
 KEY_DOWN, KEY_UP = 125, 126
+KEY_C, KEY_F, KEY_N = 8, 3, 45  # the ANSI key positions, for layouts that type other letters there
+
+
+def shortcut_key(event: AppKit.NSEvent) -> str:
+    """The letter of a ⌘ shortcut, lowercased, also on layouts such as Cyrillic or Greek that type their own letters."""
+    for chars in (event.charactersIgnoringModifiers(), event.characters()):
+        if chars and chars.isascii():
+            return chars.lower()
+    return {KEY_C: "c", KEY_F: "f", KEY_N: "n"}.get(event.keyCode(), "")
 
 
 # -- Views --------------------------------------------------------------------
@@ -289,6 +298,22 @@ def alert(window: AppKit.NSWindow, title: str, message: str) -> None:
     sheet.setMessageText_(title)
     sheet.setInformativeText_(message)
     sheet.beginSheetModalForWindow_completionHandler_(window, None)
+
+
+def confirm(window: AppKit.NSWindow, title: str, message: str, button: str, destructive: bool,
+            then: Callable[[], None]) -> None:
+    """Ask in a sheet, with ``button`` and Cancel, and call ``then`` only when the user picks ``button``."""
+    sheet = AppKit.NSAlert.alloc().init()
+    sheet.setMessageText_(title)
+    sheet.setInformativeText_(message)
+    sheet.addButtonWithTitle_(button).setHasDestructiveAction_(destructive)
+    sheet.addButtonWithTitle_("Cancel")
+
+    def done(response: int) -> None:
+        if response == AppKit.NSAlertFirstButtonReturn:
+            then()
+
+    sheet.beginSheetModalForWindow_completionHandler_(window, done)
 
 
 def later(seconds: float, fn: Callable[[], None]) -> None:

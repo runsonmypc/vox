@@ -16,7 +16,23 @@ from Foundation import NSObject
 from PyObjCTools import AppHelper
 
 from ...keystore import KeystoreError
-from ..key_model import CHECK_BY_DEFAULT, KEYS_URL, CheckResult, KeyModel, Outcome, check_key
+from ..key_model import (
+    CHECK_BY_DEFAULT,
+    CHECK_FAILED_TITLE,
+    CHECKING,
+    INTRO,
+    KEYS_URL,
+    REMOVE_BUTTON,
+    REMOVE_FAILED_TITLE,
+    REMOVE_MESSAGE,
+    REMOVE_TITLE,
+    SAVE_ANYWAY,
+    SAVE_FAILED_TITLE,
+    CheckResult,
+    KeyModel,
+    Outcome,
+    check_key,
+)
 from . import kit
 
 log = logging.getLogger(__name__)
@@ -25,26 +41,9 @@ _WIDTH = 460
 _PAD = 20
 _TEXT_WIDTH = _WIDTH - 2 * _PAD
 
-_INTRO = "Vox sends your dictation to OpenAI to transcribe it, using your own API key."
-
 
 def _in_background(work: Callable[[], object], done: Callable[[object], None]) -> None:
     threading.Thread(target=lambda: AppHelper.callAfter(done, work()), daemon=True).start()
-
-
-def _confirm(window: AppKit.NSWindow, title: str, message: str, button: str, destructive: bool,
-             then: Callable[[], None]) -> None:
-    alert = AppKit.NSAlert.alloc().init()
-    alert.setMessageText_(title)
-    alert.setInformativeText_(message)
-    alert.addButtonWithTitle_(button).setHasDestructiveAction_(destructive)
-    alert.addButtonWithTitle_("Cancel")
-
-    def done(response: int) -> None:
-        if response == AppKit.NSAlertFirstButtonReturn:
-            then()
-
-    alert.beginSheetModalForWindow_completionHandler_(window, done)
 
 
 def _key_field(secure: bool) -> AppKit.NSTextField:
@@ -65,8 +64,9 @@ class KeyController(NSObject):
         self.model = model
         self.closed = False
         self.background = _in_background  # replaced in tests
-        self.confirm = _confirm
+        self.confirm = kit.confirm
         self._build()
+        model.reload()
         self.render()
         return self
 
@@ -86,7 +86,7 @@ class KeyController(NSObject):
         secondary = AppKit.NSColor.secondaryLabelColor()
 
         heading = kit.label("OpenAI API Key", 15, AppKit.NSFontWeightSemibold)
-        intro = self._wrapping(_INTRO, 13, secondary)
+        intro = self._wrapping(INTRO, 13, secondary)
         link = AppKit.NSButton.buttonWithTitle_target_action_("Get a key from OpenAI…", self, "openKeysPage:")
         link.setBezelStyle_(AppKit.NSBezelStyleInline)
         link.setBordered_(False)
@@ -204,17 +204,14 @@ class KeyController(NSObject):
             self.store(key)
             return
         self.set_busy(True)
-        self.set_status("Checking with OpenAI…")
+        self.set_status(CHECKING)
         self.background(lambda: check_key(key), lambda result: self.checked(key, result))
 
     def cancel_(self, sender) -> None:
         self.finish()
 
     def remove_(self, sender) -> None:
-        self.confirm(
-            self.window, "Remove the Saved Key?",
-            "Vox can’t transcribe with OpenAI until you save a key again.", "Remove", True, self.remove_key,
-        )
+        self.confirm(self.window, REMOVE_TITLE, REMOVE_MESSAGE, REMOVE_BUTTON, True, self.remove_key)
 
     def windowWillClose_(self, notification) -> None:
         self.closed = True
@@ -230,8 +227,8 @@ class KeyController(NSObject):
             self.set_status(result.message, error=True)
         else:
             self.set_status("")
-            self.confirm(self.window, "Couldn’t Check the Key", f"{result.message} Save it anyway?",
-                         "Save Anyway", False, lambda: self.store(key))
+            self.confirm(self.window, CHECK_FAILED_TITLE, result.save_anyway_question,
+                         SAVE_ANYWAY, False, lambda: self.store(key))
 
     @objc.python_method
     def store(self, key: str) -> None:
@@ -239,7 +236,7 @@ class KeyController(NSObject):
             self.model.save(key)
         except (KeystoreError, OSError) as e:
             log.warning("Couldn't save the API key: %s", e)
-            kit.alert(self.window, "Couldn’t Save the Key",
+            kit.alert(self.window, SAVE_FAILED_TITLE,
                       f"{e}\n\nIf macOS asked whether Vox may use the Keychain, choose Always Allow and try again.")
             return
         log.info("Saved the OpenAI API key")
@@ -250,7 +247,7 @@ class KeyController(NSObject):
         try:
             self.model.remove()
         except (KeystoreError, OSError) as e:
-            kit.alert(self.window, "Couldn’t Remove the Key", str(e))
+            kit.alert(self.window, REMOVE_FAILED_TITLE, str(e))
             return
         log.info("Removed the OpenAI API key")
         self.finish()

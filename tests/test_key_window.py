@@ -125,6 +125,30 @@ def test_check_key(error, outcome, words):
     assert KEY not in result.message
 
 
+def test_unchecked_result_asks_to_save_anyway():
+    result = CheckResult(Outcome.UNCHECKED, "Vox couldn’t reach OpenAI to check the key.")
+    assert result.save_anyway_question == "Vox couldn’t reach OpenAI to check the key. Save it anyway?"
+
+
+# -- Launch -------------------------------------------------------------------------
+
+
+def test_main_leaves_reading_the_keyring_to_the_window():
+    """On Linux a second launch only forwards to the open window, so it must not touch the keyring."""
+    import sys
+    from types import SimpleNamespace
+
+    from vox.ui import key_window
+
+    module = "vox.ui.mac.key" if sys.platform == "darwin" else "vox.ui.gtk.key"
+    fake = SimpleNamespace(run=MagicMock())
+    with patch.dict(sys.modules, {module: fake}), patch.object(keystore, "get_stored_key") as read:
+        key_window.main([])
+    (model,), _ = fake.run.call_args
+    assert isinstance(model, KeyModel)
+    read.assert_not_called()
+
+
 # -- macOS --------------------------------------------------------------------------
 
 

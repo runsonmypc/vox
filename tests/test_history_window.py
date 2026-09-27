@@ -10,6 +10,8 @@ import pytest
 
 from vox.history import HistoryDB, HistoryRecord
 from vox.ui.history_model import (
+    NO_SELECTION,
+    PAGE_SIZE,
     Entry,
     HistoryModel,
     build_rows,
@@ -116,6 +118,83 @@ def test_copy_failure_returns_a_message(db):
     assert model.copy(model.entries[0]) == "xclip missing"
 
 
+def test_copy_text_copies_just_those_words(db):
+    copy = MagicMock()
+    model = model_for(db, copy=copy)
+    assert model.copy_text("script is ready") is None
+    copy.assert_called_once_with("script is ready")
+
+
+def test_delete_removes_one_dictation_and_searches_again(db):
+    model = model_for(db)
+    model.search("deploy")
+    first, second = model.entries
+    assert model.neighbor_id(first) == second.record.id  # the next one down
+    assert model.neighbor_id(second) == first.record.id  # the last one: the one above
+    assert model.delete(first) is None
+    assert texts(model) == ["Deploy the Kubernetes cluster"]
+    assert model.query == "deploy" and model.total == 2
+    assert [rec.text for rec in db.search("")] == ["Lunch at noon?", "Deploy the Kubernetes cluster"]
+    assert model.neighbor_id(model.entries[0]) is None  # nothing left to select
+
+
+def test_clear_asks_about_every_dictation_then_empties_the_history(db):
+    model = model_for(db)
+    model.search("lunch")
+    assert model.clear_confirmation() == (
+        "Clear History?", "This permanently deletes all 3 dictations. You can’t undo this.",
+    )
+    assert model.clear() is None
+    assert db.search("") == [] and model.rows == [] and model.total == 0
+    assert model.detail_placeholder() == ("No Results", "Nothing matches “lunch”.")
+
+
+def test_clear_confirmation_for_a_single_dictation(tmp_path):
+    db = HistoryDB(tmp_path / "one.db")
+    db.insert("only one")
+    model = model_for(db)
+    assert model.clear_confirmation()[1] == "This permanently deletes your dictation. You can’t undo this."
+    db.close()
+
+
+def test_delete_and_clear_failures_return_a_message(db):
+    model = model_for(db)
+    entry = model.entries[0]
+    db.close()
+    assert model.delete(entry)
+    assert model.clear()
+
+
+def test_detail_placeholder_when_nothing_is_selected(db):
+    model = model_for(db)
+    assert model.detail_placeholder() == NO_SELECTION
+
+
+def test_search_says_when_it_shows_only_the_newest_results(tmp_path):
+    db = HistoryDB(tmp_path / "many.db")
+    for i in range(PAGE_SIZE + 1):
+        db.insert(f"dictation {i}")
+    model = model_for(db)
+    assert model.truncated and len(model.entries) == PAGE_SIZE
+    assert model.entries[0].text == f"dictation {PAGE_SIZE}"
+    assert model.footer == f"Showing the newest {PAGE_SIZE} dictations. Search to find older ones."
+    model.search("dictation")
+    assert model.footer == f"Showing the newest {PAGE_SIZE} matches. Refine the search to find older ones."
+    model.search("dictation 20")  # 20 and 200
+    assert not model.truncated and model.footer is None
+    db.close()
+
+
+def test_search_is_not_truncated_at_exactly_one_page(tmp_path):
+    db = HistoryDB(tmp_path / "page.db")
+    for i in range(PAGE_SIZE):
+        db.insert(f"dictation {i}")
+    model = model_for(db)
+    assert not model.truncated and model.footer is None
+    assert len(model.entries) == PAGE_SIZE
+    db.close()
+
+
 def test_labels():
     today = date(2026, 9, 26)  # a Saturday
     assert day_label(today, today) == "Today"
@@ -143,9 +222,9 @@ def test_unparseable_timestamps_still_list():
 # -- macOS --------------------------------------------------------------------------
 
 
-def _key(AppKit, window, chars, code, flags=0):
+def _key(AppKit, window, chars, code, flags=0, repeat=False):
     return AppKit.NSEvent.keyEventWithType_location_modifierFlags_timestamp_windowNumber_context_characters_charactersIgnoringModifiers_isARepeat_keyCode_(
-        AppKit.NSEventTypeKeyDown, (0, 0), flags, 0, window.windowNumber(), None, chars, chars, False, code
+        AppKit.NSEventTypeKeyDown, (0, 0), flags, 0, window.windowNumber(), None, chars, chars, repeat, code
     )
 
 
@@ -156,6 +235,13 @@ def mac_window(appkit, db):
     copy = MagicMock()
     controller = HistoryController.alloc().initWithModel_(model_for(db, copy=copy))
     controller.copied = copy
+    controller.confirmed = []
+
+    def confirm(window, title, message, button, destructive, then):
+        controller.confirmed.append((title, button, destructive))
+        then()
+
+    controller.confirm = confirm
     yield controller
     controller.window.close()
 
@@ -226,6 +312,107 @@ def test_mac_new_dictations_appear_and_keep_the_selection(appkit, db, mac_window
     assert mac_window.selected_entry().text == "Lunch at noon?"
 
 
+def test_mac_new_dictation_keeps_the_words_selected_in_the_reading_pane(appkit, db, mac_window):
+    mac_window.text_view.setSelectedRange_((7, 6))  # "script"
+    add(db, "brand new", hours=0)
+    mac_window.poll_(None)
+    assert mac_window.selected_entry().text == "deploy script is ready\nsecond line"
+    assert tuple(mac_window.text_view.selectedRange()) == (7, 6)
+
+
+def test_mac_return_copies_the_newest_match_before_the_search_fires(appkit, mac_window):
+    mac_window.search.setStringValue_("lunch")  # typed; the field has not sent its search yet
+    assert mac_window.handle_key(_key(appkit, mac_window.window, "\r", 36)) is None
+    mac_window.copied.assert_called_once_with("Lunch at noon?")
+
+
+def test_mac_arrow_keys_move_through_what_is_typed_and_the_late_search_keeps_the_choice(appkit, mac_window):
+    window = mac_window.window
+    window.makeFirstResponder_(mac_window.search)
+    mac_window.search.setStringValue_("deploy")
+    if mac_window.search.currentEditor() is None:
+        pytest.skip("The search field needs a field editor")
+    mac_window.handle_key(_key(appkit, window, "\uf701", 125))
+    assert mac_window.selected_entry().text == "Deploy the Kubernetes cluster"
+    mac_window.searchChanged_(mac_window.search)  # the field's delayed search arrives
+    assert mac_window.selected_entry().text == "Deploy the Kubernetes cluster"
+
+
+def test_mac_double_click_copies_the_clicked_row_and_never_a_day_heading(appkit, mac_window):
+    table = MagicMock()
+    table.__class__ = appkit.NSTableView  # the double-click sender, cheaper than a spec of all of NSTableView
+    table.clickedRow.return_value = 3  # the "Yesterday" heading
+    mac_window.copySelected_(table)
+    mac_window.copied.assert_not_called()
+
+    table.clickedRow.return_value = 4
+    mac_window.copySelected_(table)
+    mac_window.copied.assert_called_once_with("Deploy the Kubernetes cluster")
+
+
+def test_mac_command_c_copies_on_a_cyrillic_layout(appkit, mac_window):
+    command = appkit.NSEventModifierFlagCommand
+    assert mac_window.handle_key(_key(appkit, mac_window.window, "с", 8, command)) is None  # Cyrillic es on the C key
+    mac_window.copied.assert_called_once_with("deploy script is ready\nsecond line")
+
+
+def test_mac_delete_removes_the_dictation_and_selects_the_next(appkit, db, mac_window):
+    mac_window.deleteSelected_(mac_window.delete_button)
+    assert [rec.text for rec in db.search("")] == ["Lunch at noon?", "Deploy the Kubernetes cluster"]
+    assert mac_window.selected_entry().text == "Lunch at noon?"
+    assert mac_window.text_view.string() == "Lunch at noon?"
+    assert mac_window.search.placeholderString() == "Search 2 dictations"
+
+
+def test_mac_command_delete_in_the_list_deletes_once_but_edits_text_in_the_search(appkit, db, mac_window):
+    window, command = mac_window.window, appkit.NSEventModifierFlagCommand
+    window.makeFirstResponder_(mac_window.table)
+    assert mac_window.handle_key(_key(appkit, window, "\x7f", 51, command)) is None
+    assert mac_window.handle_key(_key(appkit, window, "\x7f", 51, command, repeat=True)) is None
+    assert len(db.search("")) == 2  # the held key deleted one, not a run of them
+
+    window.makeFirstResponder_(mac_window.search)
+    if mac_window.search.currentEditor() is not None:
+        event = _key(appkit, window, "\x7f", 51, command)
+        assert mac_window.handle_key(event) is event  # deletes typed text, as in any field
+        assert len(db.search("")) == 2
+
+
+def test_mac_command_delete_while_reading_does_not_delete(appkit, db, mac_window):
+    window = mac_window.window
+    assert window.makeFirstResponder_(mac_window.text_view)
+    event = _key(appkit, window, "\x7f", 51, appkit.NSEventModifierFlagCommand)
+    assert mac_window.handle_key(event) is event
+    assert len(db.search("")) == 3
+
+
+def test_mac_clear_history_asks_first_then_empties_the_list(appkit, db, mac_window):
+    assert mac_window.clear_button.isEnabled()
+    mac_window.clearHistory_(mac_window.clear_button)
+    assert mac_window.confirmed == [("Clear History?", "Clear History", True)]
+    assert db.search("") == []
+    assert mac_window.table.numberOfRows() == 0
+    assert mac_window.empty_title.stringValue() == "No Dictations Yet"
+    assert not mac_window.clear_button.isEnabled()
+
+
+def test_mac_delete_failure_is_shown_not_raised(appkit, mac_window):
+    with patch.object(HistoryModel, "delete", return_value="database is locked"), \
+         patch("vox.ui.mac.kit.alert") as alert:
+        mac_window.deleteSelected_(None)
+    assert alert.call_args.args[1:] == ("Couldn’t Delete the Dictation", "database is locked")
+
+
+def test_mac_footer_shows_only_when_the_list_is_cut_short(appkit, mac_window):
+    assert mac_window.footer.isHidden()
+    with patch("vox.ui.history_model.PAGE_SIZE", 2):
+        mac_window.refresh()
+    assert not mac_window.footer.isHidden()
+    assert mac_window.footer.stringValue() == "Showing the newest 2 dictations. Search to find older ones."
+    mac_window.refresh()
+    assert mac_window.footer.isHidden()
+
+
 # -- Linux --------------------------------------------------------------------------
 
 
@@ -242,6 +429,13 @@ def gtk_window(gtk, db):
     copy = MagicMock()
     window = HistoryWindow(model_for(db, copy=copy))
     window.copied = copy
+    window.confirmed = []
+
+    def confirm(parent, title, message, button, destructive, then):
+        window.confirmed.append((title, button, destructive))
+        then()
+
+    window.confirm = confirm
     yield window
     window.destroy()
     _drain(gtk)
@@ -297,6 +491,63 @@ def test_gtk_new_dictations_appear_and_keep_the_selection(gtk, db, gtk_window):
     gtk_window._on_poll()
     assert gtk_window.list.get_row_at_index(3) is not None
     assert gtk_window.selected_entry().text == "Lunch at noon?"
+
+
+def test_gtk_new_dictation_keeps_the_reading_pane_as_it_is(gtk, db, gtk_window):
+    pages = []
+    gtk_window.stack.connect("notify::visible-child-name", lambda stack, _: pages.append(stack.get_visible_child_name()))
+    gtk_window.text.select_region(7, 13)  # "script"
+    add(db, "brand new", hours=0)
+    gtk_window._on_poll()
+    assert gtk_window.selected_entry().text == "deploy script is ready\nsecond line"
+    assert tuple(gtk_window.text.get_selection_bounds()) == (True, 7, 13)
+    assert "empty" not in pages  # no flash of the "No Selection" page while the list is rebuilt
+
+
+def test_gtk_enter_copies_the_newest_match_before_the_search_fires(gtk, gtk_window):
+    gtk_window.search.set_text("lunch")  # search-changed waits for a typing pause; the loop isn't run here
+    gtk_window.search.emit("activate")
+    gtk_window.copied.assert_called_once_with("Lunch at noon?")
+
+
+def test_gtk_ctrl_c_copies_the_selected_words_else_the_whole_dictation(gtk, gtk_window):
+    gtk_window.text.select_region(0, 6)
+    gtk_window.copy_shortcut()
+    gtk_window.copied.assert_called_once_with("deploy")
+
+    gtk_window.text.select_region(0, 0)
+    gtk_window.copy_shortcut()
+    gtk_window.copied.assert_called_with("deploy script is ready\nsecond line")
+
+
+def test_gtk_delete_removes_the_dictation_and_selects_the_next(gtk, db, gtk_window):
+    assert gtk_window.delete_button.get_visible()
+    gtk_window.delete_selected()
+    assert [rec.text for rec in db.search("")] == ["Lunch at noon?", "Deploy the Kubernetes cluster"]
+    assert gtk_window.selected_entry().text == "Lunch at noon?"
+    assert gtk_window.text.get_label() == "Lunch at noon?"
+    assert gtk_window.search.get_placeholder_text() == "Search 2 dictations"
+
+
+def test_gtk_clear_history_asks_first_then_empties_the_list(gtk, db, gtk_window):
+    assert gtk_window.clear_button.get_sensitive()
+    gtk_window.clear_history()
+    assert gtk_window.confirmed == [("Clear History?", "Clear History", True)]
+    assert db.search("") == []
+    assert gtk_window.list.get_row_at_index(0) is None
+    assert gtk_window.empty.get_title() == "No Dictations Yet"
+    assert not gtk_window.clear_button.get_sensitive()
+    assert not gtk_window.delete_button.get_visible()
+
+
+def test_gtk_footer_shows_only_when_the_list_is_cut_short(gtk, gtk_window):
+    assert not gtk_window.footer.get_visible()
+    with patch("vox.ui.history_model.PAGE_SIZE", 2):
+        gtk_window.refresh()
+    assert gtk_window.footer.get_visible()
+    assert gtk_window.footer.get_label() == "Showing the newest 2 dictations. Search to find older ones."
+    gtk_window.refresh()
+    assert not gtk_window.footer.get_visible()
 
 
 # -- Launch -------------------------------------------------------------------------

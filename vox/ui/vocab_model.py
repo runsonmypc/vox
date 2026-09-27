@@ -11,6 +11,18 @@ from pathlib import Path
 
 from ..config import load_config, snippet_key, update_dictionary, update_snippet
 
+# What both windows say, so macOS and Linux never drift apart
+WORDS_INTRO = "Names, jargon and acronyms Vox should always spell exactly as written."
+SNIPPETS_INTRO = "Say a trigger phrase on its own and Vox types the expansion instead."
+NO_WORDS = ("No Words Yet", "Add names and terms Vox tends to get wrong.")
+NO_SNIPPETS = ("No Snippets Yet", "Type an address, a sign-off or a link just by saying a short phrase.")
+LOAD_FAILED_TITLE = "Couldn’t Read Your Settings"
+SAVE_FAILED_TITLE = "Couldn’t Save"
+
+
+def clash_warning(clash: str) -> str:
+    return f"This replaces your “{clash}” snippet."
+
 
 class VocabModel:
     def __init__(self, path: Path) -> None:

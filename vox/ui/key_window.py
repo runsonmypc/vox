@@ -25,9 +25,8 @@ def main(argv: list[str] | None = None) -> None:
         from .mac.key import run
     else:
         from .gtk.key import run
-    model = KeyModel()
-    model.reload()
-    run(model)
+    # The window reads the keyring when it is built: on Linux a second launch only brings the open window forward
+    run(KeyModel())
 
 
 if __name__ == "__main__":
