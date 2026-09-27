@@ -374,7 +374,7 @@ class _Daemon:
             self._abandon_recording()
             return
 
-        if is_digital_silence(wav_data):
+        if await asyncio.to_thread(is_digital_silence, wav_data):  # reads every sample: off the loop
             log.warning(
                 "The microphone delivered only silence (every sample zero), which usually means Vox may not use it. "
                 "On macOS, allow it in System Settings > Privacy & Security > Microphone."

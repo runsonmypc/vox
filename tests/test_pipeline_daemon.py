@@ -603,6 +603,23 @@ async def test_a_silent_microphone_shows_a_notice_until_audio_returns():
 
 
 @pytest.mark.anyio
+async def test_the_silent_microphone_check_runs_off_the_event_loop():
+    threads = []
+
+    def check(wav):  # reads every sample of what may be an hour of audio
+        threads.append(threading.current_thread())
+        return False
+
+    with patch("vox.daemon.is_digital_silence", side_effect=check):
+        async with running(openai_config()) as h:
+            h.send("toggle")
+            await until(lambda: h.state is State.RECORDING)
+            h.send("toggle")
+            await until(lambda: h.paste.called)
+    assert threads and threads[0] is not threading.current_thread()
+
+
+@pytest.mark.anyio
 async def test_a_partly_transcribed_dictation_is_noticed_until_the_next_one_succeeds(tmp_path):
     history = HistoryDB(tmp_path / "history.db")
     tray = MagicMock()
