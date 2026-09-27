@@ -178,7 +178,7 @@ class VocabController(NSObject):
 
     @objc.python_method
     def _build_snippets(self) -> AppKit.NSView:
-        new = AppKit.NSButton.buttonWithTitle_image_target_action_(
+        new = self.new_button = AppKit.NSButton.buttonWithTitle_image_target_action_(
             "New Snippet", kit.symbol("plus", 11, AppKit.NSFontWeightSemibold), self, "newSnippet:"
         )
         new.setImagePosition_(AppKit.NSImageLeading)
@@ -323,7 +323,7 @@ class VocabController(NSObject):
             table.enclosingScrollView().setHidden_(not items)
             empty[0].setHidden_(bool(items))
         writable = self.model.load_error is None
-        for control in (self.word_field, self.add_button):
+        for control in (self.word_field, self.add_button, self.new_button):
             control.setEnabled_(writable)
         self._set_footer(None)
 

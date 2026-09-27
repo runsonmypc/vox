@@ -11,7 +11,7 @@ import pytest
 from keyring.backends import fail
 
 from vox import keystore
-from vox.ui.key_model import CheckResult, KeyModel, Outcome, check_key
+from vox.ui.key_model import BAD_CHARACTER, CheckResult, KeyModel, Outcome, check_key
 
 KEY = "sk-test-dummy-0001"
 OTHER = "sk-test-dummy-0002"
@@ -68,6 +68,17 @@ def test_problems_with_a_typed_key():
     assert KeyModel.problem(f" {KEY} ") is None
 
 
+@pytest.mark.parametrize("key", [
+    "sk-test-dummy\u200b0001",  # zero-width space, as copied from a web page or chat
+    "\ufeffsk-test-dummy-0001",  # byte-order mark
+    "sk-test\u2013dummy-0001",  # en dash
+    "\u201csk-test-dummy-0001\u201d",  # curly quotes
+    "sk-test-dummy\x7f0001",  # a control character
+])
+def test_key_with_a_character_outside_printable_ascii_is_refused(key):
+    assert KeyModel.problem(key) == BAD_CHARACTER
+
+
 def test_storage_text_names_the_keychain_or_warns():
     model = loaded()
     assert model.encrypted
@@ -111,6 +122,8 @@ def _error(cls, **attrs):
     (_error(openai.PermissionDeniedError, status_code=403), Outcome.UNCHECKED, "isn’t allowed to list models"),
     (_error(openai.APITimeoutError), Outcome.UNCHECKED, "couldn’t reach OpenAI"),
     (_error(openai.InternalServerError, status_code=503), Outcome.UNCHECKED, "error 503"),
+    (UnicodeEncodeError("ascii", "Bearer sk-\u200b", 10, 11, "ordinal not in range(128)"), Outcome.REJECTED,
+     "isn’t part of an OpenAI key"),
 ])
 def test_check_key(error, outcome, words):
     client = MagicMock()
@@ -123,6 +136,14 @@ def test_check_key(error, outcome, words):
     assert result.outcome is outcome
     assert words in result.message
     assert KEY not in result.message
+
+
+def test_check_rejects_a_key_the_client_cannot_send(monkeypatch):
+    """The real client fails to put the key in a header before connecting (to a closed local port anyway)."""
+    monkeypatch.setenv("OPENAI_BASE_URL", "http://127.0.0.1:9/v1")
+    result = check_key("sk-test-dummy\u200b0001")
+    assert result.outcome is Outcome.REJECTED
+    assert result.message == BAD_CHARACTER
 
 
 def test_unchecked_result_asks_to_save_anyway():
@@ -198,6 +219,16 @@ def test_mac_blank_key_is_refused(appkit, memory_keyring, mac_window):
     window = mac_window()
     window.save_(None)
     assert window.status.stringValue() == "Paste your OpenAI API key."
+    assert stored(memory_keyring) is None
+    assert not window.closed
+
+
+def test_mac_key_with_an_invisible_character_is_refused(appkit, memory_keyring, mac_window):
+    window = mac_window()
+    checking(appkit, window, False)
+    window.secure_field.setStringValue_("sk-test-dummy\u200b0001")
+    window.save_(None)
+    assert window.status.stringValue() == BAD_CHARACTER
     assert stored(memory_keyring) is None
     assert not window.closed
 
@@ -331,6 +362,16 @@ def test_gtk_blank_key_is_refused(gtk, memory_keyring, gtk_window):
     window.save()
     assert window.status.get_label() == "Paste your OpenAI API key."
     assert window.status.has_css_class("error")
+    assert not window.closed
+
+
+def test_gtk_key_with_an_invisible_character_is_refused(gtk, memory_keyring, gtk_window):
+    window = gtk_window()
+    window.check_row.set_active(False)
+    window.entry.set_text("sk-test-dummy\u200b0001")
+    window.save()
+    assert window.status.get_label() == BAD_CHARACTER
+    assert stored(memory_keyring) is None
     assert not window.closed
 
 
