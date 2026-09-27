@@ -27,7 +27,7 @@ Vox is about to become public as v1.0.0 (GPL-3.0-only), installed by people who 
 
 ### Modified Capabilities
 - `desktop-frontend`: status-line problems; the device menu built from a snapshot and remembered by name; the active mode that cannot run; history kept on paste failure, private and erasable; history window delete, Clear History and the 200-row cap. The per-user installation requirement moves to `release-packaging`.
-- `streaming-transcription`: stateful band-limited 24 kHz audio; the filtered keyword list with no raw screen text; waiting for completion with no deadline; batch fallback on server errors, with screen capture at fallback time.
+- `streaming-transcription`: stateful band-limited 24 kHz audio; the filtered keyword list with no raw screen text; waiting for completion with no deadline; batch fallback on server errors, capturing at fallback time the window that was focused when the recording started.
 - `macos-support`: the per-user directory lock with exit 0 or 78; focused-window detection through Accessibility and the CGWindowID; a transient, layout-aware paste; volume restored on every exit path; capture of the focused window only; microphone diagnostics at runtime; a LaunchAgent with private logs and absolute paths.
 - `double-tap-cancel`: the cancel sound follows `[sounds] enabled` live and can be overridden; cancelling stops a local whisper.cpp run; a paste already under way completes and restores the clipboard.
 - `api-key`: the environment override is hidden from child processes; migration handles several keys in `.env`, a symlinked `.env`, and a `config.toml` key when there is no keychain.

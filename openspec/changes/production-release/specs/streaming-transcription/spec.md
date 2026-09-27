@@ -67,7 +67,7 @@ The system SHALL support selecting between streaming and batch transcription mod
 
 #### Scenario: Screen hints for the fallback
 - **WHEN** a streaming recording falls back to batch and `[context] screen` is on
-- **THEN** the focused window is captured at that point and its filtered words are added to the batch request's hints
+- **THEN** the window that was focused when the recording started (found again by the window ID and process detected then) is captured at that point, and its filtered words are added to the batch request's hints
 
 #### Scenario: Error after completion
 - **WHEN** the server reports an error or the connection drops after the final transcript arrived

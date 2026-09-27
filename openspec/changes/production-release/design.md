@@ -51,7 +51,7 @@ Constraints that shaped every decision (DECISIONS.md, "Hard rules"):
 - Rejected: keeping streaming's raw `Window:` / `Screen:` prompt lines. They sent the window title verbatim, with no filtering, while the OCR that streaming ran never reached the session.
 - The filter works on whole tokens before words are split. Otherwise a base64 key cut at `/`, `+` and `=` would leave pieces too short to look random.
 - The filter errs toward dropping. Long identifiers that contain digits are never sent as hints, since nobody dictates them.
-- Streaming starts no capture. Its keywords are sent when the socket opens, before any OCR could finish, so a capture at that point only cost time and Screen Recording exposure. A fallback to batch captures the focused window at stop time instead.
+- Streaming starts no capture. Its keywords are sent when the socket opens, before any OCR could finish, so a capture at that point only cost time and Screen Recording exposure. A fallback to batch captures when it starts instead. It reads the window that was focused when the recording started, found again by the window ID and process detected then, and does not look up which window has focus at fallback time.
 
 **5. The recording limit auto-stops, at a new default of 900 s.** The tray offers 5 to 60 minutes. Uploads are 16 kHz mono PCM16. A recording over about 24 MB is split at pauses.
 - Rejected: the old behavior, where the recording ran on and the audio after the limit was silently dropped at stop. The user lost the end of what they said.

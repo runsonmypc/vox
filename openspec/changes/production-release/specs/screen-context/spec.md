@@ -24,11 +24,11 @@ The system SHALL provide a `[context] screen` setting, on by default, that contr
 - **THEN** the next dictation follows the new value
 
 ### Requirement: Focused Window Capture
-When screen hints are on, the system SHALL read text from the focused window only, never the whole display and never the focused application's other windows. Text recognition SHALL run on the computer, screenshots SHALL be temporary files deleted as soon as they are read, and at most 2,000 characters SHALL be kept from one capture.
+When screen hints are on, the system SHALL read text from the focused window only, never the whole display and never the focused application's other windows. Text recognition SHALL run on the computer, screenshots SHALL never be kept (on macOS a temporary file deleted as soon as it is read, on Linux an image piped from `maim` to `tesseract` without touching the disk), and at most 2,000 characters SHALL be kept from one capture.
 
 #### Scenario: Linux capture
 - **WHEN** a capture runs on Linux
-- **THEN** Vox reads, through AT-SPI, only the focused application's active window and only its showing elements; if that yields little text, it screenshots only the focused X window with `maim` and reads it with `tesseract` (when both are installed) without a shell; and for a terminal it may use the visible tmux pane
+- **THEN** Vox reads, through AT-SPI, only the focused application's active window and only its showing elements; if that yields little text, it screenshots only the focused X window with `maim` and pipes the image to `tesseract` (when both are installed) without a shell or a file; and for a terminal it may use the visible tmux pane
 
 #### Scenario: macOS capture
 - **WHEN** a capture runs on macOS
@@ -55,7 +55,7 @@ The system SHALL capture the focused window only for recordings whose hints can 
 
 #### Scenario: Streaming falls back to batch
 - **WHEN** screen hints are on and a streaming recording falls back to batch transcription
-- **THEN** the window focused at that moment is captured for the batch request's hints
+- **THEN** the window that was focused when the recording started, found again by the window ID and process detected then, is captured at that point for the batch request's hints; Vox does not look up which window has focus at fallback time
 
 #### Scenario: Cancelled recording
 - **WHEN** a recording is cancelled, or stops without anything to transcribe
