@@ -455,9 +455,12 @@ def test_mac_launcher_is_skipped_when_both_places_have_another_app_named_vox_tra
     fake_venv(home)
     apps = [home / "SystemApplications/Vox Transfer.app", home / "Applications/Vox Transfer.app"]
     before = [other_app(app) for app in apps]
+    old = home / "SystemApplications/Vox.app"
+    own_launcher(old)
     result = bash(home, MAC + "mac_launcher")
     assert result.returncode == 0, result.stderr
     assert [bundle(app) for app in apps] == before
+    assert is_launcher(old)  # with no new launcher, the old one is still the way to start the app
     assert "no Vox Transfer launcher was added" in result.stderr
     assert "launchctl kickstart gui/501/com.runsonmypc.vox" in result.stderr
 
