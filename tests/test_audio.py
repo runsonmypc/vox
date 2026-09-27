@@ -14,6 +14,8 @@ from vox.audio import (
     Resampler,
     has_speech,
     is_digital_silence,
+    pcm16_wav,
+    read_wav,
     resolve_input_device,
     split_at_pauses,
     upload_wavs,
@@ -551,3 +553,28 @@ def test_is_digital_silence_flags_only_all_zero_audio():
     assert not is_digital_silence(_wav(np.r_[np.zeros(1599), 1], 16000))
     assert not is_digital_silence(_wav([], 16000))
     assert not is_digital_silence(b"")
+
+
+def test_read_wav_returns_a_view_of_vox_s_own_wavs():
+    """No copy of the samples: for an hour at 48 kHz that is 346 MB, made by every reader."""
+    stereo = np.arange(-4800, 4800, dtype=np.int16)
+    wav = pcm16_wav(stereo, 48000, channels=2)
+    samples, rate, channels = read_wav(wav)
+    assert (rate, channels) == (48000, 2)
+    np.testing.assert_array_equal(samples, stereo)
+    assert np.shares_memory(samples, np.frombuffer(wav, dtype=np.uint8))
+    assert not samples.flags.writeable
+
+    samples, _, _ = read_wav(pcm16_wav(np.empty(0, dtype=np.int16), 16000))
+    assert len(samples) == 0
+
+
+def test_read_wav_copies_when_another_chunk_follows_the_data():
+    audio = np.arange(1600, dtype=np.int16)
+    wav = pcm16_wav(audio, 16000)
+    info = b"INFOISFT" + (4).to_bytes(4, "little") + b"Vox\0"
+    tail = b"LIST" + len(info).to_bytes(4, "little") + info
+    wav = wav[:4] + (len(wav) - 8 + len(tail)).to_bytes(4, "little") + wav[8:] + tail
+    samples, rate, channels = read_wav(wav)
+    assert (rate, channels) == (16000, 1)
+    np.testing.assert_array_equal(samples, audio)
