@@ -238,12 +238,12 @@ looks up which app has focus, locally, to pick the right paste shortcut.
 | Tap it again | Stop, transcribe, and paste the text into the focused app. |
 | Double-tap it | Cancel: discard the recording, or stop a transcription in progress. Nothing is pasted. |
 
-Pressing Shift together with another key, as when typing a capital letter, does nothing. A
-recording that reaches the recording limit (15 minutes unless you change it) stops and is
-transcribed as if you had tapped the key. In batch mode a recording longer than about 13 minutes
-is uploaded in parts, split at pauses; a part with nothing audible in it is not uploaded, and if a
-part fails, the text of the parts before it is kept in history (or pasted, if history cannot
-store it).
+Pressing the hotkey together with another key, as when typing a capital letter with Shift, does
+nothing. To use another key, choose **Set Hotkey…** from the menu. A recording that reaches the
+recording limit (15 minutes unless you change it) stops and is transcribed as if you had tapped the
+key. In batch mode a recording longer than about 13 minutes is uploaded in parts, split at pauses;
+a part with nothing audible in it is not uploaded, and if a part fails, the text of the parts
+before it is kept in history (or pasted, if history cannot store it).
 
 The Vox Transfer menu, from the menu bar icon on macOS or the tray icon on Linux:
 
@@ -257,28 +257,35 @@ The Vox Transfer menu, from the menu bar icon on macOS or the tray icon on Linux
   set up (no API key, or no whisper.cpp model) is greyed out.
 - **Recording Limit**: 5, 10, 15, 30 or 60 minutes.
 - **Recent dictations**: click one to copy it.
-- **Search History…**, **Vocabulary & Snippets…**, **Set API Key…**
+- **Search History…**, **Vocabulary & Snippets…**, **Set API Key…**, **Set Hotkey…**
+- **Set Hotkey…** (while idle): click **Hotkey** and tap the key you want, such as Right Command,
+  Right Option or F13, or click **Key combination** and press an optional combination such as
+  Control + Space, which also starts and stops dictation (press it twice quickly to cancel; the app
+  you're in receives it too). Keys you type with are refused. **Use Default** goes back to right
+  Shift. The new hotkey works as soon as you click Save, and while the window is open the hotkey
+  does not dictate.
 - **Quit Vox Transfer**. To start it again, open Vox Transfer from Applications or Spotlight (macOS)
   or your applications list (Linux). Vox Transfer quits the same way when its login service stops
   (for example `systemctl --user stop vox` on Linux), when you log out, or during an update, so a
   volume lowered for a recording is restored.
 
-The transcription mode and recording limit you choose are saved in `~/.config/vox/config.toml`. The
-input device you choose lasts until Vox Transfer quits; set `[audio] device` to keep one.
+The hotkey, transcription mode and recording limit you choose are saved in
+`~/.config/vox/config.toml`. The input device you choose lasts until Vox Transfer quits; set
+`[audio] device` to keep one.
 
 ## Configuration
 
 Vox Transfer works without a config file. To change a setting, create `~/.config/vox/config.toml` (a
 commented copy of every setting is in [`config.example.toml`](config.example.toml)). Vox Transfer
-applies changes within a few seconds of a save, except `[hotkey]`, which applies after you quit and
-reopen Vox Transfer. Screen hints and the recording limit apply from the next dictation, and
-`[audio]` changes wait for a recording in progress to end.
+applies changes within a few seconds of a save, with no restart. Screen hints and the recording
+limit apply from the next dictation, `[audio]` changes wait for a recording in progress to end, and
+a new `[hotkey]` takes over at once, even during a recording, which the new key then stops.
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
 | `dictionary` (top level) | `[]` | Words to spell exactly as written. |
-| `[hotkey] key` | `"right_shift"` | The key to tap on its own, such as `"right_ctrl"`, `"right_alt"`, `"cmd_r"` or `"f13"`. |
-| `[hotkey] fallback` | `""` (none) | An extra key combination that toggles dictation, such as `"ctrl+space"`. |
+| `[hotkey] key` | `"right_shift"` | The key to tap on its own, such as `"right_ctrl"`, `"right_alt"`, `"cmd_r"` or `"f13"`. **Set Hotkey…** records it for you. |
+| `[hotkey] fallback` | `""` (none) | An extra key combination that toggles dictation, such as `"ctrl+space"` (`ctrl` is the left Control key; `right_ctrl` the right one). |
 | `[hotkey] double_tap_timeout_ms` | `400` | How fast a double-tap must be to cancel. |
 | `[audio] device` | unset (system default) | Input device index or name, from `vox --list-devices`. |
 | `[audio] sample_rate` | `48000` | Recording sample rate in Hz. |
@@ -306,9 +313,9 @@ If the file has an error when Vox Transfer starts (a typo, or a value of the wro
 an error**, the log names the file and the setting, and the hotkey plays the error sound.
 Vox Transfer does not fall back to defaults for dictation, since they might send audio to OpenAI
 when you chose local transcription. Save a fixed file and Vox Transfer picks it up within a few
-seconds. While the file has an error, the Vocabulary & Snippets window shows the problem and changes
-nothing; fix the file, then reopen the window. An error in an edit while Vox Transfer is running is
-logged and ignored, and the previous settings stay in effect.
+seconds. While the file has an error, the Vocabulary & Snippets and Set Hotkey windows show the
+problem and change nothing; fix the file, then reopen the window. An error in an edit while
+Vox Transfer is running is logged and ignored, and the previous settings stay in effect.
 
 ### Sounds
 

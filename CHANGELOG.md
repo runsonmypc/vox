@@ -11,7 +11,8 @@ its folders keep their names.
 ### Dictation
 
 - Tap right Shift to record and tap again to paste the transcript into the focused app;
-  double-tap to cancel. An optional key combination can toggle dictation too.
+  double-tap to cancel. Set Hotkey… in the menu picks another key, and an optional key combination
+  that toggles dictation too.
 - Transcription with OpenAI in batch or live streaming mode, or on your computer with whisper.cpp,
   switchable from the menu.
 - A recording limit, 15 minutes by default and adjustable from the new Recording Limit menu
@@ -61,7 +62,11 @@ its folders keep their names.
 ### Desktop
 
 - Menu bar (macOS) and tray (Linux) icon with status, pause, input device, transcription mode,
-  recording limit, recent dictations, history search, vocabulary and API key.
+  recording limit, recent dictations, history search, vocabulary, API key and hotkey.
+- Set Hotkey… records the key you tap and an optional key combination as you press them, refuses
+  keys you type with, and applies the new hotkey as soon as you save, with no restart. While the
+  window is open the hotkey does not dictate.
+- Hotkey settings edited in the settings file also apply within seconds, without a restart.
 - The menu shows problems that need you: a missing API key, an error in the settings file, a broken
   whisper.cpp setup, missing Accessibility access, a silent microphone, a Wayland session, or a
   dictation that was only partly transcribed.

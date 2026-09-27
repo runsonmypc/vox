@@ -1,8 +1,7 @@
 # Vox Transfer configuration: copy to ~/.config/vox/config.toml and uncomment what you want to
 # change. Every commented-out setting shows its default. Vox Transfer applies changes within a few
-# seconds of a save, except [hotkey], which applies after a restart (Quit Vox Transfer, then open it
-# again). Screen hints and the recording limit apply from the next dictation, and [audio] changes
-# wait for a recording in progress to end.
+# seconds of a save. Screen hints and the recording limit apply from the next dictation, and [audio]
+# changes wait for a recording in progress to end.
 #
 # If this file has an error when Vox Transfer starts, Vox Transfer starts anyway but does not record
 # until you fix it: the Vox Transfer menu shows "Settings file has an error" and the log names the
@@ -18,10 +17,12 @@
 # dictionary = []
 
 [hotkey]
+# Set Hotkey… in the menu records the key and the combination for you.
 # The key that starts and stops dictation when tapped on its own. Double-tap it to cancel.
 # Other choices include "right_ctrl", "right_alt", "cmd_r" (macOS) and "f13".
 # key = "right_shift"
-# An optional key combination that also toggles dictation, for example "ctrl+space".
+# An optional key combination that also toggles dictation, for example "ctrl+space", where "ctrl"
+# is the left Control key and "right_ctrl" the right one.
 # fallback = ""
 # How quickly the second tap of a double-tap must follow the first, in milliseconds.
 # double_tap_timeout_ms = 400
