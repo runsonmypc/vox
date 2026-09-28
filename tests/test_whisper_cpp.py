@@ -265,3 +265,60 @@ Path(a[a.index("-of") + 1] + ".txt").write_bytes({output!r})
     text = await WhisperCppTranscriber(_config(tmp_path, script)).transcribe(_wav())
     assert text.startswith("Hello ") and text.endswith(" world")
     assert "�" in text
+
+
+GPU_FULL = '''import json, os, sys
+from pathlib import Path
+a = sys.argv
+calls = Path(__file__).with_suffix(".calls")
+calls.write_text(calls.read_text() + json.dumps(a[1:]) + "\\n" if calls.exists() else json.dumps(a[1:]) + "\\n")
+if "-ng" not in a:
+    sys.stderr.write("ggml_backend_cuda_buffer_type_alloc_buffer: allocating 1548.69 MiB on device 0: cudaMalloc failed: out of memory\\n")
+    sys.stderr.flush()
+    os.abort()
+Path(a[a.index("-of") + 1] + ".txt").write_text("on the processor")
+'''
+
+
+def _calls(tmp_path):
+    return [json.loads(line) for line in (tmp_path / "bin" / "whisper-cli.calls").read_text().splitlines()]
+
+
+@pytest.mark.anyio
+async def test_a_full_graphics_card_falls_back_to_the_cpu(tmp_path, caplog):
+    config = _config(tmp_path, GPU_FULL)
+    with caplog.at_level(logging.WARNING, logger="vox.whisper_cpp"):
+        text = await WhisperCppTranscriber(config).transcribe(_wav())
+
+    assert text == "on the processor"
+    first, second = _calls(tmp_path)
+    assert "-ng" not in first and second == [*first, "-ng"]
+    assert "transcribing on the CPU instead" in caplog.text
+
+
+@pytest.mark.anyio
+async def test_without_the_fallback_a_full_graphics_card_says_so(tmp_path):
+    config = _config(tmp_path, GPU_FULL)
+    config.whisper_cpp_cpu_fallback = False
+    with pytest.raises(TranscriptionError, match=r"ran out of memory: close apps that use the graphics card, "
+                                                 r"or set \[whisper_cpp\] cpu_fallback = true$"):
+        await WhisperCppTranscriber(config).transcribe(_wav())
+    assert len(_calls(tmp_path)) == 1
+
+
+@pytest.mark.anyio
+async def test_a_cpu_run_that_also_runs_out_of_memory_fails_once(tmp_path):
+    script = GPU_FULL.replace('if "-ng" not in a:', "if True:")
+    config = _config(tmp_path, script)
+    with pytest.raises(TranscriptionError, match="ran out of memory: close apps that use the graphics card$"):
+        await WhisperCppTranscriber(config).transcribe(_wav())
+    assert len(_calls(tmp_path)) == 2
+
+
+@pytest.mark.anyio
+async def test_other_failures_are_not_retried_on_the_cpu(tmp_path):
+    script = GPU_FULL.replace("cudaMalloc failed: out of memory", "failed to load model")
+    config = _config(tmp_path, script)
+    with pytest.raises(TranscriptionError, match="failed to load model"):
+        await WhisperCppTranscriber(config).transcribe(_wav())
+    assert len(_calls(tmp_path)) == 1

@@ -46,6 +46,10 @@ The commands below use `~/.local/bin/vox`, where the installer puts Vox Transfer
 - **Local (whisper.cpp) can't be chosen.** The line under it on the Transcription page of Settings
   says what is missing. Choose the whisper.cpp program and model there, or set `[whisper_cpp] model`,
   and `binary` as a full path.
+- **Local transcription is slow or fails while a game is running.** whisper.cpp keeps the model on
+  the graphics card, and a game can leave no room for it. Vox Transfer then transcribes on the
+  processor instead, which is slower; the log says so. With `[whisper_cpp] cpu_fallback = false`,
+  dictation fails instead, with the error sound. A smaller model needs less room.
 - **"Vox Transfer needs Python 3.12 or 3.13".** Some of Vox Transfer's dependencies do not yet
   publish packages for newer Pythons, and building them would need a compiler.
 - **Something else.** Read the log (`~/Library/Logs/Vox/vox.log` on macOS,

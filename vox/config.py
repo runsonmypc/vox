@@ -39,6 +39,8 @@ class Config:
     streaming_model: str = "gpt-live-transcribe"
     whisper_cpp_binary: str = "whisper-cli"
     whisper_cpp_model: str = ""
+    # Run whisper.cpp again on the CPU when the graphics card has no memory left for the model
+    whisper_cpp_cpu_fallback: bool = True
 
     # Whisper
     whisper_model: str = "gpt-transcribe"
@@ -152,6 +154,7 @@ def _apply(config: Config, data: dict) -> None:
     _apply_section(config, data, "whisper_cpp", {
         "binary": ("whisper_cpp_binary", _text),
         "model": ("whisper_cpp_model", _text),
+        "cpu_fallback": ("whisper_cpp_cpu_fallback", _flag),
     })
     _apply_section(config, data, "transcription", {
         "mode": ("mode", _text),

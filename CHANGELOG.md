@@ -5,6 +5,13 @@ All notable changes to Vox Transfer are listed here. Vox Transfer follows
 
 ## [Unreleased]
 
+### Fixed
+
+- Local (whisper.cpp) transcription no longer fails when the graphics card has no memory left for
+  the model, as when a game is running: it transcribes on the processor instead, more slowly.
+  `[whisper_cpp] cpu_fallback = false` turns this off, and the error then says the graphics card
+  is full.
+
 ### Settings
 
 - One Settings window, opened with Settings… in the menu, replaces the Input Device, Transcription

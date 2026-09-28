@@ -29,7 +29,7 @@ too. [Using Vox Transfer](using.md#settings) says what each page does.
 | Snippets | <picture><source media="(prefers-color-scheme: dark)" srcset="images/settings-snippets-mac-dark.png"><img src="images/settings-snippets-mac-light.png" alt="The Snippets page of Settings on macOS"></picture> | <picture><source media="(prefers-color-scheme: dark)" srcset="images/settings-snippets-linux-dark.png"><img src="images/settings-snippets-linux-light.png" alt="The Snippets page of Settings on Linux"></picture> |
 
 A few settings are only in the file: `sample_rate`, `channels`, `double_tap_timeout_ms`,
-`streaming_model`, `[whisper] model` and `[window_classes]`. The window keeps them as they are.
+`streaming_model`, `[whisper] model`, `[whisper_cpp] cpu_fallback` and `[window_classes]`. The window keeps them as they are.
 
 ## The settings file
 
@@ -76,6 +76,7 @@ that section.
 | `[whisper] model` | `"gpt-transcribe"` | OpenAI model for batch mode. |
 | `[whisper_cpp] binary` | `"whisper-cli"` | The whisper.cpp command; a full path is safest. |
 | `[whisper_cpp] model` | `""` | Path to a GGML model file; required for whisper.cpp mode. |
+| `[whisper_cpp] cpu_fallback` | `true` | When the graphics card has no memory left for the model (a game is running, say), transcribe on the processor instead, more slowly. |
 | `[context] screen` | `true` | Screen hints, see [Privacy](privacy.md#screen-hints-context-screen). |
 | `[sounds] enabled` | `true` | Play sounds for start, stop, cancel and errors. |
 | `[attenuation] enabled` | `true` | Lower the system volume while recording. |

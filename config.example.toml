@@ -71,6 +71,9 @@
 # If the setup is broken, the Vox Transfer menu says why, and each hotkey press checks it again.
 # binary = "whisper-cli"
 # model = ""
+# When the graphics card has no memory left for the model (a game is running, say), transcribe on
+# the processor instead, which is slower. Set to false to fail with an error instead.
+# cpu_fallback = true
 
 [context]
 # Screen hints: send words from the focused window (its title and visible text) to the transcriber

@@ -245,6 +245,13 @@ def test_context_screen_defaults_on_and_loads_from_the_context_section(tmp_path)
     assert load(tmp_path, "[context]\nscreen = true\n").context_screen is True
 
 
+def test_whisper_cpp_cpu_fallback_loads_from_the_whisper_cpp_section(tmp_path):
+    assert load(tmp_path, "[whisper_cpp]\ncpu_fallback = false\n").whisper_cpp_cpu_fallback is False
+    assert load(tmp_path, "[whisper_cpp]\ncpu_fallback = true\n").whisper_cpp_cpu_fallback is True
+    with pytest.raises(ConfigError, match="cpu_fallback"):
+        load(tmp_path, '[whisper_cpp]\ncpu_fallback = "yes"\n')
+
+
 def test_a_file_that_does_not_load_leaves_defaults_that_remember_why(tmp_path):
     path = tmp_path / "config.toml"
     config = fallback_config(path, ConfigError(f"{path}: [attenuation] level must be a number from 0 to 1"))
