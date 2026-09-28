@@ -20,20 +20,20 @@ The system SHALL stop a recording by itself when it reaches `[audio] max_recordi
 - **WHEN** a limit event arrives after its recording was cancelled or already stopped
 - **THEN** it is ignored and does not stop a newer recording
 
-### Requirement: Recording Limit from the Tray
-The system SHALL offer a Recording Limit submenu in the tray with 5, 10, 15, 30 and 60 minutes, checked on the current limit, and SHALL save a choice to `[audio] max_recording_seconds`.
+### Requirement: Recording Limit in Settings
+The General page of Settings SHALL offer a Recording Limit choice of 5, 10, 15, 30 and 60 minutes, showing the current limit, and SHALL save a choice to `[audio] max_recording_seconds`.
 
 #### Scenario: Picking a limit
-- **WHEN** the user picks a limit from the submenu
-- **THEN** it is saved to `[audio] max_recording_seconds` with the rest of `config.toml` and its comments kept, the menu checks it, and it applies from the next recording
+- **WHEN** the user picks a limit in Settings
+- **THEN** it is saved to `[audio] max_recording_seconds` with the rest of `config.toml` and its comments kept, the choice shows it, and it applies from the next recording
 
 #### Scenario: Custom limit from the file
 - **WHEN** `config.toml` sets a limit that is not one of the choices
-- **THEN** the submenu also lists that value, checked
+- **THEN** the choice also lists that value, selected
 
 #### Scenario: Limit cannot be saved
 - **WHEN** the chosen limit cannot be written to `config.toml`
-- **THEN** a warning is logged, the error sound plays, and the limit stays as it was
+- **THEN** the window shows a "Couldn't Save" message, and the limit stays as it was
 
 ### Requirement: Batch Upload Format
 The system SHALL convert a finished recording to 16 kHz mono 16-bit PCM WAV before sending it to OpenAI's batch transcription or to whisper.cpp, and SHALL do the conversion in blocks, so memory stays bounded however long the recording is.
@@ -188,19 +188,23 @@ The system SHALL check the type and range of every setting in `config.toml`. Whe
 - **THEN** Vox starts and logs one warning that it cannot tell terminals from other windows, so terminals get `Ctrl+V` and `[window_classes]` does not apply; this is not a status-78 startup failure
 
 ### Requirement: Settings Reload
-The system SHALL apply every edit to `config.toml` while running, a few seconds after a save, with no restart.
+The system SHALL apply every edit to `config.toml` while running, a few seconds after a save, with no restart, and SHALL apply the file at once when the Settings window closes.
 
 #### Scenario: Hot-reloaded settings
-- **WHEN** the user changes the dictionary, snippets, window classes, screen hints, sounds, attenuation, the recording limit, the transcription mode, a model, the language or the prompt
+- **WHEN** the user changes the dictionary, snippets, window classes, screen hints, sounds, attenuation, the recording limit, the transcription mode, a model, the language or the prompt, by hand or in Settings
 - **THEN** the next dictation uses the new values without a restart
+
+#### Scenario: Settings window closes
+- **WHEN** the Settings window closes, however it closes
+- **THEN** Vox reads `config.toml` and the API key again at once and applies them as a reload does, so a dictation started right after closing uses everything saved in the window
 
 #### Scenario: Audio settings during a recording
 - **WHEN** `[audio]` device, sample rate or channels change while a recording runs
 - **THEN** the change is applied once that recording ends, and the recording is not lost
 
 #### Scenario: Hotkey settings
-- **WHEN** `[hotkey]` key, fallback or double_tap_timeout_ms changes, by hand or from the hotkey window
-- **THEN** within a few seconds, or at once when the hotkey window closes, a new hotkey listener with those settings replaces the old one, with no restart, and the old key no longer toggles dictation
+- **WHEN** `[hotkey]` key, fallback or double_tap_timeout_ms changes, by hand or on the Hotkey page of Settings
+- **THEN** within a few seconds, or at once when the Settings window closes, a new hotkey listener with those settings replaces the old one, with no restart, and the old key no longer toggles dictation
 - **AND** during a recording the new listener takes over at once, and the new key stops the recording
 
 #### Scenario: Invalid edit while running
@@ -246,11 +250,11 @@ The system SHALL treat a recording whose samples are all exactly zero as a micro
 - **THEN** the notice is cleared
 
 ### Requirement: Input Device Rescan
-The system SHALL rescan the audio input devices so the tray can offer devices connected after Vox started, without disturbing a recording or delaying the hotkey.
+The system SHALL rescan the audio input devices so a microphone picked by name that is connected after Vox started can record, without disturbing a recording or delaying the hotkey.
 
 #### Scenario: Startup and return to idle
 - **WHEN** Vox starts, or returns to idle after a dictation (at least 1 second later, and never before 0.1 seconds after a sound still playing through the audio system has ended, such as a long custom sound on Linux)
-- **THEN** it re-initialises the audio system, lists the input devices, and sends the list to the tray only if it differs from the last one sent
+- **THEN** it re-initialises the audio system and lists the input devices, so the next recording finds a device connected since
 
 #### Scenario: Periodic rescan on macOS
 - **WHEN** Vox stays idle on macOS

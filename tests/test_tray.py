@@ -11,23 +11,18 @@ pytest.importorskip("pystray")
 
 from vox.config import Config
 from vox.history import HistoryDB
-from vox.modes import LABELS
 from vox.ui.icons import IconState, make_icon
 from vox.ui.tray import (
     CONFIG_ERROR,
     HISTORY_WINDOW,
-    HOTKEY_WINDOW,
-    KEY_WINDOW,
     RECENT_HEADER,
-    SET_HOTKEY,
     SET_KEY,
-    VOCAB_WINDOW,
+    SETTINGS,
+    SETTINGS_OPEN,
+    SETTINGS_WINDOW,
     TrayManager,
     _recent_label,
-    _selected_device,
 )
-
-DEVICES = [(0, "MacBook Pro Microphone"), (2, "USB Audio Interface")]  # the daemon's input-device snapshot
 
 
 class FakeIcon:
@@ -153,144 +148,6 @@ def test_menu_actions_before_attach_are_ignored():
     find(icon.menu, "Pause Dictation")(icon)  # no loop yet: must not raise
 
 
-def device_items(icon):
-    return [(i.text, i.checked) for i in items(find(icon.menu, "Input Device").submenu)]
-
-
-def test_device_submenu_lists_input_devices_with_default_checked():
-    tray, icon = make_tray(Config(audio_device=None))
-    tray.devices_changed(DEVICES)
-    assert device_items(icon) == [
-        ("System Default", True),
-        ("MacBook Pro Microphone", False),
-        ("USB Audio Interface", False),
-    ]
-
-
-@pytest.mark.parametrize("spec", [2, "usb audio", "USB Audio Interface"])
-def test_device_submenu_checks_configured_device(spec):
-    tray, icon = make_tray(Config(audio_device=spec))
-    tray.devices_changed(DEVICES)
-    assert [text for text, checked in device_items(icon) if checked] == ["USB Audio Interface"]
-
-
-@pytest.mark.parametrize("spec, shown", [
-    (None, [("System Default", True)]),
-    ("USB Audio Interface", [("System Default", False), ("USB Audio Interface", True)]),
-    (3, [("System Default", False), ("Device 3", True)]),
-])
-def test_device_submenu_shows_the_current_device_until_the_first_snapshot(spec, shown):
-    _, icon = make_tray(Config(audio_device=spec))
-    assert device_items(icon) == shown
-
-
-def test_device_submenu_follows_the_latest_snapshot_and_never_asks_portaudio():
-    with patch("sounddevice.query_devices") as query:
-        tray, icon = make_tray(Config(audio_device=None))
-        tray.devices_changed(DEVICES)
-        tray.devices_changed([(0, "MacBook Pro Microphone"), (1, "AirPods Microphone")])  # plugged in later
-        assert [text for text, _ in device_items(icon)] == ["System Default", "MacBook Pro Microphone", "AirPods Microphone"]
-    query.assert_not_called()
-    assert icon.update_menu_calls >= 2
-
-
-def test_transcription_submenu_shows_modes_and_availability():
-    config = Config(openai_api_key="test")
-    tray, icon = make_tray(config)
-    modes = items(find(icon.menu, "Transcription").submenu)
-    assert [(item.text, item.checked, item.enabled) for item in modes] == [
-        ("OpenAI (batch)", True, True),
-        ("OpenAI (streaming)", False, True),
-        ("Local (whisper.cpp)", False, False),
-    ]
-    tray.set_state("RECORDING")
-    assert all(not item.enabled for item in items(find(icon.menu, "Transcription").submenu))
-
-    config.mode = "whisper_cpp"
-    config.openai_api_key = ""
-    tray.set_state("IDLE")
-    modes = items(find(icon.menu, "Transcription").submenu)
-    assert [(item.checked, item.enabled) for item in modes] == [
-        (False, False), (False, False), (True, True),
-    ]
-
-
-def test_transcription_submenu_follows_vox_modes():
-    problems = {"batch": "Broken setup", "streaming": "Set an OpenAI API key first", "whisper_cpp": None}
-    _, icon = make_tray(Config(mode="batch", openai_api_key="test"))
-    with patch("vox.ui.tray.mode_problem", side_effect=lambda config, mode: problems[mode]) as problem:
-        modes = items(find(icon.menu, "Transcription").submenu)
-        assert [(item.text, item.enabled) for item in modes] == [
-            (LABELS["batch"], True),  # the current mode stays clickable: picking it again retries its setup
-            (LABELS["streaming"], False),
-            (LABELS["whisper_cpp"], True),
-        ]
-    assert {call.args[1] for call in problem.call_args_list} == {"streaming", "whisper_cpp"}
-
-
-@pytest.mark.anyio
-async def test_transcription_menu_sends_mode_to_daemon():
-    tray, icon = make_tray(Config(openai_api_key="test"))
-    queue: asyncio.Queue[str] = asyncio.Queue()
-    tray.attach(asyncio.get_running_loop(), queue, None, MagicMock())
-    find(find(icon.menu, "Transcription").submenu, "OpenAI (streaming)")(icon)
-    await settle()
-    assert queue.get_nowait() == "mode:streaming"
-
-
-@pytest.mark.anyio
-async def test_selecting_device_stores_its_name_on_daemon_loop():
-    config = Config(audio_device=None)
-    tray, icon = make_tray(config)
-    tray.attach(asyncio.get_running_loop(), asyncio.Queue(), None, MagicMock())
-    tray.devices_changed(DEVICES)
-    find(find(icon.menu, "Input Device").submenu, "USB Audio Interface")(icon)
-    assert config.audio_device is None  # applied on the daemon loop, not the UI thread
-    await settle()
-    assert config.audio_device == "USB Audio Interface"  # the name survives PortAudio renumbering devices
-
-    tray.devices_changed([(0, "AirPods Microphone"), (1, "USB Audio Interface")])
-    assert [text for text, checked in device_items(icon) if checked] == ["USB Audio Interface"]
-
-    find(find(icon.menu, "Input Device").submenu, "System Default")(icon)
-    await settle()
-    assert config.audio_device is None
-
-
-# -- Recording limit --------------------------------------------------------------
-
-
-def limit_items(icon):
-    return [(i.text, i.checked) for i in items(find(icon.menu, "Recording Limit").submenu)]
-
-
-def test_recording_limit_submenu_checks_the_current_limit():
-    config = Config(openai_api_key="test", max_recording_seconds=900)
-    tray, icon = make_tray(config)
-    assert limit_items(icon) == [
-        ("5 min", False), ("10 min", False), ("15 min", True), ("30 min", False), ("60 min", False),
-    ]
-    config.max_recording_seconds = 1800
-    tray.limit_changed()
-    assert [text for text, checked in limit_items(icon) if checked] == ["30 min"]
-
-
-def test_recording_limit_from_config_file_is_listed_and_checked():
-    _, icon = make_tray(Config(openai_api_key="test", max_recording_seconds=120))
-    assert [text for text, _ in limit_items(icon)] == ["2 min", "5 min", "10 min", "15 min", "30 min", "60 min"]
-    assert [text for text, checked in limit_items(icon) if checked] == ["2 min"]
-
-
-@pytest.mark.anyio
-async def test_recording_limit_item_sends_the_limit_to_the_daemon():
-    tray, icon = make_tray()
-    queue: asyncio.Queue[str] = asyncio.Queue()
-    tray.attach(asyncio.get_running_loop(), queue, None, MagicMock())
-    find(find(icon.menu, "Recording Limit").submenu, "10 min")(icon)
-    await settle()
-    assert queue.get_nowait() == "limit:600"
-
-
 @pytest.mark.anyio
 async def test_recent_dictations_listed_and_copied(tmp_path):
     history = HistoryDB(tmp_path / "history.db")
@@ -356,9 +213,9 @@ async def test_recent_dictations_are_their_own_menu_section(tmp_path):
     tray.attach(asyncio.get_running_loop(), asyncio.Queue(), history, MagicMock())
     assert _sections(icon.menu) == [
         ["Vox Transfer · Idle"],
-        ["Pause Dictation", "Input Device", "Transcription", "Recording Limit"],
+        ["Pause Dictation"],
         [RECENT_HEADER, "“three”", "“two”", "“one”"],
-        ["Search History…", "Vocabulary & Snippets…", "Set API Key…", "Set Hotkey…"],
+        ["Search History…", SETTINGS],
         ["Quit Vox Transfer"],
     ]
     history.close()
@@ -369,41 +226,23 @@ def test_empty_recent_section_keeps_its_place():
     assert _sections(icon.menu)[2] == ["No dictations yet"]
 
 
-def test_selected_device_resolution():
-    devices = [(0, "MacBook Pro Microphone"), (2, "USB Audio Interface")]
-    assert _selected_device(None, devices) is None
-    assert _selected_device(2, devices) == 2
-    assert _selected_device(5, devices) is None
-    assert _selected_device("usb", devices) == 2
-    assert _selected_device("missing", devices) is None
-    # A stored name picks its own device, not an earlier one whose name contains it
-    assert _selected_device("USB Audio", [(1, "USB Audio 2"), (4, "USB Audio")]) == 4
-    linux = [(0, "HDA Intel PCH: ALC257 Analog (hw:0,0)"), (1, "sysdefault"), (2, "pulse"), (3, "default")]
-    assert _selected_device("default", linux) == 3
-    assert _selected_device("Default ", linux) == 3
+def test_a_missing_key_puts_set_api_key_under_the_status_line():
+    _, icon = make_tray(Config(mode="batch"))
+    assert _sections(icon.menu) == [
+        ["Vox Transfer · API key needed", SET_KEY],
+        ["Pause Dictation"],
+        ["No dictations yet"],
+        ["Search History…", SETTINGS],
+        ["Quit Vox Transfer"],
+    ]
 
 
-@pytest.mark.parametrize("spec", ["default", "Default ", "pulse", "usb audio", "USB Audio", "USB Audio 2", "alc257"])
-def test_checked_device_is_the_one_the_recorder_opens(spec):
-    from vox.audio import resolve_input_device
-
-    names = ["HDA Intel PCH: ALC257 Analog (hw:0,0)", "sysdefault", "pulse", "default", "USB Audio 2", "USB Audio"]
-    with patch("vox.audio.sd.query_devices", return_value=[{"name": n, "max_input_channels": 2} for n in names]):
-        recorded = resolve_input_device(spec)
-    assert _selected_device(spec, list(enumerate(names))) == recorded
-
-
-@pytest.mark.anyio
-async def test_devices_with_the_same_name_check_the_first():
-    # Only the name is stored, so either pick checks the first: the device the recorder opens
-    config = Config(audio_device=None)
-    tray, icon = make_tray(config)
-    tray.attach(asyncio.get_running_loop(), asyncio.Queue(), None, MagicMock())
-    tray.devices_changed([(1, "USB Microphone"), (3, "USB Microphone")])
-    items(find(icon.menu, "Input Device").submenu)[2](icon)
-    await settle()
-    assert config.audio_device == "USB Microphone"
-    assert device_items(icon) == [("System Default", False), ("USB Microphone", True), ("USB Microphone", False)]
+def test_the_menu_has_no_settings_submenus_or_separate_windows():
+    _, icon = make_tray()
+    texts = [item.text for item in items(icon.menu)]
+    for gone in ("Input Device", "Transcription", "Recording Limit", "Vocabulary & Snippets…", "Set Hotkey…", SET_KEY):
+        assert gone not in texts
+    assert all(item.submenu is None for item in items(icon.menu))
 
 
 @pytest.mark.anyio
@@ -463,13 +302,13 @@ def test_history_window_launch_is_single_instance(tmp_path):
     history.close()
 
 
-def test_vocab_window_gets_config_path(tmp_path):
+def test_settings_window_gets_config_path_and_opens_on_general(tmp_path):
     config = Config()
     config._config_path = tmp_path / "config.toml"
     launcher = MagicMock(return_value=_fake_proc())
     _, icon = make_tray(config, launcher=launcher)
-    find(icon.menu, "Vocabulary & Snippets…")(icon)
-    launcher.assert_called_once_with([sys.executable, "-P", "-m", VOCAB_WINDOW, "--config", str(tmp_path / "config.toml")])
+    find(icon.menu, SETTINGS)(icon)
+    launcher.assert_called_once_with([sys.executable, "-P", "-m", SETTINGS_WINDOW, "--config", str(tmp_path / "config.toml")])
 
 
 def test_open_windows_are_closed_when_tray_exits(tmp_path):
@@ -477,7 +316,7 @@ def test_open_windows_are_closed_when_tray_exits(tmp_path):
     config._config_path = tmp_path / "config.toml"
     alive, exited = _fake_proc(alive=True), _fake_proc(alive=False)
     tray, icon = make_tray(config, launcher=MagicMock(side_effect=[alive]))
-    find(icon.menu, "Vocabulary & Snippets…")(icon)
+    find(icon.menu, SETTINGS)(icon)
     tray._windows["exited"] = exited
     tray.run()
     alive.terminate.assert_called_once()
@@ -489,7 +328,7 @@ def test_launch_failure_is_logged_not_raised(tmp_path):
     config._config_path = tmp_path / "config.toml"
     focus = MagicMock()
     _, icon = make_tray(config, launcher=MagicMock(side_effect=OSError("no python")), focus=focus)
-    find(icon.menu, "Vocabulary & Snippets…")(icon)
+    find(icon.menu, SETTINGS)(icon)
     focus.assert_not_called()
 
 
@@ -500,8 +339,8 @@ def test_focus_on_linux_relaunches_only_an_open_window():
     with patch.object(tray.sys, "platform", "linux"), patch.object(tray, "_launch_window") as launch:
         tray._focus_window(proc, None)  # just launched: GTK presents it
         launch.assert_not_called()
-        tray._focus_window(proc, ["python", "-m", VOCAB_WINDOW])  # the single-instance app presents the open one
-        launch.assert_called_once_with(["python", "-m", VOCAB_WINDOW])
+        tray._focus_window(proc, ["python", "-m", SETTINGS_WINDOW])  # the single-instance app presents the open one
+        launch.assert_called_once_with(["python", "-m", SETTINGS_WINDOW])
 
 
 def test_focus_on_macos_hands_activation_to_the_window():
@@ -526,7 +365,7 @@ def test_windows_close_even_if_tray_loop_raises(tmp_path):
     config._config_path = tmp_path / "config.toml"
     proc = _fake_proc(alive=True)
     tray, icon = make_tray(config, launcher=MagicMock(return_value=proc))
-    find(icon.menu, "Vocabulary & Snippets…")(icon)
+    find(icon.menu, SETTINGS)(icon)
     icon.run = MagicMock(side_effect=RuntimeError("tray backend"))
     with pytest.raises(RuntimeError):
         tray.run()
@@ -563,13 +402,6 @@ def test_unreadable_keyring_is_not_reported_as_a_missing_key():
     assert icon.title == "Vox Transfer · Can’t read the keyring"
 
 
-def test_with_a_key_the_item_sits_with_the_other_windows():
-    _, icon = make_tray()
-    texts = [item.text for item in icon.menu]
-    assert texts[0] == "Vox Transfer · Idle"
-    assert texts.index(SET_KEY) == texts.index("Vocabulary & Snippets…") + 1
-
-
 def test_local_transcription_needs_no_key():
     _, icon = make_tray(Config(mode="whisper_cpp"))
     assert icon.title == "Vox Transfer · Idle"
@@ -596,46 +428,9 @@ def test_recording_shows_the_state_not_the_key():
     assert icon.title == "Vox Transfer · Recording…"
 
 
-def test_key_window_closing_tells_the_daemon_to_reread_the_key():
-    proc = _fake_proc()
-    launcher = MagicMock(return_value=proc)
-    tray, icon = make_tray(Config(mode="batch"), launcher=launcher)
-    loop, queue = MagicMock(), MagicMock()
-    tray.attach(loop, queue, None, MagicMock())
-    with patch("vox.ui.tray.threading.Thread") as thread:
-        find(icon.menu, SET_KEY)(icon)
-    launcher.assert_called_once_with([sys.executable, "-P", "-m", KEY_WINDOW])
-    kwargs = thread.call_args.kwargs
-    target, args = kwargs["target"], kwargs["args"]
-    target(*args)  # what the thread runs: wait for the window, then tell the daemon
-    proc.wait.assert_called_once_with()
-    loop.call_soon_threadsafe.assert_called_once_with(queue.put_nowait, "api_key")
-
-
-def test_daemon_can_open_the_key_window():
-    launcher = MagicMock(return_value=_fake_proc())
-    tray, _ = make_tray(Config(mode="batch"), launcher=launcher)
-    with patch("vox.ui.tray.threading.Thread"):
-        tray.open_key_window()
-    launcher.assert_called_once_with([sys.executable, "-P", "-m", KEY_WINDOW])
-
-
-# -- Hotkey -------------------------------------------------------------------------
-
-
-def test_set_hotkey_follows_set_api_key():
-    _, icon = make_tray()
-    texts = [item.text for item in icon.menu]
-    assert texts.index(SET_HOTKEY) == texts.index(SET_KEY) + 1
-    _, icon = make_tray(Config(mode="batch"))  # no key: Set API Key… moves to the top, Set Hotkey… stays
-    texts = [item.text for item in icon.menu]
-    assert texts.index(SET_KEY) == 1
-    assert texts.index(SET_HOTKEY) == texts.index("Vocabulary & Snippets…") + 1
-
-
-def hotkey_tray(tmp_path, launcher):
+def settings_tray(tmp_path, launcher, config=None):
     """A tray with a config path whose daemon events, and window launches, land in one list in order."""
-    config = Config(openai_api_key="test")
+    config = config or Config(openai_api_key="test")
     config._config_path = tmp_path / "config.toml"
     events = []
     tray, icon = make_tray(config, launcher=launcher)
@@ -645,7 +440,29 @@ def hotkey_tray(tmp_path, launcher):
     return tray, icon, events
 
 
-def test_hotkey_window_suspends_the_hotkey_until_it_closes(tmp_path):
+def test_set_api_key_opens_settings_on_the_transcription_page(tmp_path):
+    launcher = MagicMock(return_value=_fake_proc())
+    _, icon, _ = settings_tray(tmp_path, launcher, Config(mode="batch"))
+    with patch("vox.ui.tray.threading.Thread"):
+        find(icon.menu, SET_KEY)(icon)
+    launcher.assert_called_once_with(
+        [sys.executable, "-P", "-m", SETTINGS_WINDOW, "--config", str(tmp_path / "config.toml"), "--page", "transcription"]
+    )
+
+
+def test_daemon_can_open_settings_on_a_page(tmp_path):
+    launcher = MagicMock(return_value=_fake_proc())
+    tray, _, events = settings_tray(tmp_path, launcher, Config(mode="batch"))
+    with patch("vox.ui.tray.threading.Thread"):
+        tray.open_settings("transcription")
+    assert launcher.call_args.args[0][-2:] == ["--page", "transcription"]
+    assert events == ["settings:open"]
+
+
+# -- Settings -------------------------------------------------------------------------
+
+
+def test_settings_window_suspends_dictation_until_it_closes(tmp_path):
     proc = _fake_proc()
 
     def launch(command):
@@ -653,33 +470,48 @@ def test_hotkey_window_suspends_the_hotkey_until_it_closes(tmp_path):
         return proc
 
     launcher = MagicMock(side_effect=launch)
-    tray, icon, events = hotkey_tray(tmp_path, launcher)
+    tray, icon, events = settings_tray(tmp_path, launcher)
     with patch("vox.ui.tray.threading.Thread") as thread:
-        find(icon.menu, SET_HOTKEY)(icon)
-    command = [sys.executable, "-P", "-m", HOTKEY_WINDOW, "--config", str(tmp_path / "config.toml")]
+        find(icon.menu, SETTINGS)(icon)
+    command = [sys.executable, "-P", "-m", SETTINGS_WINDOW, "--config", str(tmp_path / "config.toml")]
     launcher.assert_called_once_with(command)
-    assert events == ["hotkey:suspend", "launched"]
+    assert events == ["settings:open", "launched"]
+    assert icon.title == f"Vox Transfer · {SETTINGS_OPEN}"
 
     kwargs = thread.call_args.kwargs
     kwargs["target"](*kwargs["args"])  # what the thread runs: wait for the window, however it ends, then resume
     proc.wait.assert_called_once_with()
-    assert events == ["hotkey:suspend", "launched", "hotkey:resume"]
+    assert events == ["settings:open", "launched", "settings:closed"]
+    assert icon.title == "Vox Transfer · Idle"
 
 
-def test_a_hotkey_window_that_fails_to_open_resumes_the_hotkey(tmp_path):
-    tray, icon, events = hotkey_tray(tmp_path, MagicMock(side_effect=OSError("no python")))
-    find(icon.menu, SET_HOTKEY)(icon)
-    assert events == ["hotkey:suspend", "hotkey:resume"]
+def test_a_settings_window_that_fails_to_open_resumes_dictation(tmp_path):
+    tray, icon, events = settings_tray(tmp_path, MagicMock(side_effect=OSError("no python")))
+    find(icon.menu, SETTINGS)(icon)
+    assert events == ["settings:open", "settings:closed"]
+    assert icon.title == "Vox Transfer · Idle"
 
 
-def test_set_hotkey_is_unavailable_while_recording_or_processing():
+def test_an_open_settings_window_is_brought_forward_without_suspending_again(tmp_path):
+    proc = _fake_proc(alive=True)
+    launcher = MagicMock(return_value=proc)
+    tray, icon, events = settings_tray(tmp_path, launcher, Config(mode="batch"))
+    with patch("vox.ui.tray.threading.Thread"):
+        find(icon.menu, SETTINGS)(icon)
+        tray.open_settings("transcription")  # the hotkey pressed without a key while Settings is open
+    assert launcher.call_count == 1
+    tray._focus.assert_called_with(proc, [*launcher.call_args.args[0], "--page", "transcription"])
+    assert events == ["settings:open"]
+
+
+def test_settings_is_unavailable_while_recording_or_processing():
     tray, icon = make_tray()
-    assert find(icon.menu, SET_HOTKEY).enabled
+    assert find(icon.menu, SETTINGS).enabled
     for state, enabled in (("RECORDING", False), ("PROCESSING", False), ("IDLE", True)):
         tray.set_state(state)
-        assert find(icon.menu, SET_HOTKEY).enabled is enabled
+        assert find(icon.menu, SETTINGS).enabled is enabled
     tray.set_paused(True)
-    assert find(icon.menu, SET_HOTKEY).enabled
+    assert find(icon.menu, SETTINGS).enabled
 
 
 # -- Status line problems -----------------------------------------------------------
@@ -705,8 +537,14 @@ def test_status_line_reports_the_most_urgent_problem_while_idle():
     assert icon.title == "Vox Transfer · whisper.cpp model not found: /models/ggml-base.bin"  # then the mode
     assert items(icon.menu)[0].text == icon.title
 
+    tray._apply_settings_open(True)
+    assert icon.title == "Vox Transfer · whisper.cpp model not found: /models/ggml-base.bin"  # more urgent than Settings
+
     config.mode_error = None
     tray.mode_changed()
+    assert icon.title == f"Vox Transfer · {SETTINGS_OPEN}"  # then Settings being open, which silences the hotkey
+
+    tray._apply_settings_open(False)
     assert icon.title == "Vox Transfer · Microphone is silent: check its permission"  # then the notice
 
     tray.set_state("RECORDING")
@@ -744,7 +582,7 @@ def test_windows_ignore_a_vox_folder_in_the_working_directory(tmp_path):
     (tmp_path / "vox" / "__init__.py").write_text("raise SystemExit('shadowed by the working directory')\n")
     launcher = MagicMock(return_value=_fake_proc())
     _, icon = make_tray(launcher=launcher)
-    find(icon.menu, "Vocabulary & Snippets…")(icon)
+    find(icon.menu, SETTINGS)(icon)
     command = launcher.call_args.args[0]
     interpreter = command[: command.index("-m")]  # the interpreter and its flags, as the window runs them
     probe = subprocess.run(
@@ -759,7 +597,7 @@ def test_every_window_process_is_waited_on_so_none_lingers(tmp_path):
     proc = _fake_proc()
     tray, icon = make_tray(config, launcher=MagicMock(return_value=proc))
     with patch("vox.ui.tray.threading.Thread") as thread:
-        find(icon.menu, "Vocabulary & Snippets…")(icon)
+        find(icon.menu, SETTINGS)(icon)
     kwargs = thread.call_args.kwargs
     kwargs["target"](*kwargs["args"])  # what the thread runs
     proc.wait.assert_called_once_with()
@@ -788,7 +626,7 @@ def test_linux_reopen_process_is_waited_on():
     with patch.object(tray.sys, "platform", "linux"), \
          patch.object(tray, "_launch_window", return_value=reopened), \
          patch.object(tray.threading, "Thread") as thread:
-        tray._focus_window(_fake_proc(), ["python", "-m", VOCAB_WINDOW])
+        tray._focus_window(_fake_proc(), ["python", "-m", SETTINGS_WINDOW])
     assert thread.call_args.kwargs["target"] == reopened.wait
     thread.return_value.start.assert_called_once_with()
 

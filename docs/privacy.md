@@ -62,7 +62,8 @@ Screenshots are never kept: on macOS the temporary file is deleted as soon as it
 Linux the image goes straight from `maim` to `tesseract`. Text recognition runs on your computer,
 and only the filtered words listed above are sent.
 
-With `screen = false` under `[context]`, Vox Transfer sends no window-title words and no screen text
+With screen hints off (the **Screen hints** switch on the General page of Settings, or
+`screen = false` under `[context]`), Vox Transfer sends no window-title words and no screen text
 to any service and never captures the screen, so macOS never asks for Screen Recording. It still
 looks up which app has focus, locally, to pick the right paste shortcut.
 

@@ -17,7 +17,7 @@
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/images/hero-dark.png">
-  <img src="docs/images/hero-light.png" alt="The Vox Transfer menu in the macOS menu bar, beside the Set Hotkey window">
+  <img src="docs/images/hero-light.png" alt="The Vox Transfer icon in the macOS menu bar, above the General page of its Settings window">
 </picture>
 
 ## How it works
@@ -30,8 +30,8 @@ Shift still types capitals: only a tap on its own starts dictation. It works in 
 documents, code editors and terminals.
 
 Vox Transfer runs in the background, with a microphone icon in the menu bar (macOS) or the system
-tray (Linux). Everything else is in its menu, from choosing another hotkey to searching what you've
-dictated.
+tray (Linux). Everything else is in its menu and its Settings window, from choosing another hotkey to
+searching what you've dictated.
 
 ## Install
 
@@ -69,8 +69,8 @@ transcription) and set it up.
 ## What you get
 
 - **Works wherever you type.** It pastes into the app you're in, then puts your clipboard back.
-- **OpenAI or fully offline.** Transcribe with OpenAI, or locally with whisper.cpp. Switch from the
-  menu.
+- **OpenAI or fully offline.** Transcribe with OpenAI, or locally with whisper.cpp. Switch in
+  Settings.
 - **Spells your words right.** Add names and jargon to your vocabulary.
 - **Snippets.** Say "my email" and get your email address.
 - **Searchable history** of everything you've dictated, kept on your computer.
@@ -81,7 +81,7 @@ transcription) and set it up.
     <td width="50%">
       <picture>
         <source media="(prefers-color-scheme: dark)" srcset="docs/images/snippets-dark.png">
-        <img src="docs/images/snippets-light.png" alt="The Snippets tab of the Vocabulary window on macOS">
+        <img src="docs/images/snippets-light.png" alt="The Snippets page of Settings on macOS">
       </picture>
     </td>
     <td width="50%">
@@ -92,7 +92,7 @@ transcription) and set it up.
     </td>
   </tr>
   <tr>
-    <td align="center">Vocabulary &amp; Snippets on macOS</td>
+    <td align="center">Snippets in Settings on macOS</td>
     <td align="center">History on Linux</td>
   </tr>
 </table>
@@ -100,7 +100,7 @@ transcription) and set it up.
 ## Learn more
 
 - [Install](docs/install.md): other ways to install, permissions, updating and uninstalling
-- [Using Vox Transfer](docs/using.md): the hotkey, the menu and long recordings
+- [Using Vox Transfer](docs/using.md): the hotkey, the menu, Settings and long recordings
 - [Settings](docs/settings.md): every option, sounds, and offline transcription
 - [Privacy](docs/privacy.md): what is sent and what stays on your computer
 - [Troubleshooting](docs/troubleshooting.md)

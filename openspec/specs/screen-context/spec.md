@@ -6,7 +6,7 @@ Screen hints help the transcriber spell names and terms that are visible on scre
 ## Requirements
 
 ### Requirement: Screen Hints Setting
-The system SHALL provide a `[context] screen` setting, on by default, that controls whether window-title words and focused-window text are used as transcription hints. A change to the setting SHALL apply from the next dictation without a restart.
+The system SHALL provide a `[context] screen` setting, on by default, that controls whether window-title words and focused-window text are used as transcription hints, and SHALL let the user turn it on and off on the General page of Settings. A change to the setting SHALL apply from the next dictation without a restart.
 
 #### Scenario: Default
 - **WHEN** `config.toml` does not set `[context] screen`
@@ -21,7 +21,7 @@ The system SHALL provide a `[context] screen` setting, on by default, that contr
 - **THEN** Vox still detects, on the computer, which kind of app has focus, so it can pick the right paste shortcut
 
 #### Scenario: Changed while running
-- **WHEN** the user edits `[context] screen` in `config.toml` while Vox runs
+- **WHEN** the user edits `[context] screen` in `config.toml`, or turns Screen hints on or off in Settings, while Vox runs
 - **THEN** the next dictation follows the new value
 
 ### Requirement: Focused Window Capture

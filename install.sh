@@ -490,7 +490,7 @@ install_vox() {
         Darwin) mac_service "$repo" ;;
         esac
     fi
-    say "Vox Transfer asks for your OpenAI API key when it needs one; change it later with Set API Key… in its menu"
+    say "Vox Transfer asks for your OpenAI API key when it needs one; change it later on the Transcription page of Settings… in its menu"
     wayland_warning
     path_warning
     say "Done. Run '$BIN --help' for options."

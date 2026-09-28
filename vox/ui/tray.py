@@ -1,4 +1,4 @@
-"""Tray icon (macOS menu bar, Linux AppIndicator): status, dictation settings, recent dictations and the windows.
+"""Tray icon (macOS menu bar, Linux AppIndicator): status, pausing, recent dictations, and the History and Settings windows.
 
 Cocoa and GTK both want the tray on the main thread, so the tray owns the main
 thread while the asyncio daemon runs in its own thread. Menu callbacks run on
@@ -20,10 +20,8 @@ import threading
 from collections.abc import Callable
 from typing import Any
 
-from ..audio import match_input_device
-from ..config import DEFAULT_CONFIG_PATH, RECORDING_LIMIT_CHOICES, Config
+from ..config import DEFAULT_CONFIG_PATH, Config
 from ..history import HistoryDB, HistoryRecord
-from ..modes import LABELS, mode_problem
 from .icons import IconState, is_template, make_icon
 
 log = logging.getLogger(__name__)
@@ -41,13 +39,12 @@ _MENU_RETRY_SECONDS = 0.05
 
 RECENT_HEADER = "Click a recent dictation to copy it"
 CONFIG_ERROR = "Settings file has an error"
+SETTINGS_OPEN = "Dictation is off while Settings is open"
 
 HISTORY_WINDOW = "vox.ui.history_window"
-VOCAB_WINDOW = "vox.ui.vocab_window"
-KEY_WINDOW = "vox.ui.key_window"
-HOTKEY_WINDOW = "vox.ui.hotkey_window"
+SETTINGS_WINDOW = "vox.ui.settings_window"
 SET_KEY = "Set API Key…"
-SET_HOTKEY = "Set Hotkey…"
+SETTINGS = "Settings…"
 
 
 def create_tray(config: Config) -> TrayManager | None:
@@ -275,7 +272,7 @@ class TrayManager:
         self._state = IconState.IDLE
         self._paused = False
         self._notice: str | None = None
-        self._devices: list[tuple[int, str]] | None = None  # daemon snapshot; None until the first one arrives
+        self._settings_open = False  # dictation is off meanwhile
         self._recent: list[HistoryRecord] = []
         self._windows: dict[str, subprocess.Popen] = {}
         self._images = {state: make_icon(state, light=light) for state in IconState}
@@ -339,15 +336,9 @@ class TrayManager:
         """Show a persistent problem (e.g. Wayland, a silent microphone) in the status line; None clears it."""
         self._dispatch(self._apply_notice, text)
 
-    def limit_changed(self) -> None:
-        self._dispatch(self._render)
-
-    def devices_changed(self, devices: list[tuple[int, str]]) -> None:
-        """A fresh input-device snapshot from the daemon thread; the menu renders from it."""
-        self._dispatch(self._apply_devices, devices)
-
-    def open_key_window(self) -> None:
-        self._dispatch(self._open_key, None, None)
+    def open_settings(self, page: str | None = None) -> None:
+        """Open Settings on ``page`` (such as "transcription"), or bring it forward if it is open."""
+        self._dispatch(self._open_settings, page)
 
     def stop(self) -> None:
         self._dispatch(self._icon.stop)
@@ -376,13 +367,17 @@ class TrayManager:
         return "Can’t read the keyring" if self._config.api_key_error else "API key needed"
 
     def _problem(self) -> str | None:
-        """What the status line reports while idle, most urgent first: config.toml, the key, the mode, a notice.
+        """What the status line reports while idle, most urgent first: config.toml, the key, the mode,
+        Settings being open, then a notice.
 
         A config.toml that didn't load comes first: until it does, the mode (and so whether a key is
         needed at all) is only the default's.
         """
         config = self._config
-        problem = (CONFIG_ERROR if config.config_error else None) or self._key_problem() or config.mode_error or self._notice
+        problem = (
+            (CONFIG_ERROR if config.config_error else None) or self._key_problem() or config.mode_error
+            or (SETTINGS_OPEN if self._settings_open else None) or self._notice
+        )
         return _one_line(problem, _PROBLEM_CHARS) if problem else None
 
     def _status_line(self) -> str:
@@ -405,8 +400,8 @@ class TrayManager:
         self._notice = text
         self._render()
 
-    def _apply_devices(self, devices: list[tuple[int, str]]) -> None:
-        self._devices = devices
+    def _apply_settings_open(self, open_: bool) -> None:
+        self._settings_open = open_
         self._render()
 
     def _apply_paused(self, paused: bool) -> None:
@@ -426,96 +421,22 @@ class TrayManager:
     # -- Menu (main thread) -----------------------------------------------
 
     def _menu_items(self):
-        # Sections: status, dictation controls, recent transcripts, windows, quit
+        # Sections: status, pausing, recent transcripts, windows, quit
         Item, Menu = self._pystray.MenuItem, self._pystray.Menu
-        key_problem = self._key_problem()
         yield Item(self._status_line(), None, enabled=False)
-        if key_problem:
-            yield Item(SET_KEY, self._open_key)
+        if self._key_problem():
+            yield Item(SET_KEY, self._open_key_page)
         yield Menu.SEPARATOR
         yield Item("Pause Dictation", self._toggle_pause, checked=lambda _: self._paused)
-        yield Item("Input Device", Menu(self._device_items))
-        yield Item("Transcription", Menu(self._transcription_items))
-        yield Item("Recording Limit", Menu(self._limit_items))
         yield Menu.SEPARATOR
         yield Item(RECENT_HEADER if self._recent else "No dictations yet", None, enabled=False)
         for rec in self._recent:
             yield Item(_recent_label(rec.text), self._copier(rec.text))
         yield Menu.SEPARATOR
         yield Item("Search History…", self._open_history, enabled=self._history is not None)
-        yield Item("Vocabulary & Snippets…", self._open_vocab)
-        if not key_problem:
-            yield Item(SET_KEY, self._open_key)
-        yield Item(SET_HOTKEY, self._open_hotkey, enabled=lambda _: self._state is IconState.IDLE)
+        yield Item(SETTINGS, self._open_settings_item, enabled=lambda _: self._state is IconState.IDLE)
         yield Menu.SEPARATOR
         yield Item("Quit Vox Transfer", self._quit)
-
-    def _device_items(self):
-        # Only the daemon's snapshot: querying PortAudio here would block the UI thread and see a stale device list
-        Item = self._pystray.MenuItem
-        spec = self._config.audio_device
-        if self._devices is None:
-            yield Item("System Default", self._device_setter(None), checked=lambda _: spec is None, radio=True)
-            if spec is not None:
-                yield Item(_device_label(spec), self._device_setter(spec), checked=lambda _: True, radio=True)
-            return
-        # Only a name is stored, so of two devices with the same name the first is checked: it's the one that records
-        selected = _selected_device(spec, self._devices)
-        yield Item("System Default", self._device_setter(None), checked=_is(selected, None), radio=True)
-        for index, name in self._devices:
-            yield Item(name, self._device_setter(name), checked=_is(selected, index), radio=True)
-
-    def _limit_items(self):
-        Item = self._pystray.MenuItem
-        choices = set(RECORDING_LIMIT_CHOICES)
-        current = self._config.max_recording_seconds
-        if type(current) is int and current > 0:
-            choices.add(current)  # a custom limit from config.toml still shows as the checked one
-        for seconds in sorted(choices):
-            yield Item(
-                _limit_label(seconds), self._limit_setter(seconds),
-                checked=lambda _, seconds=seconds: self._config.max_recording_seconds == seconds, radio=True,
-            )
-
-    def _transcription_items(self):
-        Item = self._pystray.MenuItem
-        for mode, label in LABELS.items():
-            yield Item(
-                label, self._mode_setter(mode),
-                checked=lambda _, mode=mode: self._config.mode == mode,
-                enabled=lambda _, mode=mode: self._can_select_mode(mode),
-                radio=True,
-            )
-
-    def _can_select_mode(self, mode: str) -> bool:
-        if self._state is not IconState.IDLE:
-            return False
-        # The current mode stays clickable: picking it again retries a setup that failed
-        return mode == self._config.mode or mode_problem(self._config, mode) is None
-
-    def _mode_setter(self, mode: str):
-        def action(icon, item):
-            self._send(f"mode:{mode}")
-
-        return action
-
-    def _limit_setter(self, seconds: int):
-        def action(icon, item):
-            self._send(f"limit:{seconds}")
-
-        return action
-
-    def _device_setter(self, spec: int | str | None):
-        # A name, not an index: PortAudio renumbers devices when the daemon refreshes the list
-        def action(icon, item):
-            def apply() -> None:
-                self._config.audio_device = spec
-                log.info("Input device set to %s from menu bar", item.text)
-                self._dispatch(self._icon.update_menu)
-
-            self._call_daemon(apply)
-
-        return action
 
     def _copier(self, text: str):
         def action(icon, item):
@@ -535,20 +456,27 @@ class TrayManager:
             # The window can delete dictations, so re-read the recent ones once it closes
             self._open_window(HISTORY_WINDOW, "--db", str(self._history.path), on_exit=self.history_changed)
 
-    def _open_vocab(self, icon, item) -> None:
-        path = self._config.config_path or DEFAULT_CONFIG_PATH
-        self._open_window(VOCAB_WINDOW, "--config", str(path))
+    def _open_settings_item(self, icon, item) -> None:
+        self._open_settings()
 
-    def _open_key(self, icon, item) -> None:
-        # The window writes the keychain itself; once it closes, the daemon re-reads the key
-        self._open_window(KEY_WINDOW, on_exit=lambda: self._send("api_key"))
+    def _open_key_page(self, icon, item) -> None:
+        self._open_settings("transcription")
 
-    def _open_hotkey(self, icon, item) -> None:
-        # The hotkey mustn't dictate while the window records keys. Sent before the window starts, so the resume its
-        # exit sends, however it ends, always comes after it; the daemon then applies what the window saved.
-        self._send("hotkey:suspend")
+    def _open_settings(self, page: str | None = None) -> None:
+        # The hotkey mustn't dictate while Settings is open: its Hotkey page records keys. settings:open goes before
+        # the window starts, so settings:closed, which its exit sends however it ends, always comes after it. The
+        # daemon then re-reads the API key and config.toml, so what the window saved applies at once.
+        def opened() -> None:
+            self._send("settings:open")
+            self._apply_settings_open(True)
+
+        def closed() -> None:
+            self._send("settings:closed")
+            self._dispatch(self._apply_settings_open, False)
+
         path = self._config.config_path or DEFAULT_CONFIG_PATH
-        self._open_window(HOTKEY_WINDOW, "--config", str(path), on_exit=lambda: self._send("hotkey:resume"))
+        args = ["--config", str(path), *(["--page", page] if page else [])]
+        self._open_window(SETTINGS_WINDOW, *args, on_open=opened, on_exit=closed)
 
     def _quit(self, icon, item) -> None:
         log.info("Quit requested from menu bar")
@@ -556,7 +484,15 @@ class TrayManager:
 
     # -- Plumbing ----------------------------------------------------------
 
-    def _open_window(self, module: str, *args: str, on_exit: Callable[[], None] | None = None) -> None:
+    def _open_window(
+        self,
+        module: str,
+        *args: str,
+        on_open: Callable[[], None] | None = None,
+        on_exit: Callable[[], None] | None = None,
+    ) -> None:
+        """Start a window process, or bring it forward if it is open. ``on_open`` runs only when one starts,
+        just before it does, and ``on_exit`` once it ends, or at once if it can't start."""
         # -P: a vox/ directory in the working directory must not shadow the installed package
         command = [sys.executable, "-P", "-m", module, *args]
         proc = self._windows.get(module)
@@ -564,6 +500,8 @@ class TrayManager:
             log.info("%s is already open; bringing it forward", module)
             self._focus(proc, command)
             return
+        if on_open is not None:
+            on_open()
         try:
             proc = self._windows[module] = self._launcher(command)
         except OSError as e:
@@ -613,27 +551,3 @@ def _one_line(text: str, limit: int) -> str:
 def _recent_label(text: str) -> str:
     """Quoted one-line preview, so transcripts read as content rather than commands."""
     return f"“{_one_line(text, _RECENT_LABEL_CHARS)}”"
-
-
-def _limit_label(seconds: int) -> str:
-    return f"{seconds // 60} min" if seconds % 60 == 0 else f"{seconds} sec"
-
-
-def _device_label(spec: int | str) -> str:
-    return spec if isinstance(spec, str) else f"Device {spec}"
-
-
-def _selected_device(spec: int | str | None, devices: list[tuple[int, str]]) -> int | None:
-    """Index of the configured input device among ``devices``, or None for the system default.
-
-    Names resolve as the recorder resolves them, so the checked device is the one that records.
-    """
-    if isinstance(spec, int):
-        return spec if any(i == spec for i, _ in devices) else None
-    if isinstance(spec, str):
-        return match_input_device(spec, devices)
-    return None
-
-
-def _is(selected: int | None, index: int | None) -> Callable[[Any], bool]:
-    return lambda _item: selected == index

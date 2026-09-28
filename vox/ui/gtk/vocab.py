@@ -1,8 +1,9 @@
-"""Vocabulary window for Linux (GTK 4 and libadwaita): Vocabulary and Snippets pages in a view switcher.
+"""Vocabulary and Snippets pages for Linux (GTK 4 and libadwaita), in a view switcher.
 
-Words are added from an entry row and removed from their row; snippets open in
-a dialog to add, edit or delete. Every change is saved to config.toml at once,
-and removals can be undone from the toast that confirms them.
+The Settings window builds on this one and adds its own pages. Words are added
+from an entry row and removed from their row; snippets open in a dialog to add,
+edit or delete. Every change is saved to config.toml at once, and removals can
+be undone from the toast that confirms them.
 """
 
 from __future__ import annotations
@@ -20,11 +21,9 @@ from ..vocab_model import (
     VocabModel,
     clash_warning,
 )
-from .common import Adw, GLib, Gtk, error_dialog, label, run_app
+from .common import Adw, GLib, Gtk, error_dialog, label
 
 log = logging.getLogger(__name__)
-
-APP_ID = "com.runsonmypc.vox.Vocabulary"
 
 
 def _boxed_list(placeholder_title: str, placeholder_body: str) -> Gtk.ListBox:
@@ -53,17 +52,17 @@ class VocabWindow(Adw.ApplicationWindow):
         self.set_size_request(360, 420)
 
         self.stack = Adw.ViewStack()
-        self.stack.add_titled_with_icon(self._build_words(), "vocabulary", "Vocabulary", "accessories-dictionary-symbolic")
-        self.stack.add_titled_with_icon(self._build_snippets(), "snippets", "Snippets", "insert-text-symbolic")
+        for name, title, icon, page in self.vocab_pages():
+            self.stack.add_titled_with_icon(page, name, title, icon)
         self.stack.connect("notify::visible-child-name", lambda *_: self.set_title(self.stack.get_page(
             self.stack.get_visible_child()).get_title()))
 
         header = Adw.HeaderBar(title_widget=Adw.ViewSwitcher(stack=self.stack, policy=Adw.ViewSwitcherPolicy.WIDE))
         self.banner = Adw.Banner()
-        view = Adw.ToolbarView(content=self.stack)
-        view.add_top_bar(header)
-        view.add_top_bar(self.banner)
-        self.toasts = Adw.ToastOverlay(child=view)
+        self.view = Adw.ToolbarView(content=self.stack)
+        self.view.add_top_bar(header)
+        self.view.add_top_bar(self.banner)
+        self.toasts = Adw.ToastOverlay(child=self.view)
         self.set_content(self.toasts)
 
         new = Gtk.ShortcutController()  # bubble phase: fields and the snippet dialog see keys first
@@ -79,6 +78,13 @@ class VocabWindow(Adw.ApplicationWindow):
             error_dialog(self, LOAD_FAILED_TITLE, model.load_error)
 
     # -- Layout -------------------------------------------------------------
+
+    def vocab_pages(self) -> list[tuple[str, str, str, Gtk.Widget]]:
+        """The pages, as (name, title, icon, widget); the Settings window adds its own before these."""
+        return [
+            ("vocabulary", "Vocabulary", "accessories-dictionary-symbolic", self._build_words()),
+            ("snippets", "Snippets", "insert-text-symbolic", self._build_snippets()),
+        ]
 
     def _build_words(self) -> Gtk.Widget:
         page = Adw.PreferencesPage()
@@ -137,13 +143,16 @@ class VocabWindow(Adw.ApplicationWindow):
             self.snippets_list.append(row)
 
         broken = self.model.load_error is not None
-        self.banner.set_title(GLib.markup_escape_text(f"Couldn’t read {self.model.shown_path}. Fix the file, then reopen this window."))
-        self.banner.set_revealed(broken)
+        self.show_banner()
         for widget in (self.word_entry, self.new_button, self.words_list, self.snippets_list):
             widget.set_sensitive(not broken)
         footer = f"Saved to {self.model.shown_path}. Vox Transfer picks up changes within a few seconds."
         self.words_footer.set_label(footer)
         self.snippets_footer.set_label(footer)
+
+    def show_banner(self) -> None:
+        self.banner.set_title(GLib.markup_escape_text(f"Couldn’t read {self.model.shown_path}. Fix the file, then reopen this window."))
+        self.banner.set_revealed(self.model.load_error is not None)
 
     # -- Changes ------------------------------------------------------------
 
@@ -288,7 +297,3 @@ class SnippetEditor(Adw.Dialog):
     def _delete(self) -> None:
         self.close()
         self.owner.remove_snippet(self.original)
-
-
-def run(model: VocabModel) -> None:
-    run_app(APP_ID, lambda app: VocabWindow(model, application=app))

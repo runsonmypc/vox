@@ -133,7 +133,7 @@ def migrate_plaintext(config_path: Path | None = None) -> None:
             if _plaintext_key(config_path, read_api_key_setting):
                 log.warning(
                     "Vox Transfer doesn't read openai_api_key from %s, and it stays there in plain text. Save the key "
-                    "with Set API Key… from the Vox Transfer menu, then delete the setting.", _shown(config_path),
+                    "on the Transcription page of Settings in the Vox Transfer menu, then delete the setting.", _shown(config_path),
                 )
             return
         # Each source on its own, so a config.toml that doesn't parse still lets the .env key move
@@ -162,7 +162,7 @@ def migrate_plaintext(config_path: Path | None = None) -> None:
             else:
                 log.warning(
                     "%s holds a different OpenAI API key from the one in %s. Vox Transfer uses the saved one; "
-                    "delete the file's copy, or save it from Set API Key…",
+                    "delete the file's copy, or save it on the Transcription page of Settings",
                     _shown(path), storage_name(),
                 )
     except Exception as e:
@@ -217,8 +217,8 @@ def _env_key_to_move(path: Path) -> str:
     values = set(_env_values(path))
     if len(values) > 1:
         log.warning(
-            "%s holds more than one OpenAI API key, so Vox Transfer moved none of them. Save the right one with "
-            "Set API Key… from the Vox Transfer menu, then delete the file's copies.", _shown(path),
+            "%s holds more than one OpenAI API key, so Vox Transfer moved none of them. Save the right one on "
+            "the Transcription page of Settings in the Vox Transfer menu, then delete the file's copies.", _shown(path),
         )
         return ""
     return values.pop() if values else ""

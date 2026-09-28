@@ -1,5 +1,6 @@
 # Vox Transfer configuration: copy to ~/.config/vox/config.toml and uncomment what you want to
-# change. Every commented-out setting shows its default. Vox Transfer applies changes within a few
+# change, or choose Settings… from the Vox Transfer menu, which writes most of these for you.
+# Every commented-out setting shows its default. Vox Transfer applies changes within a few
 # seconds of a save. Screen hints and the recording limit apply from the next dictation, and [audio]
 # changes wait for a recording in progress to end.
 #
@@ -7,17 +8,17 @@
 # until you fix it: the Vox Transfer menu shows "Settings file has an error" and the log names the
 # setting. An error in a later edit is logged, and the previous settings stay in effect.
 #
-# The OpenAI API key does not go here. Choose Set API Key… from the Vox Transfer menu; Vox Transfer
+# The OpenAI API key does not go here. Set it on the Transcription page of Settings; Vox Transfer
 # keeps it in the macOS Keychain or your Linux login keyring. OPENAI_API_KEY in the environment
 # overrides it.
 
 # Words the transcriber should spell exactly as written, sent as hints with every dictation.
-# The Vocabulary & Snippets… window edits this list. For example:
+# The Vocabulary page of Settings edits this list. For example:
 #   dictionary = ["FastAPI", "PostgreSQL", "Kubernetes"]
 # dictionary = []
 
 [hotkey]
-# Set Hotkey… in the menu records the key and the combination for you.
+# The Hotkey page of Settings records the key and the combination for you.
 # The key that starts and stops dictation when tapped on its own. Double-tap it to cancel.
 # Other choices include "right_ctrl", "right_alt", "cmd_r" (macOS), "f13", "fn" (macOS, the Globe
 # key), "pause" and "scroll_lock" (Linux).
@@ -29,19 +30,19 @@
 # double_tap_timeout_ms = 400
 
 [audio]
-# The input device: unset uses the system default. Set an index or name from `vox --list-devices`. A
-# device picked from the Input Device menu lasts until Vox Transfer quits; set it here to keep one.
+# The input device: unset uses the system default. Set an index or name from `vox --list-devices`.
+# The General page of Settings lists the devices and saves the name of the one you pick.
 # For example:
 #   device = "MacBook Pro Microphone"
 # sample_rate = 48000
 # channels = 1
 # The recording limit, in seconds. A recording that reaches it stops and is transcribed as usual.
-# The Recording Limit menu sets it to 5, 10, 15, 30 or 60 minutes.
+# The General page of Settings sets it to 5, 10, 15, 30 or 60 minutes.
 # max_recording_seconds = 900
 
 [transcription]
 # "batch" and "streaming" send audio to OpenAI; "whisper_cpp" transcribes on this computer.
-# The Transcription menu switches between them and saves the choice here.
+# The Transcription page of Settings switches between them and saves the choice here.
 # mode = "batch"
 # The OpenAI model for streaming mode.
 # streaming_model = "gpt-live-transcribe"
@@ -61,7 +62,8 @@
 # needed and no audio leaves this computer. In a whisper.cpp checkout, run:
 #   cmake -B build && cmake --build build -j --config Release
 #   sh ./models/download-ggml-model.sh large-v3-turbo
-# then set model below and choose Local (whisper.cpp) from the Transcription menu. Paths may be
+# then set model below (or choose both files on the Transcription page of Settings) and choose
+# Local (whisper.cpp) there. Paths may be
 # absolute, start with ~, or be relative to this file. Give binary as a full path when Vox Transfer
 # runs at login, since the login service may not search the same PATH as your shell. For example:
 #   binary = "~/whisper.cpp/build/bin/whisper-cli"
@@ -93,7 +95,7 @@
 
 [snippets]
 # When a whole dictation matches a trigger (ignoring case and trailing .?!,), Vox Transfer pastes
-# the expansion instead. The Vocabulary & Snippets… window edits these. For example:
+# the expansion instead. The Snippets page of Settings edits these. For example:
 #   "my email" = "alex@example.com"
 #   "my address" = "123 Main St, Springfield, IL"
 

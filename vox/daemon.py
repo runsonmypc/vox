@@ -14,19 +14,11 @@ import wave
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 from enum import Enum
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from .attenuation import get_volume, set_volume
 from .audio import Recorder, has_speech, is_digital_silence
-from .config import (
-    DEFAULT_CONFIG_PATH,
-    Config,
-    load_config,
-    snippet_key,
-    update_max_recording_seconds,
-    update_transcription_mode,
-)
+from .config import DEFAULT_CONFIG_PATH, Config, file_stamp, load_config, snippet_key
 from .errors import ConfigError, DependencyError, InjectionError, StreamingError, VoxError
 from .history import HistoryDB
 from .hotkey import HotkeyListener
@@ -101,7 +93,7 @@ def run(config: Config) -> None:
         # Nowhere to ask for a key; headless Vox is started by hand, not by a service that would retry
         reason = f" ({config.api_key_error})" if config.api_key_error else ""
         log.error(
-            "No OpenAI API key%s. Start Vox Transfer from the desktop and choose Set API Key… from its menu, "
+            "No OpenAI API key%s. Start Vox Transfer from the desktop and set one in Settings… from its menu, "
             "or set OPENAI_API_KEY.", reason,
         )
         raise SystemExit(1)
@@ -248,7 +240,7 @@ class _Daemon:
 
         self.state = State.IDLE
         self.paused = False
-        self.hotkey_suspended = False  # while the hotkey window is open
+        self.hotkey_suspended = False  # while the Settings window is open
         self.saved_volume: float | None = None
         # Lowering the volume runs on a worker thread; a quit that lands meanwhile waits for it, then restores
         self._volume_lock = threading.Lock()
@@ -269,9 +261,10 @@ class _Daemon:
             config.mode_error = str(e)  # the tray shows it; a toggle tries again
             log.error("%s", e)
 
-        self._devices_sent: list[tuple[int, str]] | None = None
         self._device_timer: asyncio.TimerHandle | None = None
         self._device_job: asyncio.Task | None = None
+        # One applier for the poll and for Settings closing, so its audio rule sees every version of the file
+        self._apply_config = _ConfigApplier(config, self.recorder, tray, self._apply_hotkey)
 
     # -- Loop ---------------------------------------------------------------
 
@@ -282,8 +275,10 @@ class _Daemon:
         if tray is not None:
             tray.attach(self.loop, self.queue, self.history, asyncio.current_task())
             if self._key_missing() and config.api_key_error is None and config.config_error is None:
-                tray.open_key_window()
-        reload_task = asyncio.create_task(_config_reloader(config, self.recorder, tray, self._apply_hotkey))
+                tray.open_settings("transcription")
+        reload_task = asyncio.create_task(
+            _config_reloader(config, self.recorder, tray, self._apply_hotkey, self._apply_config)
+        )
         self._schedule_device_refresh(0)
 
         try:
@@ -302,18 +297,11 @@ class _Daemon:
             self._shutdown(reload_task)
 
     async def _handle(self, event: str) -> None:
-        if event.startswith("mode:"):
-            await self._switch_mode(event.partition(":")[2])
+        if event == "settings:open":
+            await self._settings_opened()
             return
-        if event.startswith("limit:"):
-            self._set_limit(event.partition(":")[2])
-            return
-        if event == "api_key":  # the key window closed
-            await self._reload_api_key()
-            log.info("OpenAI API key %s", "set" if self.config.openai_api_key else "not set")
-            return
-        if event in ("hotkey:suspend", "hotkey:resume"):  # the hotkey window opened, or closed
-            await self._suspend_hotkey(event == "hotkey:suspend")
+        if event == "settings:closed":
+            await self._settings_closed()
             return
 
         if event in ("pause", "resume"):
@@ -326,8 +314,8 @@ class _Daemon:
                 return
             event = "cancel"  # discard the in-progress recording and release the mic
         elif self.hotkey_suspended and event in ("toggle", "cancel"):
-            # No busy sound: the user is pressing keys to record a new hotkey
-            log.info("Ignoring %s while the hotkey window is open", event)
+            # No busy sound: the user may be pressing keys to record a new hotkey
+            log.info("Ignoring %s while Settings is open", event)
             return
         elif self.paused and event in ("toggle", "cancel"):
             log.info("Ignoring %s while paused", event)
@@ -584,9 +572,9 @@ class _Daemon:
             if config.api_key_error is not None:
                 log.warning("Not recording: the keychain couldn't be read (%s)", config.api_key_error)
             else:
-                log.warning("Not recording: no OpenAI API key. Choose Set API Key… from the Vox Transfer menu.")
+                log.warning("Not recording: no OpenAI API key. Set one in Settings… from the Vox Transfer menu.")
                 if self.tray is not None:
-                    self.tray.open_key_window()
+                    self.tray.open_settings("transcription")
             return False
         return self._ensure_transcriber()
 
@@ -639,78 +627,30 @@ class _Daemon:
         except Exception:
             log.warning("Could not prepare the OpenAI client", exc_info=True)
 
-    # -- Menu events -----------------------------------------------------------
+    # -- The Settings window ------------------------------------------------------
 
-    def _settings_file_broken(self, change: str) -> bool:
-        """Refuse a menu change while config.toml doesn't load: Vox can't know what the file sets."""
-        if self.config.config_error is None:
-            return False
-        log.warning("Can't change the %s until the settings file loads: %s", change, self.config.config_error)
-        self.sounds.play("error")
-        return True
+    async def _settings_opened(self) -> None:
+        """Keep the hotkey from dictating while Settings is open: its Hotkey page records keys."""
+        self.hotkey_suspended = True
+        if self.state is State.RECORDING:
+            await self._cancel()  # started just as the window opened: nothing could stop it now
 
-    async def _switch_mode(self, mode: str) -> None:
-        config = self.config
-        if self.state is not State.IDLE or self._settings_file_broken("transcription mode"):
-            return
-        if mode == config.mode and config.mode_error is None:
-            return
+    async def _settings_closed(self) -> None:
+        """Use what Settings saved at once, without waiting for the next poll: the API key, then config.toml."""
+        self.hotkey_suspended = False
+        await self._reload_api_key()
+        log.info("OpenAI API key %s", "set" if self.config.openai_api_key else "not set")
+        path = self.config.config_path or DEFAULT_CONFIG_PATH
         try:
-            # Building the transcriber tries the whisper.cpp setup, so mode_problem needn't
-            problem = mode_problem(config, mode, check_setup=False)
-            if problem is not None:
-                raise ConfigError(problem)
-            candidate = self._build_transcriber(mode)
-            update_transcription_mode(config.config_path or DEFAULT_CONFIG_PATH, mode)
-        except (ConfigError, OSError, ValueError) as e:
-            log.warning("Could not switch transcription mode: %s", e)
-            self.sounds.play("error")
+            new = load_config(path)
+        except ConfigError as e:
+            log.warning("Couldn't read the settings: %s", e)
+            if self.config.config_error is not None:
+                self.config.config_error = str(e)  # refused toggles name the problem the file has now
             return
-        config.mode = mode
-        config.mode_error = None
-        self._use_transcriber(candidate, mode)
-        log.info("Transcription mode set to %s", mode)
-        if self.tray is not None:
-            self.tray.mode_changed()
-
-    def _set_limit(self, value: str) -> None:
-        """Persist a recording limit picked from the menu; it applies from the next recording."""
-        config = self.config
-        if self._settings_file_broken("recording limit"):
-            return
-        try:
-            seconds = int(value)
-            if seconds <= 0:
-                raise ValueError(f"Invalid recording limit: {value}")
-            update_max_recording_seconds(config.config_path or DEFAULT_CONFIG_PATH, seconds)
-        except (ConfigError, OSError, ValueError) as e:
-            log.warning("Could not set the recording limit: %s", e)
-            self.sounds.play("error")
-            return
-        config.max_recording_seconds = seconds
-        log.info("Recording limit set to %d s", seconds)
-        if self.tray is not None:
-            self.tray.limit_changed()
+        self._apply_config(new, gone=not path.exists())
 
     # -- Hotkey ------------------------------------------------------------------
-
-    async def _suspend_hotkey(self, suspend: bool) -> None:
-        """Keep the hotkey from dictating while the hotkey window records keys; once it closes, use what it saved."""
-        self.hotkey_suspended = suspend
-        if suspend:
-            if self.state is State.RECORDING:
-                await self._cancel()  # started just as the window opened: nothing could stop it now
-            return
-        self._reload_hotkey()
-
-    def _reload_hotkey(self) -> None:
-        """Re-read [hotkey] at once, so a key saved in the window works the moment it closes."""
-        try:
-            new = load_config(self.config.config_path or DEFAULT_CONFIG_PATH)
-        except ConfigError as e:
-            log.warning("Couldn't read the hotkey settings: %s", e)
-            return
-        self._apply_hotkey(new)
 
     def _apply_hotkey(self, new: Config) -> None:
         """Listen for the [hotkey] settings in ``new`` if they changed. A pynput listener can't restart,
@@ -745,7 +685,7 @@ class _Daemon:
             self._schedule_device_refresh(_IDLE_DEVICE_SCAN_SECONDS)
 
     def _schedule_device_refresh(self, delay: float) -> None:
-        """Send the tray a fresh input-device list soon: PortAudio only sees new devices after a restart."""
+        """Re-scan the input devices soon: PortAudio only sees a microphone connected since it started after a restart."""
         if self.tray is None:
             return
         if self._device_timer is not None:
@@ -758,10 +698,7 @@ class _Daemon:
 
     async def _refresh_devices(self) -> None:
         try:
-            devices = await asyncio.to_thread(self.recorder.refresh_input_devices)
-            if devices is not None and devices != self._devices_sent:
-                self._devices_sent = devices
-                self.tray.devices_changed(devices)
+            await asyncio.to_thread(self.recorder.refresh_input_devices)
         except Exception:
             log.exception("Could not refresh the input device list")
         self._scan_devices_while_idle()
@@ -989,13 +926,71 @@ def _wav_duration(wav_data: bytes) -> float | None:
         return None
 
 
-def _file_stamp(path: Path) -> tuple[int, int, int] | None:
-    """Changes whenever the file does, also when an older copy is moved back over it; None if it is missing."""
-    try:
-        st = path.stat()
-    except OSError:
-        return None
-    return st.st_mtime_ns, st.st_size, st.st_ino
+class _ConfigApplier:
+    """Applies a version of config.toml that loaded to the running settings, with no restart.
+
+    The reloader's poll calls it, and so does the Settings window closing. ``apply_hotkey`` gets each
+    version, and swaps the hotkey listener when [hotkey] changed.
+    """
+
+    def __init__(
+        self,
+        config: Config,
+        recorder: Recorder,
+        tray: TrayManager | None = None,
+        apply_hotkey: Callable[[Config], None] | None = None,
+    ) -> None:
+        self.config = config
+        self.recorder = recorder
+        self.tray = tray
+        self.apply_hotkey = apply_hotkey
+        self.file_audio = (config.audio_device, config.sample_rate, config.channels)
+
+    def __call__(self, new_config: Config, *, gone: bool = False) -> None:
+        """Apply ``new_config``; ``gone`` says config.toml was deleted, so these are the defaults."""
+        config = self.config
+        config.snippets = new_config.snippets
+        config.dictionary = new_config.dictionary
+        config.window_classes = new_config.window_classes
+        config.context_screen = new_config.context_screen
+        config.sounds_enabled = new_config.sounds_enabled
+        config.attenuation_enabled = new_config.attenuation_enabled
+        config.attenuation_level = new_config.attenuation_level
+        config.max_recording_seconds = new_config.max_recording_seconds  # from the next recording
+        config.mode = new_config.mode
+        config.streaming_model = new_config.streaming_model
+        config.whisper_model = new_config.whisper_model
+        config.whisper_cpp_binary = new_config.whisper_cpp_binary
+        config.whisper_cpp_model = new_config.whisper_cpp_model
+        config.whisper_language = new_config.whisper_language
+        config.whisper_prompt = new_config.whisper_prompt
+        # The status line names a problem with the mode the file now selects, not one it moved away
+        # from; without a key an OpenAI mode is reported apart from this
+        mode_error = mode_problem(config, "whisper_cpp") if config.mode == "whisper_cpp" else None
+        if mode_error is not None and mode_error != config.mode_error:
+            log.warning("Local transcription can't run: %s", mode_error)
+        config.mode_error = mode_error
+
+        # Apply audio settings only when the file changed them, so a recording keeps the device it started on
+        new_file_audio = (new_config.audio_device, new_config.sample_rate, new_config.channels)
+        if new_file_audio != self.file_audio:
+            self.file_audio = new_file_audio
+            config.audio_device, config.sample_rate, config.channels = new_file_audio
+            self.recorder.reconfigure(config)  # waits for a recording in progress to end
+        if self.apply_hotkey is not None:
+            self.apply_hotkey(new_config)
+
+        path = config.config_path
+        if config.config_error is not None:
+            config.config_error = None
+            if gone:
+                log.info("%s is gone: Vox Transfer is using the default settings and records again", path)
+            else:
+                log.info("%s loads again: Vox Transfer is using its settings and records again", path)
+        else:
+            log.info("Config reloaded from %s", path)
+        if self.tray is not None:
+            self.tray.mode_changed()  # the status line names the problems
 
 
 async def _config_reloader(
@@ -1003,74 +998,33 @@ async def _config_reloader(
     recorder: Recorder,
     tray: TrayManager | None = None,
     apply_hotkey: Callable[[Config], None] | None = None,
+    apply_config: _ConfigApplier | None = None,
 ) -> None:
     """Poll config.toml every couple of seconds and apply what changed, with no restart.
 
-    ``apply_hotkey`` gets each version that loads, and swaps the hotkey listener when [hotkey] changed.
-    While config.config_error is set, the file is tried on every poll, and the first version that
-    loads (or its deletion, which means the defaults) is applied and clears it, so Vox records again.
+    ``apply_config`` applies each version that loads; without one, a new ``_ConfigApplier`` with
+    ``tray`` and ``apply_hotkey`` does. While config.config_error is set, the file is tried on every
+    poll, and the first version that loads (or its deletion, which means the defaults) is applied
+    and clears it, so Vox records again.
     """
     path = config.config_path
     if path is None:
         return
+    apply_config = apply_config or _ConfigApplier(config, recorder, tray, apply_hotkey)
 
-    last_stamp = _file_stamp(path)
-    file_audio = (config.audio_device, config.sample_rate, config.channels)
+    last_stamp = file_stamp(path)
     last_failure = config.config_error  # __main__ has logged that one
 
     while True:
         await asyncio.sleep(_CONFIG_POLL_SECONDS)
-        stamp = _file_stamp(path)
+        stamp = file_stamp(path)
         changed, last_stamp = stamp != last_stamp, stamp
         # A fix need not change the stamp (chmod), may predate the first stamp, or may be deleting
         # the file, so a file that doesn't load is retried whatever the stamp says.
         if config.config_error is None and (stamp is None or not changed):
             continue
         try:
-            new_config = load_config(path)
-
-            config.snippets = new_config.snippets
-            config.dictionary = new_config.dictionary
-            config.window_classes = new_config.window_classes
-            config.context_screen = new_config.context_screen
-            config.sounds_enabled = new_config.sounds_enabled
-            config.attenuation_enabled = new_config.attenuation_enabled
-            config.attenuation_level = new_config.attenuation_level
-            config.max_recording_seconds = new_config.max_recording_seconds  # from the next recording
-            config.mode = new_config.mode
-            config.streaming_model = new_config.streaming_model
-            config.whisper_model = new_config.whisper_model
-            config.whisper_cpp_binary = new_config.whisper_cpp_binary
-            config.whisper_cpp_model = new_config.whisper_cpp_model
-            config.whisper_language = new_config.whisper_language
-            config.whisper_prompt = new_config.whisper_prompt
-            # The status line names a problem with the mode the file now selects, not one it moved away
-            # from; without a key an OpenAI mode is reported apart from this
-            mode_error = mode_problem(config, "whisper_cpp") if config.mode == "whisper_cpp" else None
-            if mode_error is not None and mode_error != config.mode_error:
-                log.warning("Local transcription can't run: %s", mode_error)
-            config.mode_error = mode_error
-
-            # Apply audio settings only when the file changed them, so a device picked
-            # from the menu bar survives unrelated edits such as vocabulary changes.
-            new_file_audio = (new_config.audio_device, new_config.sample_rate, new_config.channels)
-            if new_file_audio != file_audio:
-                file_audio = new_file_audio
-                config.audio_device, config.sample_rate, config.channels = new_file_audio
-                recorder.reconfigure(config)  # waits for a recording in progress to end
-            if apply_hotkey is not None:
-                apply_hotkey(new_config)
-
-            if config.config_error is not None:
-                config.config_error = None
-                if stamp is None:
-                    log.info("%s is gone: Vox Transfer is using the default settings and records again", path)
-                else:
-                    log.info("%s loads again: Vox Transfer is using its settings and records again", path)
-            else:
-                log.info("Config reloaded from %s", path)
-            if tray is not None:
-                tray.mode_changed()  # the menu shows the mode and the limit, and the status line the problems
+            apply_config(load_config(path), gone=stamp is None)
         except ConfigError as e:
             if changed or str(e) != last_failure:  # a retry that fails the same way stays quiet
                 log.warning("Config reload failed: %s", e)

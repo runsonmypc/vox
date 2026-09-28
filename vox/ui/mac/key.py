@@ -1,4 +1,5 @@
-"""API key window for macOS: a secure field, where the key is kept, and Save, Remove and Cancel.
+"""API key sheet for macOS, opened from the Transcription tab of Settings: a secure field, where the key
+is kept, and Save, Remove and Cancel.
 
 The key is typed into an NSSecureTextField and saved straight to the Keychain.
 "Check with OpenAI" lists models on a background thread before saving.
@@ -63,6 +64,7 @@ class KeyController(NSObject):
             return None
         self.model = model
         self.closed = False
+        self.on_finish: Callable[[], None] | None = None  # ends the sheet; without one the window closes
         self.background = _in_background  # replaced in tests
         self.confirm = kit.confirm
         self._build()
@@ -255,10 +257,7 @@ class KeyController(NSObject):
     @objc.python_method
     def finish(self) -> None:
         self.closed = True
-        self.window.close()
-
-
-def run(model: KeyModel) -> None:
-    kit.application()
-    controller = KeyController.alloc().initWithModel_(model)
-    kit.run(controller.window, controller.secure_field)
+        if self.on_finish is not None:
+            self.on_finish()
+        else:
+            self.window.close()
