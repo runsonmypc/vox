@@ -7,6 +7,9 @@ All notable changes to Vox Transfer are listed here. Vox Transfer follows
 
 ### Fixed
 
+- On macOS, Vox Transfer no longer crashes when it pastes. It read the keyboard layout from a
+  background thread, which newer macOS versions stop with a trap; the lookup now runs on the main
+  thread, and without an answer within a second the paste uses the standard V key.
 - Local (whisper.cpp) transcription no longer fails when the graphics card has no memory left for
   the model, as when a game is running: it transcribes on the processor instead, more slowly.
   `[whisper_cpp] cpu_fallback = false` turns this off, and the error then says the graphics card

@@ -33,6 +33,8 @@ _CONCEALED_TYPE = "org.nspasteboard.ConcealedType"
 
 _KVK_ANSI_V = 9
 _CMD_KEY_STATE = 1  # Carbon cmdKey >> 8, the modifier state UCKeyTranslate expects
+# How long a paste waits for the main thread to read the keyboard layout (it may be busy)
+_LAYOUT_LOOKUP_TIMEOUT = 1.0
 
 # X11: how long the target gets to request the text after the paste keystroke before the
 # restore goes ahead anyway (a slow app, or a window that ignores the paste).
@@ -244,9 +246,39 @@ def _restore_text_only(pb, saved: list[dict], cleared: int) -> None:
 def _paste_keycode() -> int:
     """The key that types "v" with Command held in the current layout (Dvorak moves it).
 
-    Looked up on every paste because the user can switch layouts at any time. Layouts without
-    a "v" (Cyrillic, Greek) paste with the ANSI V key, as macOS itself does for Cmd shortcuts.
+    Looked up on every paste because the user can switch layouts at any time. The input source
+    API traps (SIGTRAP, not an exception) off the main thread, so a paste from a worker thread
+    hands the lookup to the menu bar's event loop and pastes with the ANSI V key without one.
     """
+    if threading.current_thread() is threading.main_thread():
+        return _layout_paste_keycode()
+    from AppKit import NSApp
+
+    app = NSApp()  # None when headless: never create the app off the main thread
+    if app is None or not app.isRunning():
+        log.debug("No main event loop to read the keyboard layout on; pasting with the ANSI V key")
+        return _KVK_ANSI_V
+    from PyObjCTools import AppHelper
+
+    found: list[int] = []
+    done = threading.Event()
+
+    def lookup() -> None:
+        try:
+            found.append(_layout_paste_keycode())
+        finally:
+            done.set()
+
+    AppHelper.callAfter(lookup)
+    if not done.wait(_LAYOUT_LOOKUP_TIMEOUT):
+        log.debug("The main thread did not read the keyboard layout in time; pasting with the ANSI V key")
+        return _KVK_ANSI_V
+    return found[0]
+
+
+def _layout_paste_keycode() -> int:
+    """Main thread only. Layouts without a "v" (Cyrillic, Greek) paste with the ANSI V key,
+    as macOS itself does for Cmd shortcuts."""
     try:
         from pynput._util.darwin import keycode_context, keycode_to_string
 
