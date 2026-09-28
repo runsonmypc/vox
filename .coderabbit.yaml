@@ -1,0 +1,27 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+language: "en-US"
+reviews:
+  profile: "chill"
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: false
+  review_status: true
+  auto_review:
+    enabled: true
+    drafts: false
+  path_filters:
+    - "!docs/images/**"
+    - "!uv.lock"
+  path_instructions:
+    - path: "vox/**"
+      instructions: >-
+        Vox Transfer is a dictation daemon for macOS (PyObjC/AppKit) and Linux (X11, GTK4 and
+        libadwaita 1.5 on Ubuntu 24.04). Watch for main-thread rules in AppKit and GTK, work
+        that could send audio or screen text to OpenAI when the user chose local transcription,
+        and secrets (the API key, passwords on screen) reaching logs or command lines.
+    - path: "openspec/**"
+      instructions: >-
+        OpenSpec specs and change records. Check that requirements and scenarios match the code
+        in the same pull request; do not review wording style.
+chat:
+  auto_reply: true

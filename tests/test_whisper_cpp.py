@@ -267,7 +267,7 @@ Path(a[a.index("-of") + 1] + ".txt").write_bytes({output!r})
     assert "�" in text
 
 
-GPU_FULL = '''import json, os, sys
+GPU_FULL = '''import json, sys
 from pathlib import Path
 a = sys.argv
 calls = Path(__file__).with_suffix(".calls")
@@ -275,7 +275,7 @@ calls.write_text(calls.read_text() + json.dumps(a[1:]) + "\\n" if calls.exists()
 if "-ng" not in a:
     sys.stderr.write("ggml_backend_cuda_buffer_type_alloc_buffer: allocating 1548.69 MiB on device 0: cudaMalloc failed: out of memory\\n")
     sys.stderr.flush()
-    os.abort()
+    sys.exit(1)
 Path(a[a.index("-of") + 1] + ".txt").write_text("on the processor")
 '''
 
