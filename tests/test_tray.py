@@ -288,6 +288,16 @@ def test_transcription_submenu_waits_while_settings_is_open():
     assert find(find(icon.menu, "Transcription").submenu, "OpenAI (streaming)").enabled
 
 
+def test_transcription_submenu_waits_for_the_settings_file_to_load():
+    config = Config(openai_api_key="test")
+    config.config_error = "Invalid config.toml"
+    tray, icon = make_tray(config)
+    assert all(not item.enabled for item in items(find(icon.menu, "Transcription").submenu))
+    config.config_error = None
+    tray.mode_changed()
+    assert find(find(icon.menu, "Transcription").submenu, "OpenAI (streaming)").enabled
+
+
 @pytest.mark.anyio
 async def test_transcription_menu_sends_mode_to_daemon():
     tray, icon = make_tray(Config(openai_api_key="test"))

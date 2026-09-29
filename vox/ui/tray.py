@@ -461,8 +461,9 @@ class TrayManager:
             )
 
     def _can_select_mode(self, mode: str) -> bool:
-        # While Settings is open, its Transcription page owns the choice
-        if self._state is not IconState.IDLE or self._settings_open:
+        # While Settings is open, its Transcription page owns the choice; until config.toml loads,
+        # Vox refuses a switch
+        if self._state is not IconState.IDLE or self._settings_open or self._config.config_error:
             return False
         # The current mode stays clickable: picking it again retries a setup that failed
         return mode == self._config.mode or mode_problem(self._config, mode) is None

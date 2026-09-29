@@ -34,9 +34,9 @@ Click the Vox Transfer icon in the menu bar (macOS) or the tray (Linux):
 - **Pause Dictation**: ignore the hotkey until you resume.
 - **Recent dictations**: the last three. Click one to copy it.
 - **Search History…**: find past dictations, copy or delete one, or clear them all.
-- **Transcription** (while idle): switch between OpenAI (batch), OpenAI (streaming) and Local
-  (whisper.cpp). A mode that can't run yet, for want of an API key or a whisper.cpp model, is
-  greyed out; set it up on the Transcription page of Settings.
+- **Transcription** (while idle, with Settings closed): switch between OpenAI (batch), OpenAI
+  (streaming) and Local (whisper.cpp). A mode that can't run yet, for want of an API key or a
+  whisper.cpp model, is greyed out; set it up on the Transcription page of Settings.
 - **Settings…** (while idle): see [Settings](#settings).
 - **Quit Vox Transfer**. To start it again, open Vox Transfer from Applications or Spotlight (macOS)
   or your applications list (Linux). Vox Transfer quits the same way when its login service stops

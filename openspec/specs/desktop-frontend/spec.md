@@ -241,7 +241,7 @@ The General page of Settings SHALL list the audio input devices, with System Def
 - **THEN** Vox still records from that device
 
 ### Requirement: Transcription Selection in Settings
-The Transcription page of Settings SHALL let the user choose OpenAI batch, OpenAI streaming, or local whisper.cpp transcription, the spoken language, the prompt, and the whisper.cpp program and model files, and SHALL save each choice to `config.toml`. Whether a mode can be chosen SHALL follow the same rules everywhere Vox checks it: the OpenAI modes need an API key, and the local mode needs a working whisper.cpp binary and model. The tray menu SHALL also offer the three modes in a Transcription submenu, available only while Vox is idle and Settings is closed.
+The Transcription page of Settings SHALL let the user choose OpenAI batch, OpenAI streaming, or local whisper.cpp transcription, the spoken language, the prompt, and the whisper.cpp program and model files, and SHALL save each choice to `config.toml`. Whether a mode can be chosen SHALL follow the same rules everywhere Vox checks it: the OpenAI modes need an API key, and the local mode needs a working whisper.cpp binary and model. The tray menu SHALL also offer the three modes in a Transcription submenu, available only while Vox is idle, Settings is closed and `config.toml` has no error.
 
 #### Scenario: Switching providers
 - **WHEN** the user selects an available transcription mode
