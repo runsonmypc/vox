@@ -1113,6 +1113,19 @@ async def reloading(config, recorder, tray=None, apply_hotkey=None):
 
 
 @pytest.mark.anyio
+async def test_config_reload_applies_the_whisper_cpp_cpu_fallback(tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_text("[audio]\nsample_rate = 48000\n")
+    config = load_config(path)
+    assert config.whisper_cpp_cpu_fallback is True
+    async with reloading(config, MagicMock()):
+        mtime = path.stat().st_mtime
+        path.write_text("[audio]\nsample_rate = 48000\n[whisper_cpp]\ncpu_fallback = false\n")
+        os.utime(path, (mtime + 10, mtime + 10))
+        await until(lambda: config.whisper_cpp_cpu_fallback is False)
+
+
+@pytest.mark.anyio
 async def test_config_reload_applies_screen_context_and_the_recording_limit(tmp_path):
     path = tmp_path / "config.toml"
     path.write_text("[audio]\nsample_rate = 48000\n")

@@ -962,6 +962,7 @@ class _ConfigApplier:
         config.whisper_model = new_config.whisper_model
         config.whisper_cpp_binary = new_config.whisper_cpp_binary
         config.whisper_cpp_model = new_config.whisper_cpp_model
+        config.whisper_cpp_cpu_fallback = new_config.whisper_cpp_cpu_fallback
         config.whisper_language = new_config.whisper_language
         config.whisper_prompt = new_config.whisper_prompt
         # The status line names a problem with the mode the file now selects, not one it moved away
