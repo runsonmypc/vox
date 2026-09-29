@@ -1,4 +1,4 @@
-"""Vocabulary window for macOS: settings-style Vocabulary and Snippets tabs.
+"""Vocabulary and Snippets tabs for macOS, which the Settings window builds on.
 
 Words are added from a field at the top and removed from their row; snippets
 open in a sheet to add, edit or delete. Every change is saved to config.toml
@@ -97,9 +97,13 @@ class VocabController(NSObject):
         if model.load_error:
             self.show_error(LOAD_FAILED_TITLE, model.load_error)
         self._monitor = AppKit.NSEvent.addLocalMonitorForEventsMatchingMask_handler_(
-            AppKit.NSEventMaskKeyDown, self.handle_key
+            self.monitored_events(), self.handle_key
         )
         return self
+
+    @objc.python_method
+    def monitored_events(self) -> int:
+        return AppKit.NSEventMaskKeyDown
 
     # -- Layout -----------------------------------------------------------
 
@@ -107,21 +111,39 @@ class VocabController(NSObject):
     def _build(self) -> None:
         self.window = kit.window("Vocabulary", _SIZE, (460, 380))
         self.window.setDelegate_(self)
-        self.tabs = AppKit.NSTabViewController.alloc().init()
+        self.tabs = self.tab_controller()
         self.tabs.setTabStyle_(AppKit.NSTabViewControllerTabStyleToolbar)
-        for title, symbol, view in (
-            ("Vocabulary", "character.book.closed", self._build_words()),
-            ("Snippets", "text.insert", self._build_snippets()),
-        ):
-            vc = kit.controller(view)
-            vc.setTitle_(title)
-            item = AppKit.NSTabViewItem.tabViewItemWithViewController_(vc)
-            item.setLabel_(title)
-            item.setImage_(AppKit.NSImage.imageWithSystemSymbolName_accessibilityDescription_(symbol, title))
-            self.tabs.addTabViewItem_(item)
+        for tab in self.vocab_tabs():
+            self.add_tab(*tab)
         self.window.setContentViewController_(self.tabs)
         self.window.setToolbarStyle_(AppKit.NSWindowToolbarStylePreference)
         self.window.setContentSize_(_SIZE)
+
+    @objc.python_method
+    def tab_controller(self) -> AppKit.NSTabViewController:
+        return AppKit.NSTabViewController.alloc().init()
+
+    @objc.python_method
+    def vocab_tabs(self) -> list[tuple[str, str, str, AppKit.NSView]]:
+        """The Vocabulary and Snippets tabs: (identifier, title, symbol, view)."""
+        return [
+            ("vocabulary", "Vocabulary", "character.book.closed", self._build_words()),
+            ("snippets", "Snippets", "text.insert", self._build_snippets()),
+        ]
+
+    @objc.python_method
+    def add_tab(self, identifier: str, title: str, symbol: str, view: AppKit.NSView) -> None:
+        vc = kit.controller(view)
+        vc.setTitle_(title)
+        item = AppKit.NSTabViewItem.tabViewItemWithViewController_(vc)
+        item.setIdentifier_(identifier)
+        item.setLabel_(title)
+        item.setImage_(AppKit.NSImage.imageWithSystemSymbolName_accessibilityDescription_(symbol, title))
+        self.tabs.addTabViewItem_(item)
+
+    @objc.python_method
+    def select_tab(self, identifier: str) -> None:
+        self.tabs.setSelectedTabViewItemIndex_(self.tabs.tabView().indexOfTabViewItemWithIdentifier_(identifier))
 
     @objc.python_method
     def _pane(self, intro: str, accessory: AppKit.NSView, table_style: int) -> tuple:
@@ -361,7 +383,7 @@ class VocabController(NSObject):
     def open_editor(self, original: str | None) -> None:
         if self.editor is not None:
             return
-        self.tabs.setSelectedTabViewItemIndex_(1)
+        self.select_tab("snippets")
         self.editor = SnippetEditor.alloc().initWithOwner_original_(self, original)
         self.window.beginSheet_completionHandler_(self.editor.window, None)
         self.editor.window.makeFirstResponder_(self.editor.trigger if original is None else self.editor.expansion)
@@ -549,9 +571,3 @@ def _quoted(words: list[str]) -> str:
     if len(words) == 1:
         return f"“{words[0]}”"
     return f"{len(words)} words"
-
-
-def run(model: VocabModel) -> None:
-    kit.application()
-    controller = VocabController.alloc().initWithModel_(model)
-    kit.run(controller.window, controller.word_field)

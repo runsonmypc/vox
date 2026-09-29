@@ -73,6 +73,31 @@ def _write_input(wav_bytes: bytes, path: Path) -> None:
             wf.writeframes(block)
 
 
+def _out_of_gpu_memory(log_output: str) -> bool:
+    """Whether whisper.cpp failed because the graphics card could not hold the model, as CUDA reports it."""
+    return "out of memory" in log_output.lower()
+
+
+async def _run(command: list[str]) -> tuple[int, str]:
+    """Run whisper-cli to the end and return its exit status and log; a cancelled run is killed."""
+    try:
+        process = await asyncio.create_subprocess_exec(
+            *command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+        )
+    except OSError as exc:
+        raise TranscriptionError(f"Could not start whisper.cpp: {exc}") from exc
+    try:
+        _, stderr = await process.communicate()
+    except asyncio.CancelledError:
+        if process.returncode is None:
+            with contextlib.suppress(ProcessLookupError):
+                process.kill()
+        await process.communicate()
+        raise
+    assert process.returncode is not None
+    return process.returncode, stderr.decode("utf-8", errors="replace")
+
+
 class WhisperCppTranscriber:
     """Run one local whisper-cli process for each recorded utterance."""
 
@@ -101,24 +126,20 @@ class WhisperCppTranscriber:
                 command.extend(["--prompt", prompt])
 
             started = time.monotonic()
-            try:
-                process = await asyncio.create_subprocess_exec(
-                    *command, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-                )
-            except OSError as exc:
-                raise TranscriptionError(f"Could not start whisper.cpp: {exc}") from exc
-            try:
-                _, stderr = await process.communicate()
-            except asyncio.CancelledError:
-                if process.returncode is None:
-                    with contextlib.suppress(ProcessLookupError):
-                        process.kill()
-                await process.communicate()
-                raise
-
-            log_output = stderr.decode("utf-8", errors="replace")
-            if process.returncode != 0:
-                raise TranscriptionError(f"whisper.cpp exited with status {process.returncode}: {log_output.strip()[-1000:]}")
+            returncode, log_output = await _run(command)
+            on_cpu = False
+            if returncode != 0 and _out_of_gpu_memory(log_output) and config.whisper_cpp_cpu_fallback:
+                log.warning("whisper.cpp ran out of GPU memory; transcribing on the CPU instead")
+                on_cpu = True
+                returncode, log_output = await _run([*command, "-ng"])
+            if returncode != 0:
+                if on_cpu and _out_of_gpu_memory(log_output):
+                    raise TranscriptionError("whisper.cpp ran out of memory on the CPU as well: close other apps, "
+                                             "or use a smaller model")
+                if _out_of_gpu_memory(log_output):
+                    fix = "" if config.whisper_cpp_cpu_fallback else ", or set [whisper_cpp] cpu_fallback = true"
+                    raise TranscriptionError(f"whisper.cpp ran out of memory: close apps that use the graphics card{fix}")
+                raise TranscriptionError(f"whisper.cpp exited with status {returncode}: {log_output.strip()[-1000:]}")
             log.debug("whisper.cpp finished in %.2fs", time.monotonic() - started)
             for line in log_output.splitlines():
                 if line.startswith("whisper_print_timings"):  # model load, encode and decode times

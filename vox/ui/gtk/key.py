@@ -1,4 +1,5 @@
-"""API key window for Linux (GTK 4 and libadwaita): a password row, where the key is kept, and Save, Remove and Cancel.
+"""API key dialog for Linux (GTK 4 and libadwaita), opened from the Transcription page of Settings:
+a password row, where the key is kept, and Save, Remove and Cancel.
 
 The key is typed into an ``Adw.PasswordEntryRow`` (which has its own reveal
 button) and saved straight to the login keyring. "Check with OpenAI" lists
@@ -29,11 +30,9 @@ from ..key_model import (
     Outcome,
     check_key,
 )
-from .common import Adw, GLib, Gtk, confirm, error_dialog, label, run_app
+from .common import Adw, GLib, Gtk, confirm, error_dialog, label
 
 log = logging.getLogger(__name__)
-
-APP_ID = "com.runsonmypc.vox.ApiKey"
 
 
 def _in_background(work: Callable[[], object], done: Callable[[object], None]) -> None:
@@ -49,9 +48,11 @@ def _in_background(work: Callable[[], object], done: Callable[[object], None]) -
     threading.Thread(target=run, daemon=True).start()
 
 
-class KeyWindow(Adw.ApplicationWindow):
-    def __init__(self, model: KeyModel, **kwargs) -> None:
-        super().__init__(title="OpenAI API Key", default_width=520, **kwargs)
+class KeyDialog(Adw.Dialog):
+    """Closes itself once a key is saved or removed, or on Cancel or Escape, and then calls ``on_finish``."""
+
+    def __init__(self, model: KeyModel) -> None:
+        super().__init__(title="OpenAI API Key", content_width=520)
         self.model = model
         self.closed = False
         self.background = _in_background  # replaced in tests
@@ -95,13 +96,9 @@ class KeyWindow(Adw.ApplicationWindow):
         view = Adw.ToolbarView(content=page)
         view.add_top_bar(header)
         view.add_top_bar(self.banner)
-        self.set_content(view)
-
-        escape = Gtk.ShortcutController()
-        escape.add_shortcut(Gtk.Shortcut(trigger=Gtk.ShortcutTrigger.parse_string("Escape"),
-                                         action=Gtk.CallbackAction.new(lambda *_: self.finish() or True)))
-        self.add_controller(escape)
-        self.connect("close-request", lambda _window: setattr(self, "closed", True) or False)
+        self.set_child(view)  # Escape closes an Adw.Dialog by itself
+        self.on_finish: Callable[[], None] | None = None  # called once the dialog is done, however it closed
+        self.connect("closed", lambda _dialog: self.done())  # Escape, or the window closing
         model.reload()
         self.render()
         self.set_focus(self.entry)
@@ -181,9 +178,13 @@ class KeyWindow(Adw.ApplicationWindow):
         self.finish()
 
     def finish(self) -> None:
+        if not self.closed:
+            self.force_close()
+            self.done()
+
+    def done(self) -> None:
+        if self.closed:
+            return
         self.closed = True
-        self.close()
-
-
-def run(model: KeyModel) -> None:
-    run_app(APP_ID, lambda app: KeyWindow(model, application=app))
+        if self.on_finish is not None:
+            self.on_finish()

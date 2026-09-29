@@ -5,13 +5,13 @@ import pwd
 import socket
 import sys
 from pathlib import Path
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 import pytest
-from test_tray_integration import RecordingTray, daemon_env, start_daemon, stop_daemon, wait_for
 
 import vox.config
-from vox.config import Config, load_config
+from vox.config import load_config
 
 
 def test_home_is_a_scratch_directory():
@@ -22,32 +22,25 @@ def test_home_is_a_scratch_directory():
 
 def test_default_config_path_is_per_test(tmp_path):
     assert vox.config.DEFAULT_CONFIG_PATH.parent == tmp_path
-    for name in ("vox.daemon", "vox.ui.tray", "vox.ui.vocab_window", "vox.ui.hotkey_window"):
+    for name in ("vox.daemon", "vox.ui.tray", "vox.ui.settings_window"):
         if name in sys.modules:
             assert sys.modules[name].DEFAULT_CONFIG_PATH == vox.config.DEFAULT_CONFIG_PATH
 
 
-class ModeTray(RecordingTray):
-    def __init__(self):
-        super().__init__()
-        self.mode_changes = 0
+def test_settings_without_a_config_path_stay_in_the_test(tmp_path):
+    """Settings opened without --config writes to DEFAULT_CONFIG_PATH, which is this test's."""
+    from vox.ui import settings_window
 
-    def mode_changed(self):
-        self.mode_changes += 1
-
-
-@pytest.mark.anyio
-async def test_mode_switch_without_a_config_path_stays_in_the_test(tmp_path):
-    # A Config() not loaded from a file makes the daemon save menu choices to DEFAULT_CONFIG_PATH
     home_config = Path.home() / ".config" / "vox" / "config.toml"
     before = home_config.read_bytes() if home_config.exists() else None
-    tray = ModeTray()
-    with daemon_env(), patch("vox.daemon.WhisperCppTranscriber"):
-        task = await start_daemon(tray, Config(attenuation_enabled=False))
-        _, queue, _, _ = tray.attached
-        await queue.put("mode:whisper_cpp")
-        await wait_for(lambda: tray.mode_changes == 1)
-        await stop_daemon(task)
+    module = "vox.ui.mac.settings" if sys.platform == "darwin" else "vox.ui.gtk.settings"
+    fake = SimpleNamespace(run=MagicMock())
+    with patch.dict(sys.modules, {module: fake}):
+        settings_window.main([])
+    settings, *_ = fake.run.call_args.args
+    assert settings.path == settings_window.DEFAULT_CONFIG_PATH == tmp_path / "default-config.toml"
+    settings.reload()
+    assert settings.set_mode("whisper_cpp") is None
     assert load_config(tmp_path / "default-config.toml").mode == "whisper_cpp"
     assert (home_config.read_bytes() if home_config.exists() else None) == before
 

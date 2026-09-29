@@ -39,6 +39,8 @@ class Config:
     streaming_model: str = "gpt-live-transcribe"
     whisper_cpp_binary: str = "whisper-cli"
     whisper_cpp_model: str = ""
+    # Run whisper.cpp again on the CPU when the graphics card has no memory left for the model
+    whisper_cpp_cpu_fallback: bool = True
 
     # Whisper
     whisper_model: str = "gpt-transcribe"
@@ -113,6 +115,15 @@ def load_config(path: Path | None = None) -> Config:
     return config
 
 
+def file_stamp(path: Path) -> tuple[int, int, int] | None:
+    """Changes whenever the file does, also when an older copy is moved back over it; None if it is missing."""
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    return st.st_mtime_ns, st.st_size, st.st_ino
+
+
 def fallback_config(path: Path | None, error: ConfigError) -> Config:
     """Default settings for a config.toml that failed to load, remembering why: Vox runs on them but won't record."""
     config = Config()
@@ -143,6 +154,7 @@ def _apply(config: Config, data: dict) -> None:
     _apply_section(config, data, "whisper_cpp", {
         "binary": ("whisper_cpp_binary", _text),
         "model": ("whisper_cpp_model", _text),
+        "cpu_fallback": ("whisper_cpp_cpu_fallback", _flag),
     })
     _apply_section(config, data, "transcription", {
         "mode": ("mode", _text),
@@ -373,6 +385,81 @@ def update_hotkey(path: Path, key: str, fallback: str) -> None:
     _write_document(path, doc)
 
 
+# The on/off settings the Settings window shows: (section, key)
+FLAGS: tuple[tuple[str, str], ...] = (("sounds", "enabled"), ("attenuation", "enabled"), ("context", "screen"))
+
+
+def update_audio_device(path: Path, name: str | None) -> None:
+    """Persist the input device by name in ``[audio] device``; None or "" removes it (the system default)."""
+    doc = _read_document(path)
+    if name:
+        _edited_table(doc, "audio")["device"] = name
+    else:
+        _remove_key(doc, "audio", "device")
+    _write_document(path, doc)
+
+
+def update_flag(path: Path, section: str, key: str, value: bool) -> None:
+    """Persist one of the on/off settings in ``FLAGS``, such as ``[sounds] enabled``."""
+    if (section, key) not in FLAGS or not isinstance(value, bool):
+        raise ValueError(f"Invalid setting: [{section}] {key} = {value!r}")
+    doc = _read_document(path)
+    _edited_table(doc, section)[key] = value
+    _write_document(path, doc)
+
+
+def update_attenuation_level(path: Path, level: float) -> None:
+    """Persist how far the volume is lowered while recording, in ``[attenuation] level`` (0 to 1)."""
+    if isinstance(level, bool) or not isinstance(level, int | float) or not 0 <= level <= 1:
+        raise ValueError(f"Invalid attenuation level: {level!r}")
+    doc = _read_document(path)
+    _edited_table(doc, "attenuation")["level"] = float(level)
+    _write_document(path, doc)
+
+
+def update_language(path: Path, code: str | None) -> None:
+    """Persist the spoken language in ``[transcription] language``; None or "" removes it (detect automatically)."""
+    _update_transcription_text(path, "language", (code or "").strip())
+
+
+def update_prompt(path: Path, text: str) -> None:
+    """Persist ``[transcription] prompt``; an empty prompt removes it."""
+    _update_transcription_text(path, "prompt", text if text.strip() else "")
+
+
+def _update_transcription_text(path: Path, key: str, value: str) -> None:
+    doc = _read_document(path)
+    if value:
+        _edited_table(doc, "transcription")[key] = value
+    else:
+        # A legacy [whisper] value would apply once [transcription] no longer overrides it
+        _remove_key(doc, "transcription", key)
+        _remove_key(doc, "whisper", key)
+    _write_document(path, doc)
+
+
+_UNCHANGED = object()
+
+
+def update_whisper_cpp(path: Path, *, binary: object = _UNCHANGED, model: object = _UNCHANGED) -> None:
+    """Persist ``[whisper_cpp] binary`` and ``model``; None or "" removes one, and one not given stays."""
+    doc = _read_document(path)
+    for key, value in (("binary", binary), ("model", model)):
+        if value is _UNCHANGED:
+            continue
+        if value:
+            _edited_table(doc, "whisper_cpp")[key] = value
+        else:
+            _remove_key(doc, "whisper_cpp", key)
+    if model is not _UNCHANGED:
+        # A generic [transcription] model is the local model while the mode is local, and would shadow this one
+        transcription = _edited_table(doc, "transcription", create=False)
+        mode = transcription.get("mode", _edited_table(doc, "whisper", create=False).get("mode", "batch"))
+        if mode == "whisper_cpp" and "model" in transcription:
+            del transcription["model"]
+    _write_document(path, doc)
+
+
 def read_api_key_setting(path: Path) -> str:
     """The key in a legacy ``[api] openai_api_key`` setting, or "". Vox no longer reads keys from here."""
     try:
@@ -395,7 +482,7 @@ def remove_api_key_setting(path: Path) -> None:
     del api["openai_api_key"]
     if not api.as_string().strip():
         del doc["api"]
-    _write_document(path, doc)
+    _replace_document(path, doc)
 
 
 def snippet_key(trigger: str) -> str:
@@ -426,8 +513,41 @@ def _edited_table(doc: tomlkit.TOMLDocument, name: str, *, create: bool = True) 
     return _table(f"[{name}]", doc[name])
 
 
+def _remove_key(doc: tomlkit.TOMLDocument, section: str, key: str) -> None:
+    """Delete ``key`` from ``[section]`` if it is there, and the table too if nothing else is left in it."""
+    table = _edited_table(doc, section, create=False)
+    if key in table:
+        del table[key]
+        if not table.as_string().strip():
+            del doc[section]
+
+
 def _write_document(path: Path, doc: tomlkit.TOMLDocument) -> None:
-    """Write config.toml atomically, keeping its permissions. Snippets can be personal, so a new file is 0600."""
+    """Write config.toml atomically, keeping its permissions. Snippets can be personal, so a new file is 0600.
+
+    Refuses, with ConfigError, a result that wouldn't load. Writes nothing when the result loads to the
+    same settings the file has now, so setting a value it already has never creates or touches the file.
+    """
+    text = tomlkit.dumps(doc)
+    settings = Config()
+    try:
+        _apply(settings, tomllib.loads(text))
+    except ConfigError as e:
+        raise ConfigError(f"{path}: {e}") from None
+    if settings == _current_settings(path):
+        return
+    write_atomically(path, text)
+
+
+def _current_settings(path: Path) -> Config | None:
+    """The settings config.toml loads to now (the defaults when it is missing), or None if it doesn't load."""
+    try:
+        return load_config(path)
+    except ConfigError:
+        return None
+
+
+def _replace_document(path: Path, doc: tomlkit.TOMLDocument) -> None:
     text = tomlkit.dumps(doc)
     tomllib.loads(text)  # never replace a valid config with an unparseable one
     write_atomically(path, text)

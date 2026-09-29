@@ -13,8 +13,8 @@ is called Vox Transfer.
 ## Ground rules
 
 - **Never handle the OpenAI API key.** Do not ask the user to paste it into the chat, and never
-  write it into a file. Tell them to choose **Set API Key…** from the Vox Transfer menu, which
-  stores it in the macOS Keychain or the Linux login keyring.
+  write it into a file. Tell them to choose **Settings…** from the Vox Transfer menu and set it on
+  the Transcription page, which stores it in the macOS Keychain or the Linux login keyring.
 - **Never ask for the user's password.** Run the installer as the user, never with `sudo`, and
   never pass a password to `sudo -S`. On Linux the installer runs `sudo apt-get` when system
   packages are missing, and your shell usually cannot answer that prompt: have the user run the
@@ -82,7 +82,7 @@ enables or offers to install; if the icon is missing, see
 ## 4. First start
 
 - **OpenAI (the default)**: the user creates a key at https://platform.openai.com/api-keys, chooses
-  **Set API Key…** from the menu and pastes it. Vox Transfer checks it with OpenAI, which costs
+  **Set API Key…** at the top of the menu (or the Transcription page of **Settings…**) and pastes it. Vox Transfer checks it with OpenAI, which costs
   nothing.
 - **No key, or nothing should leave the computer**: set up local transcription (below).
 - **macOS permissions**: the prompts name **python3.12**. Microphone, Accessibility and Input
@@ -93,14 +93,15 @@ Then have the user try it: tap right Shift, say a sentence, tap right Shift agai
 
 ## 5. Customize
 
-Ask the user what they would like. Many things are in the menu: **Set Hotkey…**,
-**Vocabulary & Snippets…**, **Transcription** and **Recording Limit**. For the rest, edit
+Ask the user what they would like. Most things are in **Settings…** in the menu: the microphone,
+recording limit, sounds, screen hints, hotkey, transcription mode, language, prompt, whisper.cpp
+files, vocabulary and snippets. For the rest, edit
 `~/.config/vox/config.toml` (create it if missing). [`config.example.toml`](../config.example.toml)
 lists every setting with its default, and [settings.md](settings.md) explains each one.
 
 How to edit the file safely:
 
-- **Read it first.** The menu and windows write to it too, so it may already have sections such as
+- **Read it first.** The Settings window writes to it too, so it may already have sections such as
   `[hotkey]`, `[transcription]` or `[snippets]`. Add keys to an existing section; a section header
   that appears twice is an error.
 - **`[section] key` is shorthand** for a `key = value` line under the `[section]` header, as in the
@@ -111,8 +112,8 @@ How to edit the file safely:
 
 Common requests:
 
-- **Another hotkey.** Easiest: the user chooses **Set Hotkey…** and taps the key; the window
-  refuses keys that type text. In the file, `[hotkey] key` can be `"right_ctrl"`, `"right_alt"`
+- **Another hotkey.** Easiest: the user opens the Hotkey page of **Settings…** and taps the key; the
+  page refuses keys that type text. In the file, `[hotkey] key` can be `"right_ctrl"`, `"right_alt"`
   (on Linux only when right Alt is not AltGr), `"cmd_r"` (macOS), `"f13"`, `"fn"` (macOS), or
   `"pause"` or `"scroll_lock"` (Linux). Never set a key that types text, such as a letter: the file
   accepts it, and then typing that letter on its own starts dictation. For `"fn"`, the user sets
@@ -140,9 +141,9 @@ Common requests:
   language = "de"
   ```
 
-- **A specific microphone**: run `~/.local/bin/vox --list-devices`, then set `[audio] device` to
-  the device's name.
-- **Longer recordings**: `[audio] max_recording_seconds` (default 900), or the Recording Limit menu.
+- **A specific microphone**: the user picks it on the General page of Settings. In the file, run
+  `~/.local/bin/vox --list-devices`, then set `[audio] device` to the device's name.
+- **Longer recordings**: `[audio] max_recording_seconds` (default 900), or the recording limit on the General page of Settings.
 - **No volume lowering while recording**: `[attenuation] enabled = false`.
 - **No sounds**: `[sounds] enabled = false`. Custom sounds are WAV files in `~/.config/vox/sounds`
   (see [Sounds](settings.md#sounds)); they load when Vox Transfer starts, so the user quits it from
@@ -187,8 +188,9 @@ Common requests:
    model = "~/whisper-models/ggml-large-v3-turbo.bin"
    ```
 
-   The user can also switch modes from the Transcription menu. If the menu's first line then names
-   a whisper.cpp problem, fix the path it mentions.
+   The user can also choose both files and the mode on the Transcription page of Settings, which
+   says why a mode can't be chosen. If the menu's first line names a whisper.cpp problem, fix the
+   path it mentions.
 
 ## 6. When something is wrong
 

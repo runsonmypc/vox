@@ -3,6 +3,31 @@
 All notable changes to Vox Transfer are listed here. Vox Transfer follows
 [semantic versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+
+- On macOS, Vox Transfer no longer crashes when it pastes. It read the keyboard layout from a
+  background thread, which newer macOS versions stop with a trap; the lookup now runs on the main
+  thread, and without an answer within a second the paste uses the standard V key.
+- Local (whisper.cpp) transcription no longer fails when the graphics card has no memory left for
+  the model, as when a game is running: it transcribes on the processor instead, more slowly.
+  `[whisper_cpp] cpu_fallback = false` turns this off, and the error then says the graphics card
+  is full.
+
+### Settings
+
+- One Settings window, opened with Settings… in the menu, replaces the Input Device, Transcription
+  and Recording Limit submenus and the Vocabulary & Snippets, Set API Key and Set Hotkey windows.
+  Its pages are General (microphone, recording limit, sounds, lowering other audio, screen hints),
+  Hotkey, Transcription (mode, API key, spoken language, prompt, whisper.cpp program and model),
+  Vocabulary and Snippets. Each change is saved to `config.toml` as it is made and applies when the
+  window closes; the hotkey does not dictate while it is open.
+- The microphone you pick is now kept: it is saved to `[audio] device` by name, where a choice from
+  the old Input Device menu lasted only until Vox Transfer quit. System Default removes it.
+- Set API Key… appears at the top of the menu only while the key is missing or can't be read, and
+  opens Settings on its Transcription page. Settings… is available only while Vox Transfer is idle.
+
 ## [1.0.0] - 2026-09-27
 
 The first public release. The command is `vox`, and its settings live in `~/.config/vox`.

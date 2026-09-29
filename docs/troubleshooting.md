@@ -13,11 +13,11 @@ affects dictation, in this order:
 | Message | What to do |
 | --- | --- |
 | Settings file has an error | Fix `~/.config/vox/config.toml`; the log names the setting. Vox Transfer does not record until then. |
-| API key needed | Choose **Set API Key…**, or switch to Local (whisper.cpp). |
+| API key needed | Choose **Set API Key…**, or switch to Local (whisper.cpp) in Settings. |
 | Can’t read the keyring | Unlock your login keychain or keyring; Vox Transfer tries again on the next hotkey press. Without a keyring, **Set API Key…** says why `~/.config/vox/.env` can’t be read; it must be owned by you, readable (`chmod 600`) and plain UTF-8 text. |
 | A whisper.cpp problem, such as a missing model | Fix `[whisper_cpp]`, or choose an OpenAI mode. |
 | Accessibility access needed | macOS: allow python3.12 under Accessibility, then quit and reopen Vox Transfer. |
-| Microphone is silent: check its permission | Allow the microphone (macOS: Microphone for python3.12) and check the Input Device menu. |
+| Microphone is silent: check its permission | Allow the microphone (macOS: Microphone for python3.12) and check the microphone on the General page of Settings. |
 | Wayland: hotkey and paste only work in X11 apps | See [Wayland](install.md#wayland). |
 | Last dictation only partly transcribed: see History | A long recording failed partway. The parts that were transcribed are in **Search History…**. |
 
@@ -30,7 +30,8 @@ The commands below use `~/.local/bin/vox`, where the installer puts Vox Transfer
   Input Monitoring in System Settings > Privacy & Security, then quit and reopen Vox Transfer. After
   an update that changed Python, remove the old entries and allow the new ones.
 - **Recordings come back empty.** Allow the microphone (macOS: Microphone permission for
-  python3.12), check the Input Device menu, and try `~/.local/bin/vox --list-devices`.
+  python3.12), check the microphone on the General page of Settings, and try
+  `~/.local/bin/vox --list-devices`.
 - **A paste did not arrive.** Vox Transfer plays the error sound and still saves the text in
   history: open **Search History…** to copy it.
 - **Nothing pastes into a terminal (Linux).** Install `xprop` (x11-utils on Debian and Ubuntu).
@@ -42,8 +43,13 @@ The commands below use `~/.local/bin/vox`, where the installer puts Vox Transfer
   and an autostart entry. On a bare window manager that runs neither, start `~/.local/bin/vox` from
   your session startup file. If Vox Transfer starts but cannot reach the display, run
   `systemctl --user import-environment DISPLAY XAUTHORITY` in your session startup first.
-- **Local (whisper.cpp) is greyed out.** Set `[whisper_cpp] model`, and `binary` as a full path.
-  Once whisper.cpp is the selected mode, the menu's first line shows what is missing.
+- **Local (whisper.cpp) can't be chosen.** The line under it on the Transcription page of Settings
+  says what is missing. Choose the whisper.cpp program and model there, or set `[whisper_cpp] model`,
+  and `binary` as a full path.
+- **Local transcription is slow or fails while a game is running.** whisper.cpp keeps the model on
+  the graphics card, and a game can leave no room for it. Vox Transfer then transcribes on the
+  processor instead, which is slower; the log says so. With `[whisper_cpp] cpu_fallback = false`,
+  dictation fails instead, with the error sound. A smaller model needs less room.
 - **"Vox Transfer needs Python 3.12 or 3.13".** Some of Vox Transfer's dependencies do not yet
   publish packages for newer Pythons, and building them would need a compiler.
 - **Something else.** Read the log (`~/Library/Logs/Vox/vox.log` on macOS,

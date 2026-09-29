@@ -4,6 +4,7 @@
 
 - [The hotkey](#the-hotkey)
 - [The menu](#the-menu)
+- [Settings](#settings)
 - [Choosing another hotkey](#choosing-another-hotkey)
 - [Long recordings](#long-recordings)
 
@@ -28,31 +29,42 @@ Click the Vox Transfer icon in the menu bar (macOS) or the tray (Linux):
 
 - **Status**: idle, recording, processing, paused, or while idle a problem to fix (see
   [Menu messages](troubleshooting.md#menu-messages)).
+- **Set API Key…**, only while the key is missing or can't be read: opens Settings on its
+  Transcription page.
 - **Pause Dictation**: ignore the hotkey until you resume.
-- **Input Device**: the microphone to record from, or the system default. A microphone connected
-  while Vox Transfer runs appears after your next dictation, and on macOS also within 30 seconds
-  while idle.
-- **Transcription**: OpenAI (batch), OpenAI (streaming) or Local (whisper.cpp). A mode that is not
-  set up (no API key, or no whisper.cpp model) is greyed out.
-- **Recording Limit**: 5, 10, 15, 30 or 60 minutes.
 - **Recent dictations**: the last three. Click one to copy it.
 - **Search History…**: find past dictations, copy or delete one, or clear them all.
-- **Vocabulary & Snippets…**: words to spell exactly as written, and snippets: say a trigger phrase
-  on its own and Vox Transfer types the expansion instead.
-- **Set API Key…**: paste, replace or remove your OpenAI API key.
-- **Set Hotkey…** (while idle): see [Choosing another hotkey](#choosing-another-hotkey).
+- **Settings…** (while idle): see [Settings](#settings).
 - **Quit Vox Transfer**. To start it again, open Vox Transfer from Applications or Spotlight (macOS)
   or your applications list (Linux). Vox Transfer quits the same way when its login service stops
   (for example `systemctl --user stop vox` on Linux), when you log out, or during an update, so a
   volume lowered for a recording is restored.
 
-The hotkey, transcription mode and recording limit you choose are saved in
-`~/.config/vox/config.toml`. The input device you choose lasts until Vox Transfer quits; set
-`[audio] device` to keep one (see [Settings](settings.md)).
+## Settings
+
+Choose **Settings…** from the menu while Vox Transfer is idle. It has five pages:
+
+- **General**: the microphone (the refresh button next to it looks for one you just connected), the
+  recording limit (5, 10, 15, 30 or 60 minutes), sounds, how far to lower other audio while
+  recording, and screen hints.
+- **Hotkey**: see [Choosing another hotkey](#choosing-another-hotkey).
+- **Transcription**: OpenAI (batch), OpenAI (streaming) or Local (whisper.cpp), your OpenAI API key,
+  the spoken language, a prompt, and the whisper.cpp program and model. A mode that is not set up
+  (no API key, or no whisper.cpp model) can't be chosen, and says why.
+- **Vocabulary**: words to spell exactly as written.
+- **Snippets**: say a trigger phrase on its own and Vox Transfer types the expansion instead.
+
+Each change is saved to `~/.config/vox/config.toml` as you make it, and a text field is saved when
+you press Return or leave it. There is no Save button. The hotkey does not dictate while Settings is
+open, and your changes apply as soon as you close it. [The Settings window](settings.md#the-settings-window)
+shows every page.
+
+Vox Transfer also finds a microphone connected while it runs after your next dictation, and on
+macOS within 30 seconds while idle.
 
 ## Choosing another hotkey
 
-Choose **Set Hotkey…** from the menu while Vox Transfer is idle.
+Open **Settings…** from the menu and choose the **Hotkey** page.
 
 - Click **Hotkey** and tap the key you want: Shift, Control, Option or Command on either side (on
   Linux Ctrl, Alt or Super, or AltGr), a function key from F1 to F20, fn (Globe) on macOS, or Pause
@@ -61,8 +73,7 @@ Choose **Set Hotkey…** from the menu while Vox Transfer is idle.
   starts and stops dictation (press it twice quickly to cancel; the app you're in receives it too).
 - **Use Default** goes back to right Shift.
 
-The new hotkey works as soon as you click Save, and while the window is open the hotkey does not
-dictate.
+Each key is saved as soon as you press it, and the new hotkey works once you close Settings.
 
 macOS acts on fn too: to use it, set **Press 🌐 key to** (or **Press fn key to**) to **Do Nothing**
 in System Settings > Keyboard, and if the Dictation shortcut there is to press 🌐 or fn twice,

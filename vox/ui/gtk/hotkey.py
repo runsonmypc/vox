@@ -1,12 +1,14 @@
-"""Hotkey window for Linux (GTK 4 and libadwaita): two rows whose buttons record keys, Use Default, Cancel and Save.
+"""Hotkey page of Settings for Linux (GTK 4 and libadwaita): two rows whose buttons record keys, and Use Default.
 
-A button records after it is clicked. While it does, a key controller in the
-capture phase takes every key before the buttons and the window's Escape shortcut see it.
+A button records after it is clicked. While it does, the Settings window's key
+controller, in the capture phase, hands this page every key before the other
+controls and the window's shortcuts see it. Each accepted recording is saved at once.
 """
 
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 
 from ...errors import ConfigError
 from ..hotkey_model import (
@@ -16,44 +18,31 @@ from ..hotkey_model import (
     INTRO,
     KEY_ROW,
     LINUX_KEYS,
-    LOAD_FAILED_TITLE,
     PRESS_KEY,
     PRESS_KEYS,
     SAVE_FAILED_TITLE,
-    TITLE,
     USE_DEFAULT,
     Capture,
     HotkeyModel,
     combination_label,
 )
 from ..hotkey_model import label as key_label
-from .common import Adw, Gdk, GLib, Gtk, error_dialog, label, run_app
+from .common import Adw, Gdk, Gtk, label
 
 log = logging.getLogger(__name__)
-
-APP_ID = "com.runsonmypc.vox.Hotkey"
 
 _STATUS_CLASSES = {"error": "error", "warning": "warning", "hint": "dim-label"}
 
 
-class HotkeyWindow(Adw.ApplicationWindow):
-    def __init__(self, model: HotkeyModel, **kwargs) -> None:
-        super().__init__(title=TITLE, default_width=480, **kwargs)
+class HotkeyPage:
+    def __init__(self, model: HotkeyModel, alert: Callable[[str, str], None]) -> None:
         self.model = model
-        self.closed = False
+        self.alert = alert
         self.recording: str | None = None  # the field recording keys: "key" or "combination"
         self.refusal: str | None = None
+        self.clash: str | None = None  # a recording refused because the combination included the hotkey
         self.capture = Capture()
-        self.down: set[int] = set()  # hardware keycodes held down, to drop auto-repeated presses
-
-        cancel = Gtk.Button(label="Cancel")
-        cancel.connect("clicked", lambda _button: self.finish())
-        self.save_button = Gtk.Button(label="Save")
-        self.save_button.add_css_class("suggested-action")
-        self.save_button.connect("clicked", lambda _button: self.save())
-        header = Adw.HeaderBar(show_start_title_buttons=False, show_end_title_buttons=False)
-        header.pack_start(cancel)
-        header.pack_end(self.save_button)
+        self.held: int | None = None  # the hardware keycode of a key that completed a recording and is still down
 
         self.default_button = Gtk.Button(label=USE_DEFAULT, valign=Gtk.Align.CENTER)
         self.default_button.add_css_class("flat")
@@ -76,30 +65,8 @@ class HotkeyWindow(Adw.ApplicationWindow):
         group.add(combination_row)
         group.add(self.status)
 
-        self.banner = Adw.Banner()
-        page = Adw.PreferencesPage()
-        page.add(group)
-        view = Adw.ToolbarView(content=page)
-        view.add_top_bar(header)
-        view.add_top_bar(self.banner)
-        self.set_content(view)
-
-        # Capture phase: while a field records, keys never reach the buttons or the Escape shortcut below
-        keys = Gtk.EventControllerKey(propagation_phase=Gtk.PropagationPhase.CAPTURE)
-        keys.connect("key-pressed", self.key_pressed)
-        keys.connect("key-released", self.key_released)
-        self.add_controller(keys)
-        escape = Gtk.ShortcutController()
-        escape.add_shortcut(Gtk.Shortcut(trigger=Gtk.ShortcutTrigger.parse_string("Escape"),
-                                         action=Gtk.CallbackAction.new(lambda *_: self.finish() or True)))
-        self.add_controller(escape)
-        self.connect("notify::is-active", lambda *_: self.is_active() or self.focus_lost())
-        self.connect("close-request", lambda _window: setattr(self, "closed", True) or False)
-
-        model.reload()
-        self.render()
-        if model.load_error:
-            error_dialog(self, LOAD_FAILED_TITLE, model.load_error)
+        self.view = Adw.PreferencesPage()
+        self.view.add(group)
 
     def _field(self, name: str) -> Gtk.Button:
         """A button that shows a key and records one when clicked."""
@@ -123,13 +90,16 @@ class HotkeyWindow(Adw.ApplicationWindow):
             else:
                 field.remove_css_class("suggested-action")
         self.clear_button.set_visible(bool(model.combination))
-        for widget in (self.key_field, self.combination_field, self.clear_button, self.save_button):
+        for widget in (self.key_field, self.combination_field, self.clear_button):
             widget.set_sensitive(writable)
         self.default_button.set_sensitive(writable and not model.is_default)
-        self.banner.set_title(GLib.markup_escape_text(model.unreadable))
-        self.banner.set_revealed(not writable)
 
-        text, kind = model.status(self.recording, self.refusal)
+        if not writable:
+            text, kind = "", None  # the window's banner says why
+        elif self.clash and self.recording is None:
+            text, kind = self.clash, "error"
+        else:
+            text, kind = model.status(self.recording, self.refusal)
         self.status.set_label(text)
         self.status.set_visible(bool(text))
         for css in _STATUS_CLASSES.values():
@@ -143,6 +113,8 @@ class HotkeyWindow(Adw.ApplicationWindow):
         """Start recording in ``field``, or stop with None; the old value stays until a press is accepted."""
         self.recording = field
         self.refusal = None
+        if field is not None:
+            self.clash = None
         self.capture = Capture()
         self.render()
 
@@ -151,15 +123,33 @@ class HotkeyWindow(Adw.ApplicationWindow):
         if keys is not None:
             record = self.model.record_key if self.recording == "key" else self.model.record_combination
             self.refusal = record(keys)
+            self.capture = Capture()  # keys still held can't complete a later try
             if self.refusal is None:
                 self.recording = None
-            self.capture = Capture()  # keys still held can't complete a later try
+                self.save()
+        self.render()
+
+    def save(self) -> None:
+        """Save what was just recorded, cleared or reset; a clash is refused, and both fields keep their saved values."""
+        self.clash = self.model.problem
+        if self.clash is not None:
+            self.model.revert()
+            self.render()
+            return
+        try:
+            self.model.save()
+        except (ConfigError, OSError, ValueError) as e:
+            log.warning("Couldn't save the hotkey: %s", e)
+            self.model.revert()
+            self.alert(SAVE_FAILED_TITLE, str(e))
+        else:
+            log.info("Saved the hotkey settings")
         self.render()
 
     def key_pressed(self, _controller, keyval: int, keycode: int, _state) -> bool:
-        if keycode in self.down:
+        """A key press anywhere in the window; True takes it, so nothing else acts on it."""
+        if keycode == self.held:
             return True  # a key still held after it was recorded mustn't go on to press a button
-        self.down.add(keycode)
         if self.recording is None:
             return False
         name = Gdk.keyval_name(keyval)
@@ -167,45 +157,29 @@ class HotkeyWindow(Adw.ApplicationWindow):
             self.record(None)
         else:
             self.took(self.capture.press(LINUX_KEYS.get(name)))
+            if self.recording is None:
+                self.held = keycode
         return True
 
     def key_released(self, _controller, keyval: int, keycode: int, _state) -> None:
-        self.down.discard(keycode)
-        if self.recording is not None:
+        if keycode == self.held:
+            self.held = None
+        elif self.recording is not None:
             self.took(self.capture.release(LINUX_KEYS.get(Gdk.keyval_name(keyval))))
 
     def focus_lost(self) -> None:
-        self.down.clear()  # their releases go to the window that has focus now
+        self.held = None  # its release goes to the window that has focus now
         if self.recording is not None:
             self.record(None)
 
     # -- Actions ------------------------------------------------------------
 
     def clear_combination(self) -> None:
-        self.model.clear_combination()
         self.record(None)
+        self.model.clear_combination()
+        self.save()
 
     def use_default(self) -> None:
+        self.record(None)
         self.model.use_default()
-        self.record(None)
-
-    def save(self) -> None:
-        self.record(None)
-        try:
-            self.model.save()
-        except ValueError:
-            return  # the status line shows the clash
-        except (ConfigError, OSError) as e:
-            log.warning("Couldn't save the hotkey: %s", e)
-            error_dialog(self, SAVE_FAILED_TITLE, str(e))
-            return
-        log.info("Saved the hotkey settings")
-        self.finish()
-
-    def finish(self) -> None:
-        self.closed = True
-        self.close()
-
-
-def run(model: HotkeyModel) -> None:
-    run_app(APP_ID, lambda app: HotkeyWindow(model, application=app))
+        self.save()

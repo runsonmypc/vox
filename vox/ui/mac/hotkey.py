@@ -1,13 +1,15 @@
-"""Hotkey window for macOS: two fields that record keys, Use Default, Cancel and Save.
+"""Hotkey tab of Settings for macOS: two fields that record keys, and Use Default.
 
-A field records after it is clicked. While it does, a local event monitor takes
-every key, so Return doesn't save and Esc stops recording instead of closing;
-left and right modifiers are told apart by the device bits of flags-changed events.
+A field records after it is clicked. While it does, the Settings window's local event
+monitor hands it every key, so Return, Space and ⌘W are recorded or refused as keys, and
+Esc stops recording instead of closing the window. Left and right modifiers are told apart
+by the device bits of flags-changed events. Each accepted recording is saved at once.
 """
 
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 
 import AppKit
 import objc
@@ -20,12 +22,10 @@ from ..hotkey_model import (
     COMBINATION_ROW,
     INTRO,
     KEY_ROW,
-    LOAD_FAILED_TITLE,
     MAC_KEYS,
     PRESS_KEY,
     PRESS_KEYS,
     SAVE_FAILED_TITLE,
-    TITLE,
     USE_DEFAULT,
     Capture,
     HotkeyModel,
@@ -36,10 +36,10 @@ from . import kit
 
 log = logging.getLogger(__name__)
 
-_WIDTH = 440
+_WIDTH = 540
 _PAD = 20
 _TEXT_WIDTH = _WIDTH - 2 * _PAD
-_LABEL_WIDTH = 120
+_LABEL_WIDTH = 130
 _FIELD_WIDTH = 250
 _SPACING = 8
 
@@ -52,41 +52,26 @@ _DOWN = {
 _STATUS_COLORS = {"error": AppKit.NSColor.systemRedColor(), "warning": AppKit.NSColor.systemOrangeColor()}
 
 
-class HotkeyController(NSObject):
-    def initWithModel_(self, model: HotkeyModel) -> HotkeyController:
-        self = objc.super(HotkeyController, self).init()
+class HotkeyPage(NSObject):
+    def initWithModel_alert_(self, model: HotkeyModel, alert: Callable[[str, str], None]) -> HotkeyPage:
+        self = objc.super(HotkeyPage, self).init()
         if self is None:
             return None
         self.model = model
-        self.closed = False
+        self.alert = alert
         self.recording: str | None = None  # the field recording keys: "key" or "combination"
         self.refusal: str | None = None
+        self.clash: str | None = None  # a recording refused because the combination included the hotkey
         self.capture = Capture()
+        self.held: int | None = None  # the key code of a key that completed a recording and is still down
         self._build()
-        model.reload()
-        self.render()
-        if model.load_error:
-            kit.alert(self.window, LOAD_FAILED_TITLE, model.load_error)
-        self._monitor = AppKit.NSEvent.addLocalMonitorForEventsMatchingMask_handler_(
-            AppKit.NSEventMaskKeyDown | AppKit.NSEventMaskFlagsChanged, self.handle_key
-        )
         return self
 
     # -- Layout -----------------------------------------------------------
 
     @objc.python_method
     def _build(self) -> None:
-        self.window = AppKit.NSWindow.alloc().initWithContentRect_styleMask_backing_defer_(
-            AppKit.NSMakeRect(0, 0, _WIDTH, 240),
-            AppKit.NSWindowStyleMaskTitled | AppKit.NSWindowStyleMaskClosable,
-            AppKit.NSBackingStoreBuffered, False,
-        )
-        self.window.setTitle_(TITLE)
-        self.window.setReleasedWhenClosed_(False)
-        self.window.setDelegate_(self)
-        view = self.window.contentView()
         secondary = AppKit.NSColor.secondaryLabelColor()
-
         intro = self._wrapping(INTRO, 13, secondary, _TEXT_WIDTH)
         self.key_field = self._field("recordKey:")
         self.combination_field = self._field("recordCombination:")
@@ -98,24 +83,22 @@ class HotkeyController(NSObject):
             self._row("", note),
         ]
         self.status = self._wrapping("", 12, secondary, _TEXT_WIDTH)
-
         self.default_button = AppKit.NSButton.buttonWithTitle_target_action_(USE_DEFAULT, self, "useDefault:")
-        self.save_button = AppKit.NSButton.buttonWithTitle_target_action_("Save", self, "save:")
-        self.save_button.setKeyEquivalent_("\r")
-        cancel = AppKit.NSButton.buttonWithTitle_target_action_("Cancel", self, "cancel:")
-        cancel.setKeyEquivalent_("\x1b")
-        spacer = AppKit.NSView.alloc().init()
-        spacer.setContentHuggingPriority_forOrientation_(1, AppKit.NSLayoutConstraintOrientationHorizontal)
-        buttons = kit.stack([self.default_button, spacer, cancel, self.save_button], vertical=False, spacing=10)
 
-        content = kit.stack([intro, *rows, self.status, buttons], spacing=10)
+        content = kit.stack([intro, *rows, self.status, self.default_button], spacing=10)
         content.setCustomSpacing_afterView_(16, intro)
         content.setCustomSpacing_afterView_(4, rows[1])  # the note belongs to the combination
         content.setCustomSpacing_afterView_(16, rows[2])  # used when the status line is hidden
         content.setCustomSpacing_afterView_(16, self.status)
-        view.addSubview_(content)
-        kit.pin(content, view, top=_PAD, leading=_PAD, bottom=_PAD, trailing=_PAD)
-        kit.constrain(buttons.widthAnchor().constraintEqualToConstant_(_TEXT_WIDTH))
+        self.view = kit.container(_WIDTH, 300)
+        self.view.addSubview_(content)
+        kit.constrain(
+            content.topAnchor().constraintEqualToAnchor_constant_(self.view.topAnchor(), _PAD),
+            content.leadingAnchor().constraintEqualToAnchor_constant_(self.view.leadingAnchor(), _PAD),
+            self.view.trailingAnchor().constraintEqualToAnchor_constant_(content.trailingAnchor(), _PAD),
+            self.view.bottomAnchor().constraintGreaterThanOrEqualToAnchor_constant_(content.bottomAnchor(), _PAD),
+            self.view.widthAnchor().constraintGreaterThanOrEqualToConstant_(_WIDTH),
+        )
 
     @objc.python_method
     def _wrapping(self, text: str, size: float, color: AppKit.NSColor, width: float) -> AppKit.NSTextField:
@@ -158,11 +141,15 @@ class HotkeyController(NSObject):
         self.clear_button.setHidden_(not model.combination)
         self.clear_button.setEnabled_(writable)
         self.default_button.setEnabled_(writable and not model.is_default)
-        self.save_button.setEnabled_(writable)
 
-        text, kind = (model.unreadable, "error") if not writable else model.status(self.recording, self.refusal)
+        if not writable:
+            text, kind = model.unreadable, "error"
+        elif self.clash and self.recording is None:
+            text, kind = self.clash, "error"
+        else:
+            text, kind = model.status(self.recording, self.refusal)
         self.status.setStringValue_(text)
-        self.status.setHidden_(not text)  # so an empty line leaves no gap above the buttons
+        self.status.setHidden_(not text)  # so an empty line leaves no gap
         self.status.setTextColor_(_STATUS_COLORS.get(kind) or AppKit.NSColor.secondaryLabelColor())
 
     # -- Recording --------------------------------------------------------
@@ -172,6 +159,8 @@ class HotkeyController(NSObject):
         """Start recording in ``field``, or stop with None; the old value stays until a press is accepted."""
         self.recording = field
         self.refusal = None
+        if field is not None:
+            self.clash = None
         self.capture = Capture()
         self.render()
 
@@ -181,26 +170,51 @@ class HotkeyController(NSObject):
         if keys is not None:
             record = self.model.record_key if self.recording == "key" else self.model.record_combination
             self.refusal = record(keys)
+            self.capture = Capture()  # keys still held can't complete a later try
             if self.refusal is None:
                 self.recording = None
-            self.capture = Capture()  # keys still held can't complete a later try
+                self.save()
+        self.render()
+
+    @objc.python_method
+    def save(self) -> None:
+        """Save what was just recorded, cleared or reset; a clash is refused, and both fields keep their saved values."""
+        self.clash = self.model.problem
+        if self.clash is not None:
+            self.model.revert()
+            self.render()
+            return
+        try:
+            self.model.save()
+        except (ConfigError, OSError, ValueError) as e:
+            log.warning("Couldn't save the hotkey: %s", e)
+            self.model.revert()
+            self.alert(SAVE_FAILED_TITLE, str(e))
+        else:
+            log.info("Saved the hotkey settings")
         self.render()
 
     @objc.python_method
     def handle_key(self, event: AppKit.NSEvent) -> AppKit.NSEvent | None:
-        if event.window() != self.window:
-            return event
-        key_down = event.type() == AppKit.NSEventTypeKeyDown
-        if key_down and event.isARepeat():
+        """Key events for the Settings window. While a field records, every key is taken."""
+        kind, code = event.type(), event.keyCode()
+        if kind == AppKit.NSEventTypeKeyUp:
+            if code == self.held:
+                self.held = None
+                return None
+            return event if self.recording is None else None
+        key_down = kind == AppKit.NSEventTypeKeyDown
+        if key_down and event.isARepeat() and (self.recording is not None or code == self.held):
             return None  # a key still held after it was recorded mustn't go on to press a button
         if self.recording is None:
             return event
-        code = event.keyCode()
         if key_down:
             if code == kit.KEY_ESCAPE:
                 self.record(None)
             else:
                 self.took(self.capture.press(MAC_KEYS.get(code)))
+                if self.recording is None:
+                    self.held = code
         else:
             mask = _DOWN.get(code)
             if mask is None:  # Caps Lock
@@ -220,46 +234,11 @@ class HotkeyController(NSObject):
         self.record(None if self.recording == "combination" else "combination")
 
     def clearCombination_(self, sender) -> None:
-        self.model.clear_combination()
         self.record(None)
+        self.model.clear_combination()
+        self.save()
 
     def useDefault_(self, sender) -> None:
+        self.record(None)
         self.model.use_default()
-        self.record(None)
-
-    def save_(self, sender) -> None:
-        self.record(None)
-        try:
-            self.model.save()
-        except ValueError:
-            return  # the status line shows the clash
-        except (ConfigError, OSError) as e:
-            log.warning("Couldn't save the hotkey: %s", e)
-            kit.alert(self.window, SAVE_FAILED_TITLE, str(e))
-            return
-        log.info("Saved the hotkey settings")
-        self.finish()
-
-    def cancel_(self, sender) -> None:
-        self.finish()
-
-    def windowDidResignKey_(self, notification) -> None:
-        if self.recording is not None:
-            self.record(None)
-
-    def windowWillClose_(self, notification) -> None:
-        self.closed = True
-        if self._monitor is not None:
-            AppKit.NSEvent.removeMonitor_(self._monitor)
-            self._monitor = None
-
-    @objc.python_method
-    def finish(self) -> None:
-        self.closed = True
-        self.window.close()
-
-
-def run(model: HotkeyModel) -> None:
-    kit.application()
-    controller = HotkeyController.alloc().initWithModel_(model)
-    kit.run(controller.window)
+        self.save()

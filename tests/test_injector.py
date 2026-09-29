@@ -422,13 +422,74 @@ def test_paste_keycode_falls_back_when_lookup_fails(monkeypatch):
 
 
 @darwin_only
-def test_paste_keycode_reads_the_real_layout_off_the_main_thread():
-    """Read-only lookup of the active layout from a worker thread, as a paste does."""
+def test_paste_keycode_reads_the_real_layout_on_the_main_thread():
+    assert 0 <= injector._paste_keycode() < 128
+
+
+def _paste_keycode_from_worker() -> int:
     result = []
     thread = threading.Thread(target=lambda: result.append(injector._paste_keycode()))
     thread.start()
     thread.join(timeout=10)
-    assert result and 0 <= result[0] < 128
+    return result[0]
+
+
+def _fake_app(monkeypatch, running: bool | None):
+    """Patch NSApp(): None when headless, else an app whose event loop is or is not running."""
+    import AppKit
+
+    app = None if running is None else SimpleNamespace(isRunning=lambda: running)
+    monkeypatch.setattr(AppKit, "NSApp", lambda: app)
+
+
+@darwin_only
+def test_paste_keycode_off_the_main_thread_runs_the_lookup_on_the_main_loop(monkeypatch):
+    """The input source API traps off the main thread: a worker must hand the lookup over."""
+    from PyObjCTools import AppHelper
+
+    _fake_app(monkeypatch, running=True)
+    handed_over: list = []
+    monkeypatch.setattr(AppHelper, "callAfter", handed_over.append)  # the main loop runs it later
+    looked_up_on: list[threading.Thread] = []
+
+    def layout_lookup() -> int:
+        looked_up_on.append(threading.current_thread())
+        return 47
+
+    monkeypatch.setattr(injector, "_layout_paste_keycode", layout_lookup)
+    result: list[int] = []
+    worker = threading.Thread(target=lambda: result.append(injector._paste_keycode()))
+    worker.start()
+    deadline = time.monotonic() + 5
+    while not handed_over and time.monotonic() < deadline:
+        time.sleep(0.001)
+    assert len(handed_over) == 1 and not looked_up_on  # the worker waits for the main loop
+    handed_over[0]()  # what the main loop does: this test runs on the main thread
+    worker.join(timeout=5)
+
+    assert result == [47]
+    assert looked_up_on == [threading.main_thread()]
+
+
+@darwin_only
+@pytest.mark.parametrize("running", [None, False])
+def test_paste_keycode_off_the_main_thread_without_an_event_loop_uses_ansi_v(monkeypatch, running):
+    from PyObjCTools import AppHelper
+
+    _fake_app(monkeypatch, running)
+    monkeypatch.setattr(AppHelper, "callAfter", lambda fn: pytest.fail("nothing runs the main loop"))
+    monkeypatch.setattr(injector, "_layout_paste_keycode", lambda: pytest.fail("must not read the layout off the main thread"))
+    assert _paste_keycode_from_worker() == 9
+
+
+@darwin_only
+def test_paste_keycode_uses_ansi_v_when_the_main_loop_is_busy(monkeypatch):
+    from PyObjCTools import AppHelper
+
+    _fake_app(monkeypatch, running=True)
+    monkeypatch.setattr(AppHelper, "callAfter", lambda fn: None)  # never runs
+    monkeypatch.setattr(injector, "_LAYOUT_LOOKUP_TIMEOUT", 0.01)
+    assert _paste_keycode_from_worker() == 9
 
 
 def test_pastes_are_serialized_across_threads(monkeypatch):

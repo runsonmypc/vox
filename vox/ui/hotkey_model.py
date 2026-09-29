@@ -1,9 +1,9 @@
-"""What the hotkey window shows and does, independent of toolkit.
+"""What the Hotkey page of Settings shows and does, independent of toolkit.
 
-The window records the key to tap on its own (``[hotkey] key``) and an optional key
+The page records the key to tap on its own (``[hotkey] key``) and an optional key
 combination (``[hotkey] fallback``), named as the hotkey listener names them. The listener
-does not suppress keys, so the app in front receives them too. Saving writes ``[hotkey]``
-to config.toml, which the daemon applies when the window closes.
+does not suppress keys, so the app in front receives them too. Each accepted recording writes
+``[hotkey]`` to config.toml, which the daemon applies when Settings closes.
 """
 
 from __future__ import annotations
@@ -241,6 +241,10 @@ class HotkeyModel:
             return BAD_COMBINATION
         self.combination = "+".join([name for name in _ORDER if name in modifiers] + [last])
         return None
+
+    def revert(self) -> None:
+        """Go back to the saved settings, after a recording that can't be saved (a clash)."""
+        self.key, self.combination = self._saved_key, self._saved_combination
 
     def clear_combination(self) -> None:
         self.combination = ""

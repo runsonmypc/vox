@@ -86,7 +86,8 @@ user who ran it.
 ## First start: your API key
 
 In an OpenAI mode, Vox Transfer asks for your OpenAI API key when it starts without one, and again
-if you dictate before saving one. You can also choose **Set API Key…** from its menu at any time.
+if you dictate before saving one. You can also set, replace or remove it at any time on the
+Transcription page of **Settings…** in its menu.
 
 The key goes into the macOS Keychain or your Linux login keyring (GNOME Keyring, KWallet), never
 into a file Vox Transfer writes in plain text, unless your Linux system has no keyring at all, in

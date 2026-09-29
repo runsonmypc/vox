@@ -8,7 +8,6 @@ import logging
 import os
 import threading
 import time
-import tomllib
 import wave
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -17,8 +16,20 @@ import pytest
 import websockets
 
 from vox import daemon as daemon_module
+from vox import keystore
 from vox import sounds as sounds_module
-from vox.config import Config, fallback_config, load_config, update_hotkey
+from vox.config import (
+    Config,
+    fallback_config,
+    load_config,
+    update_audio_device,
+    update_dictionary,
+    update_flag,
+    update_hotkey,
+    update_language,
+    update_max_recording_seconds,
+    update_transcription_mode,
+)
 from vox.daemon import (
     ACCESSIBILITY_NOTICE,
     PARTIAL_NOTICE,
@@ -299,7 +310,7 @@ async def test_pause_discards_a_recording_and_blocks_new_ones_until_resumed():
         await until(lambda: h.state is State.RECORDING)
 
 
-# -- The hotkey window --------------------------------------------------------------------
+# -- The Settings window ------------------------------------------------------------------
 
 
 def saved_settings(tmp_path, text="[hotkey]\nkey = 'right_shift'\n"):
@@ -312,25 +323,26 @@ def saved_settings(tmp_path, text="[hotkey]\nkey = 'right_shift'\n"):
 
 
 @pytest.mark.anyio
-async def test_the_hotkey_does_nothing_while_the_hotkey_window_is_open():
+async def test_the_hotkey_does_nothing_while_settings_is_open(memory_keyring):
+    keystore.set_api_key(KEY)
     async with running(openai_config()) as h:
-        h.send("hotkey:suspend", "toggle", "cancel", "toggle")
+        h.send("settings:open", "toggle", "cancel", "toggle")
         await settle()
         assert h.state is State.IDLE
         h.recorder.start.assert_not_called()
-        h.sounds.play.assert_not_called()  # no busy sound: the user is pressing keys to record a hotkey
+        h.sounds.play.assert_not_called()  # no busy sound: the user may be pressing keys to record a hotkey
 
-        h.send("hotkey:resume", "toggle")
+        h.send("settings:closed", "toggle")
         await until(lambda: h.state is State.RECORDING)
         assert h.hotkey.call_count == 1  # nothing was saved, so the listener stays
 
 
 @pytest.mark.anyio
-async def test_opening_the_hotkey_window_during_a_recording_discards_it():
+async def test_opening_settings_during_a_recording_discards_it():
     async with running(openai_config()) as h:
         h.send("toggle")
         await until(lambda: h.state is State.RECORDING)
-        h.send("hotkey:suspend")
+        h.send("settings:open")
         await until(lambda: h.state is State.IDLE)
         h.recorder.discard.assert_called()
         assert h.played("cancel")
@@ -338,13 +350,14 @@ async def test_opening_the_hotkey_window_during_a_recording_discards_it():
 
 
 @pytest.mark.anyio
-async def test_a_hotkey_saved_in_the_window_applies_when_it_closes(tmp_path, caplog):
+async def test_a_hotkey_saved_in_settings_applies_when_it_closes(tmp_path, caplog):
+    keystore.set_api_key(KEY)
     config = saved_settings(tmp_path)
     async with running(config) as h:
-        h.send("hotkey:suspend")
+        h.send("settings:open")
         await settle()
-        update_hotkey(config.config_path, "cmd_r", "ctrl+space")  # what the window saves
-        h.send("hotkey:resume")
+        update_hotkey(config.config_path, "cmd_r", "ctrl+space")  # what the Hotkey page saves
+        h.send("settings:closed")
         await until(lambda: h.hotkey.call_count == 2)
 
         h.hotkey.return_value.stop.assert_called_once_with()
@@ -357,83 +370,96 @@ async def test_a_hotkey_saved_in_the_window_applies_when_it_closes(tmp_path, cap
 
 
 @pytest.mark.anyio
-async def test_closing_the_hotkey_window_without_a_change_keeps_the_listener(tmp_path):
-    async with running(saved_settings(tmp_path)) as h:
-        h.send("hotkey:suspend", "hotkey:resume")
+async def test_settings_closed_applies_every_saved_setting_at_once(tmp_path):
+    """No poll runs here (the reloader is idle), so everything comes from the settings:closed event."""
+    config = saved_settings(tmp_path)
+    tray = MagicMock()
+    async with running(config, tray, cpp={"return_value": MagicMock()}) as h:
+        h.send("settings:open")
         await settle()
-        assert h.hotkey.call_count == 1
-        h.hotkey.return_value.stop.assert_not_called()
+        path = config.config_path
+        update_transcription_mode(path, "whisper_cpp")
+        update_max_recording_seconds(path, 600)
+        update_flag(path, "sounds", "enabled", False)
+        update_hotkey(path, "cmd_r", "")
+        update_audio_device(path, "USB Mic")
+        update_language(path, "de")
+        update_dictionary(path, add=["Kubernetes"])
+        keystore.set_api_key("sk-test-dummy-0002")
+        h.send("settings:closed")
+        await until(lambda: h.hotkey.call_count == 2)
+
+        assert config.mode == "whisper_cpp"
+        assert config.max_recording_seconds == 600
+        assert config.sounds_enabled is False
+        assert config.hotkey == "cmd_r"
+        assert config.audio_device == "USB Mic"
+        assert config.whisper_language == "de"
+        assert config.dictionary == ["Kubernetes"]
+        assert config.openai_api_key == "sk-test-dummy-0002"
+        h.recorder.reconfigure.assert_called_once_with(config)
+        tray.key_changed.assert_called()
+        tray.mode_changed.assert_called()
+
+        h.send("toggle")  # the next dictation uses them: the local mode and the new limit
+        await until(lambda: h.state is State.RECORDING)
+        assert h.daemon.session.mode == "whisper_cpp"
+        assert h.daemon.session.limit_seconds == 600
 
 
 @pytest.mark.anyio
-async def test_closing_the_hotkey_window_with_a_broken_settings_file_keeps_the_listener(tmp_path, caplog):
+async def test_a_settings_file_fixed_in_settings_lets_vox_record_once_it_closes(tmp_path):
+    keystore.set_api_key(KEY)
+    config = broken_settings(tmp_path)
+    async with running(config) as h:
+        h.send("settings:open")
+        config.config_path.write_text("[attenuation]\nlevel = 0.2\n")  # fixed by hand while Settings was open
+        h.send("settings:closed", "toggle")
+        await until(lambda: h.state is State.RECORDING)
+        assert config.config_error is None
+        assert config.attenuation_level == 0.2
+
+
+@pytest.mark.anyio
+async def test_closing_settings_without_a_change_keeps_the_listener(tmp_path):
+    async with running(saved_settings(tmp_path)) as h:
+        h.send("settings:open", "settings:closed")
+        await settle()
+        assert h.hotkey.call_count == 1
+        h.hotkey.return_value.stop.assert_not_called()
+        h.recorder.reconfigure.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_closing_settings_with_a_broken_settings_file_keeps_the_settings(tmp_path, caplog, memory_keyring):
+    keystore.set_api_key(KEY)
     config = saved_settings(tmp_path)
     async with running(config) as h:
-        h.send("hotkey:suspend")
+        h.send("settings:open")
         await settle()
         config.config_path.write_text("[hotkey\nkey = 'cmd_r'\n")  # broken by hand while the window was open
-        h.send("hotkey:resume", "toggle")
+        h.send("settings:closed", "toggle")
         await until(lambda: h.state is State.RECORDING)  # the hotkey works again
         assert h.hotkey.call_count == 1
         h.hotkey.return_value.stop.assert_not_called()
-    assert "Couldn't read the hotkey settings" in caplog.text
+    assert "Couldn't read the settings" in caplog.text
+
+
+@pytest.mark.anyio
+async def test_a_key_saved_in_settings_applies_when_it_closes():
+    tray = MagicMock()
+    config = Config()
+    async with running(config, tray) as h:
+        await until(lambda: tray.open_settings.called)
+        tray.open_settings.assert_called_once_with("transcription")  # no key at startup
+        h.send("settings:open")
+        keystore.set_api_key(KEY)
+        h.send("settings:closed")
+        await until(lambda: config.openai_api_key == KEY)
+        tray.key_changed.assert_called()
 
 
 # -- Transcription mode ---------------------------------------------------------------
-
-
-@pytest.mark.anyio
-async def test_a_failed_mode_switch_changes_nothing(tmp_path):
-    path = tmp_path / "config.toml"
-    path.write_text('[transcription]\nmode = "batch"\n')
-    config = openai_config()
-    config._config_path = path
-    tray = MagicMock()
-
-    async with running(config, tray, cpp={"side_effect": ConfigError("whisper.cpp model not found: x.bin")}) as h:
-        h.send("mode:whisper_cpp")
-        await until(lambda: h.played("error"))
-        assert config.mode == "batch"
-        assert path.read_text() == '[transcription]\nmode = "batch"\n'
-        tray.mode_changed.assert_not_called()
-
-        h.sounds.reset_mock()
-        h.send("mode:bogus")
-        await until(lambda: h.played("error"))
-        assert config.mode == "batch"
-
-        h.send("mode:streaming")
-        await until(lambda: tray.mode_changed.called)
-        assert config.mode == "streaming"
-        assert tomllib.loads(path.read_text())["transcription"]["mode"] == "streaming"
-
-
-@pytest.mark.anyio
-async def test_switching_to_local_transcription_tries_its_setup_once(tmp_path):
-    local = MagicMock()
-    config = openai_config()
-    config._config_path = tmp_path / "config.toml"
-    tray = MagicMock()
-    async with running(config, tray, cpp={"return_value": local}) as h:
-        h.send("mode:whisper_cpp")
-        await until(lambda: tray.mode_changed.called)
-        assert config.mode == "whisper_cpp"
-        assert h.daemon.batch_transcriber is local
-        h.cpp.assert_called_once_with(config)  # building it is the setup check
-    assert tomllib.loads(config.config_path.read_text())["transcription"]["mode"] == "whisper_cpp"
-
-
-@pytest.mark.anyio
-async def test_an_openai_mode_needs_a_key_before_it_can_be_chosen(tmp_path):
-    config = Config(mode="whisper_cpp")
-    config._config_path = tmp_path / "config.toml"
-    tray = MagicMock()
-    async with running(config, tray, cpp={"return_value": MagicMock()}) as h:
-        h.send("mode:streaming")
-        await until(lambda: h.played("error"))
-        assert config.mode == "whisper_cpp"
-        assert not config.config_path.exists()
-        tray.mode_changed.assert_not_called()
 
 
 @pytest.mark.anyio
@@ -512,29 +538,6 @@ async def test_the_recording_limit_stops_and_transcribes(caplog):
         h.batch.transcribe.assert_awaited_once()
 
 
-@pytest.mark.anyio
-async def test_a_limit_picked_from_the_menu_is_saved_and_applies_next_time(tmp_path):
-    path = tmp_path / "config.toml"
-    path.write_text("# my settings\n[audio]\nsample_rate = 48000\n")
-    config = openai_config()
-    config._config_path = path
-    tray = MagicMock()
-
-    async with running(config, tray) as h:
-        h.send("limit:600")
-        await until(lambda: tray.limit_changed.called)
-        assert config.max_recording_seconds == 600
-        assert tomllib.loads(path.read_text())["audio"] == {"sample_rate": 48000, "max_recording_seconds": 600}
-        assert path.read_text().startswith("# my settings")
-
-        for bad in ("limit:abc", "limit:0", "limit:-5"):
-            h.sounds.reset_mock()
-            h.send(bad)
-            await until(lambda: h.played("error"))
-        assert config.max_recording_seconds == 600
-        assert tray.limit_changed.call_count == 1
-
-
 # -- A settings file that does not load -------------------------------------------------
 
 
@@ -558,7 +561,7 @@ async def test_a_settings_file_that_does_not_load_blocks_recording_until_it_does
         assert h.state is State.IDLE
         h.recorder.start.assert_not_called()
         assert '[attenuation] level must be a number from 0 to 1, not "loud"' in caplog.text
-        tray.open_key_window.assert_not_called()  # there is no key, but the file may not need one
+        tray.open_settings.assert_not_called()  # there is no key, but the file may not need one
 
         config.config_error = None  # what the reloader does once the file loads
         config.openai_api_key = KEY
@@ -566,71 +569,22 @@ async def test_a_settings_file_that_does_not_load_blocks_recording_until_it_does
         await until(lambda: h.state is State.RECORDING)
 
 
-@pytest.mark.anyio
-async def test_menu_changes_are_refused_while_the_settings_file_does_not_load(tmp_path):
-    config = broken_settings(tmp_path)
-    config.openai_api_key = KEY
-    before = config.config_path.read_text()
-    tray = MagicMock()
-    async with running(config, tray) as h:
-        h.send("mode:streaming", "limit:600")
-        await until(lambda: h.sounds.play.call_count == 2)
-        assert [c.args for c in h.sounds.play.call_args_list] == [("error",), ("error",)]
-    assert config.config_path.read_text() == before
-    assert (config.mode, config.max_recording_seconds) == ("batch", 900)
-    tray.mode_changed.assert_not_called()
-    tray.limit_changed.assert_not_called()
-
-
-@pytest.mark.anyio
-@pytest.mark.parametrize("broken", ["[audio\nsample_rate = 48000\n", "audio = 5\ntranscription = 1\n"])
-async def test_menu_changes_to_a_file_broken_since_it_loaded_fail_with_the_error_sound(tmp_path, caplog, broken):
-    path = tmp_path / "config.toml"
-    path.write_text("[audio]\nsample_rate = 48000\n")
-    config = load_config(path)
-    config.openai_api_key = KEY
-    tray = MagicMock()
-    async with running(config, tray) as h:
-        path.write_text(broken)  # an edit the reloader rejected, so config_error stays unset
-        h.send("limit:600")
-        await until(lambda: h.played("error"))
-        h.sounds.reset_mock()
-        h.send("mode:streaming")
-        await until(lambda: h.played("error"))
-        assert h.state is State.IDLE and not h.task.done()
-    assert path.read_text() == broken
-    assert (config.mode, config.max_recording_seconds) == ("batch", 900)
-    tray.mode_changed.assert_not_called()
-    tray.limit_changed.assert_not_called()
-    assert "Unexpected error" not in caplog.text
-
-
 # -- Tray notices and devices ----------------------------------------------------------
 
 
 @pytest.mark.anyio
-async def test_the_device_list_goes_to_the_tray_at_startup_and_only_when_it_changes():
+async def test_devices_are_rescanned_at_startup_and_on_returning_to_idle_but_not_sent_to_the_tray():
+    """Settings lists the microphones itself; the rescan only lets a microphone connected since record."""
     tray = MagicMock()
     with patch("vox.daemon._DEVICE_REFRESH_DELAY", 0.01):
         async with running(openai_config(), tray) as h:
-            await until(lambda: tray.devices_changed.called)
-            tray.devices_changed.assert_called_once_with([(0, "Built-in Mic")])
-
-            h.send("toggle", "cancel")  # back to idle: re-scan, same devices
-            await until(lambda: h.recorder.refresh_input_devices.call_count >= 2)
-            await settle()
-            assert tray.devices_changed.call_count == 1
-
-            h.recorder.refresh_input_devices.return_value = [(0, "Built-in Mic"), (3, "USB Mic")]
+            await until(lambda: h.recorder.refresh_input_devices.called)
             h.send("toggle", "cancel")
-            await until(lambda: tray.devices_changed.call_count == 2)
-            tray.devices_changed.assert_called_with([(0, "Built-in Mic"), (3, "USB Mic")])
-
+            await until(lambda: h.recorder.refresh_input_devices.call_count >= 2)
             h.recorder.refresh_input_devices.return_value = None  # a stream was open: no answer
             h.send("toggle", "cancel")
-            await until(lambda: h.recorder.refresh_input_devices.call_count >= 4)
-            await settle()
-            assert tray.devices_changed.call_count == 2
+            await until(lambda: h.recorder.refresh_input_devices.call_count >= 3)
+    assert not [name for name, _, _ in tray.mock_calls if "device" in name]
 
 
 @pytest.mark.anyio
@@ -1156,6 +1110,19 @@ async def reloading(config, recorder, tray=None, apply_hotkey=None):
             task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await task
+
+
+@pytest.mark.anyio
+async def test_config_reload_applies_the_whisper_cpp_cpu_fallback(tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_text("[audio]\nsample_rate = 48000\n")
+    config = load_config(path)
+    assert config.whisper_cpp_cpu_fallback is True
+    async with reloading(config, MagicMock()):
+        mtime = path.stat().st_mtime
+        path.write_text("[audio]\nsample_rate = 48000\n[whisper_cpp]\ncpu_fallback = false\n")
+        os.utime(path, (mtime + 10, mtime + 10))
+        await until(lambda: config.whisper_cpp_cpu_fallback is False)
 
 
 @pytest.mark.anyio

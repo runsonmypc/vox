@@ -37,12 +37,10 @@ class RecordingTray:
         self.history_changes = 0
         self.attached = None
         self.stopped = False
-        self.key_windows = 0
+        self.settings_pages = []
         self.key_changes = 0
         self.mode_changes = 0
         self.notices = []
-        self.limit_changes = 0
-        self.device_lists = []
 
     def attach(self, loop, queue, history, main_task):
         self.attached = (loop, queue, history, main_task)
@@ -56,8 +54,8 @@ class RecordingTray:
     def history_changed(self):
         self.history_changes += 1
 
-    def open_key_window(self):
-        self.key_windows += 1
+    def open_settings(self, page):
+        self.settings_pages.append(page)
 
     def key_changed(self):
         self.key_changes += 1
@@ -67,12 +65,6 @@ class RecordingTray:
 
     def set_notice(self, text):
         self.notices.append(text)
-
-    def limit_changed(self):
-        self.limit_changes += 1
-
-    def devices_changed(self, devices):
-        self.device_lists.append(devices)
 
     def stop(self):
         self.stopped = True
@@ -210,9 +202,9 @@ async def test_without_a_key_the_window_opens_and_the_hotkey_does_not_record():
     with daemon_env() as env:
         task = await start_daemon(tray, keyless())
         _, queue, _, _ = tray.attached
-        assert tray.key_windows == 1
+        assert tray.settings_pages == ["transcription"]
         await queue.put("toggle")
-        await wait_for(lambda: tray.key_windows == 2)
+        await wait_for(lambda: tray.settings_pages == ["transcription", "transcription"])
         env["recorder"].start.assert_not_called()
         env["sounds"].play.assert_any_call("error")
         assert tray.states == []
@@ -226,7 +218,7 @@ async def test_saved_key_takes_effect_without_a_restart():
         task = await start_daemon(tray, config)
         _, queue, _, _ = tray.attached
         keystore.set_api_key(KEY)
-        await queue.put("api_key")
+        await queue.put("settings:closed")
         await wait_for(lambda: config.openai_api_key == KEY and tray.key_changes == 1)
         await queue.put("toggle")
         await wait_for(lambda: tray.states == ["RECORDING"])
@@ -240,11 +232,11 @@ async def test_removed_key_stops_dictation():
     with daemon_env() as env:
         task = await start_daemon(tray, config)
         _, queue, _, _ = tray.attached
-        assert tray.key_windows == 0
-        await queue.put("api_key")  # the window removed it: nothing is saved
+        assert tray.settings_pages == []
+        await queue.put("settings:closed")  # the key was removed in Settings
         await wait_for(lambda: config.openai_api_key == "")
         await queue.put("toggle")
-        await wait_for(lambda: tray.key_windows == 1)
+        await wait_for(lambda: tray.settings_pages == ["transcription"])
         env["recorder"].start.assert_not_called()
         await stop_daemon(task)
 
@@ -276,7 +268,7 @@ async def test_unreadable_keychain_never_asks_for_a_new_key(memory_keyring, monk
         await queue.put("toggle")
         await wait_for(lambda: tray.key_changes == 1)  # the hotkey tried the keychain again
         await wait_for(lambda: ("error",) in [c.args for c in env["sounds"].play.call_args_list])
-        assert tray.key_windows == 0
+        assert tray.settings_pages == []
         assert config.api_key_error == "Failed to unlock the collection!"
         env["recorder"].start.assert_not_called()
         await stop_daemon(task)
@@ -288,7 +280,7 @@ async def test_local_transcription_needs_no_key():
     with daemon_env(), patch("vox.daemon.WhisperCppTranscriber", MagicMock()):
         task = await start_daemon(tray, keyless("whisper_cpp"))
         _, queue, _, _ = tray.attached
-        assert tray.key_windows == 0
+        assert tray.settings_pages == []
         await queue.put("toggle")
         await wait_for(lambda: tray.states == ["RECORDING"])
         await stop_daemon(task)
@@ -389,10 +381,13 @@ async def test_menu_to_daemon_to_icon_round_trip():
 
 
 @pytest.mark.anyio
-async def test_transcription_menu_switches_provider_and_persists_choice(tmp_path):
+async def test_a_mode_chosen_in_settings_applies_once_it_closes(tmp_path):
     pytest.importorskip("pystray")
+    import threading
+
     from tests.test_tray import FakeIcon, find, immediate
-    from vox.ui.tray import TrayManager
+    from vox.config import update_transcription_mode
+    from vox.ui.tray import SETTINGS, SETTINGS_OPEN, TrayManager
 
     binary = tmp_path / "whisper-cli"
     binary.write_text("#!/bin/sh\n")
@@ -400,16 +395,18 @@ async def test_transcription_menu_switches_provider_and_persists_choice(tmp_path
     model = tmp_path / "model.bin"
     model.write_bytes(b"model")
     config_path = tmp_path / "config.toml"
-    config_path.write_text(
-        f'[transcription]\nmode = "batch"\n'
-        f'[whisper_cpp]\nbinary = "{binary}"\nmodel = "{model}"\n'
-    )
-    config = Config(
-        mode="batch", openai_api_key="test", attenuation_enabled=False,
-        whisper_cpp_binary=str(binary), whisper_cpp_model=str(model),
-    )
-    config._config_path = config_path
-    tray = TrayManager(config, icon_factory=FakeIcon, dispatch=immediate)
+    config_path.write_text(f'[transcription]\nmode = "batch"\n[whisper_cpp]\nbinary = "{binary}"\nmodel = "{model}"\n')
+    config = load_config(config_path)
+    config.openai_api_key = "test"
+    config.attenuation_enabled = False
+    keystore.set_api_key("test")
+
+    closed = threading.Event()
+    window = MagicMock()
+    window.poll.side_effect = lambda: 0 if closed.is_set() else None
+    window.wait.side_effect = lambda: closed.wait(5)
+    tray = TrayManager(config, icon_factory=FakeIcon, dispatch=immediate, launcher=MagicMock(return_value=window),
+                       focus=MagicMock())
     icon = tray._icon
 
     class FakeLocal:
@@ -421,37 +418,24 @@ async def test_transcription_menu_switches_provider_and_persists_choice(tmp_path
 
     with daemon_env("API text") as env, patch("vox.daemon.WhisperCppTranscriber", FakeLocal):
         task = await start_daemon(tray, config)
-        menu = find(icon.menu, "Transcription").submenu
-        assert find(menu, "Local (whisper.cpp)").enabled is True
-        find(menu, "Local (whisper.cpp)")(icon)
+        find(icon.menu, SETTINGS)(icon)
+        assert icon.title == f"Vox Transfer · {SETTINGS_OPEN}"
+        await asyncio.sleep(0)  # the tray's settings:open reaches the queue first, as it does from the main thread
+        await tray._queue.put("toggle")  # the hotkey is off while Settings is open
+        await asyncio.sleep(0.05)
+        env["recorder"].start.assert_not_called()
+
+        update_transcription_mode(config_path, "whisper_cpp")  # what the Transcription page saves
+        closed.set()  # the window closes
         await wait_for(lambda: config.mode == "whisper_cpp")
-        assert find(menu, "Local (whisper.cpp)").checked is True
-        assert '[transcription]\nmode = "whisper_cpp"' in config_path.read_text()
-        assert load_config(config_path).whisper_cpp_model == str(model)
-
-        await tray._queue.put("toggle")
-        await wait_for(lambda: icon.title == "Vox Transfer · Recording…")
-        await tray._queue.put("mode:batch")  # a queued switch cannot interrupt a recording
-        await asyncio.sleep(0)
-        assert config.mode == "whisper_cpp"
-        await tray._queue.put("toggle")
-        await wait_for(lambda: icon.title == "Vox Transfer · Idle")
-        assert tray._history.recent(1)[0].transcription_mode == "whisper_cpp"
-
-        find(menu, "OpenAI (batch)")(icon)
-        await wait_for(lambda: config.mode == "batch")
-        assert find(menu, "OpenAI (batch)").checked is True
-        assert '[transcription]\nmode = "batch"' in config_path.read_text()
-        assert load_config(config_path).whisper_cpp_model == str(model)
+        assert icon.title == "Vox Transfer · Idle"
 
         await tray._queue.put("toggle")
         await wait_for(lambda: icon.title == "Vox Transfer · Recording…")
         await tray._queue.put("toggle")
         await wait_for(lambda: icon.title == "Vox Transfer · Idle")
-        assert [(rec.text, rec.transcription_mode) for rec in tray._history.recent(2)] == [
-            ("API text", "batch"), ("local text", "whisper_cpp"),
-        ]
-        env["batch"].transcribe.assert_awaited_once()
+        assert [(rec.text, rec.transcription_mode) for rec in tray._history.recent(1)] == [("local text", "whisper_cpp")]
+        env["batch"].transcribe.assert_not_awaited()
         await stop_daemon(task)
 
 
@@ -586,7 +570,7 @@ def test_run_headless_without_a_key_exits_with_an_error(caplog):
         daemon.run(Config())
     assert exit_info.value.code == 1
     main.assert_not_called()
-    assert "Set API Key" in caplog.text
+    assert "Settings…" in caplog.text
 
 
 def test_run_headless_without_a_key_is_fine_for_local_transcription():

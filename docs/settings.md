@@ -2,15 +2,34 @@
 
 [Back to the README](../README.md)
 
+- [The Settings window](#the-settings-window)
 - [The settings file](#the-settings-file)
 - [All settings](#all-settings)
 - [When the file has an error](#when-the-file-has-an-error)
 - [Sounds](#sounds)
 - [Local transcription with whisper.cpp](#local-transcription-with-whispercpp)
 
-Most people never need this page: the menu sets the hotkey, transcription mode, recording limit,
-vocabulary and snippets for you. Prefer to have it done for you? Ask your AI coding assistant to
-follow [the setup guide for AI assistants](ai-setup.md).
+Most people never need the settings file: **Settings…** in the Vox Transfer menu changes almost
+everything for you. Prefer to have it done for you? Ask your AI coding assistant to follow
+[the setup guide for AI assistants](ai-setup.md).
+
+## The Settings window
+
+Choose **Settings…** from the menu while Vox Transfer is idle. Each change is saved to the settings
+file as you make it, and applies once you close the window; the hotkey does not dictate while it is
+open. The window reads the file again every few seconds, so an edit you make by hand shows there
+too. [Using Vox Transfer](using.md#settings) says what each page does.
+
+| Page | macOS | Linux |
+| --- | --- | --- |
+| General | <picture><source media="(prefers-color-scheme: dark)" srcset="images/settings-general-mac-dark.png"><img src="images/settings-general-mac-light.png" alt="The General page of Settings on macOS"></picture> | <picture><source media="(prefers-color-scheme: dark)" srcset="images/settings-general-linux-dark.png"><img src="images/settings-general-linux-light.png" alt="The General page of Settings on Linux"></picture> |
+| Hotkey | <picture><source media="(prefers-color-scheme: dark)" srcset="images/settings-hotkey-mac-dark.png"><img src="images/settings-hotkey-mac-light.png" alt="The Hotkey page of Settings on macOS"></picture> | <picture><source media="(prefers-color-scheme: dark)" srcset="images/settings-hotkey-linux-dark.png"><img src="images/settings-hotkey-linux-light.png" alt="The Hotkey page of Settings on Linux"></picture> |
+| Transcription | <picture><source media="(prefers-color-scheme: dark)" srcset="images/settings-transcription-mac-dark.png"><img src="images/settings-transcription-mac-light.png" alt="The Transcription page of Settings on macOS"></picture> | <picture><source media="(prefers-color-scheme: dark)" srcset="images/settings-transcription-linux-dark.png"><img src="images/settings-transcription-linux-light.png" alt="The Transcription page of Settings on Linux"></picture> |
+| Vocabulary | <picture><source media="(prefers-color-scheme: dark)" srcset="images/settings-vocabulary-mac-dark.png"><img src="images/settings-vocabulary-mac-light.png" alt="The Vocabulary page of Settings on macOS"></picture> | <picture><source media="(prefers-color-scheme: dark)" srcset="images/settings-vocabulary-linux-dark.png"><img src="images/settings-vocabulary-linux-light.png" alt="The Vocabulary page of Settings on Linux"></picture> |
+| Snippets | <picture><source media="(prefers-color-scheme: dark)" srcset="images/settings-snippets-mac-dark.png"><img src="images/settings-snippets-mac-light.png" alt="The Snippets page of Settings on macOS"></picture> | <picture><source media="(prefers-color-scheme: dark)" srcset="images/settings-snippets-linux-dark.png"><img src="images/settings-snippets-linux-light.png" alt="The Snippets page of Settings on Linux"></picture> |
+
+A few settings are only in the file: `sample_rate`, `channels`, `double_tap_timeout_ms`,
+`streaming_model`, `[whisper] model`, `[whisper_cpp] cpu_fallback` and `[window_classes]`. The window keeps them as they are.
 
 ## The settings file
 
@@ -43,10 +62,10 @@ that section.
 | Setting | Default | Meaning |
 | --- | --- | --- |
 | `dictionary` (top level) | `[]` | Words to spell exactly as written. |
-| `[hotkey] key` | `"right_shift"` | The key to tap on its own: a modifier (`"right_shift"`, `"right_ctrl"`, `"right_alt"` or `"cmd_r"`, and `"shift"`, `"ctrl"`, `"alt"` or `"cmd"` for the left one), `"f1"` to `"f20"`, `"fn"` on macOS (the Globe key, also written `"globe"`), or `"pause"` or `"scroll_lock"` on Linux. **Set Hotkey…** records it for you. |
+| `[hotkey] key` | `"right_shift"` | The key to tap on its own: a modifier (`"right_shift"`, `"right_ctrl"`, `"right_alt"` or `"cmd_r"`, and `"shift"`, `"ctrl"`, `"alt"` or `"cmd"` for the left one), `"f1"` to `"f20"`, `"fn"` on macOS (the Globe key, also written `"globe"`), or `"pause"` or `"scroll_lock"` on Linux. The Hotkey page of Settings records it for you. |
 | `[hotkey] fallback` | `""` (none) | An extra key combination that toggles dictation, such as `"ctrl+space"` (`ctrl` is the left Control key; `right_ctrl` the right one). |
 | `[hotkey] double_tap_timeout_ms` | `400` | How fast a double-tap must be to cancel. |
-| `[audio] device` | unset (system default) | Input device index or name, from `vox --list-devices`. |
+| `[audio] device` | unset (system default) | Input device name or index, from `vox --list-devices`. The General page of Settings saves the name of the one you pick. |
 | `[audio] sample_rate` | `48000` | Recording sample rate in Hz. |
 | `[audio] channels` | `1` | Recording channels. |
 | `[audio] max_recording_seconds` | `900` | The recording limit; a recording that reaches it stops and is transcribed. |
@@ -57,6 +76,7 @@ that section.
 | `[whisper] model` | `"gpt-transcribe"` | OpenAI model for batch mode. |
 | `[whisper_cpp] binary` | `"whisper-cli"` | The whisper.cpp command; a full path is safest. |
 | `[whisper_cpp] model` | `""` | Path to a GGML model file; required for whisper.cpp mode. |
+| `[whisper_cpp] cpu_fallback` | `true` | When the graphics card has no memory left for the model (a game is running, say), transcribe on the processor instead, more slowly. |
 | `[context] screen` | `true` | Screen hints, see [Privacy](privacy.md#screen-hints-context-screen). |
 | `[sounds] enabled` | `true` | Play sounds for start, stop, cancel and errors. |
 | `[attenuation] enabled` | `true` | Lower the system volume while recording. |
@@ -65,7 +85,8 @@ that section.
 | `[window_classes]` | none | `"part of window class" = "TERMINAL"` (or `EDITOR`, `CHAT`, `EMAIL`, `BROWSER`, `OTHER`). On Linux, terminals get Ctrl+Shift+V instead of Ctrl+V. |
 
 Paths may be absolute, start with `~`, or be relative to the config file. `vox --config PATH` uses
-another file. The OpenAI API key does not go in this file: choose **Set API Key…** from the menu.
+another file. The OpenAI API key does not go in this file: set it on the Transcription page of
+Settings.
 
 ## When the file has an error
 
@@ -74,8 +95,9 @@ If the file has an error when Vox Transfer starts (a typo, or a value of the wro
 an error**, the log names the file and the setting, and the hotkey plays the error sound.
 Vox Transfer does not fall back to defaults for dictation, since they might send audio to OpenAI
 when you chose local transcription. Save a fixed file and Vox Transfer picks it up within a few
-seconds. While the file has an error, the Vocabulary & Snippets and Set Hotkey windows show the
-problem and change nothing; fix the file, then reopen the window. An error in an edit while
+seconds. While the file has an error, Settings names the problem (in red on macOS, in a banner on
+Linux) and changes nothing but the API key; once the file is fixed, it shows the fixed settings
+within a few seconds. An error in an edit while
 Vox Transfer is running is logged and ignored, and the previous settings stay in effect.
 
 ## Sounds
@@ -106,7 +128,8 @@ Transcribe on your own computer, with no API key and nothing sent anywhere.
 
    On macOS, `brew install whisper-cpp` provides `whisper-cli` too; you still need a model file.
 
-2. Point Vox Transfer at them in `~/.config/vox/config.toml`:
+2. Point Vox Transfer at them: on the Transcription page of Settings, click **Choose…** next to
+   the whisper.cpp program and the model. Or set them in `~/.config/vox/config.toml`:
 
    ```toml
    [whisper_cpp]
@@ -118,7 +141,8 @@ Transcribe on your own computer, with no API key and nothing sent anywhere.
    shell. On macOS it searches `/opt/homebrew/bin` and `/usr/local/bin` as well as the system
    folders.
 
-3. Choose **Local (whisper.cpp)** from the Transcription menu.
+3. Choose **Local (whisper.cpp)** on the Transcription page of Settings. Until both files work, it
+   can't be chosen, and says what is missing.
 
 If the whisper.cpp setup later breaks (a moved model, say), Vox Transfer still starts, shows the
 problem in its menu, and lets you switch back to an OpenAI mode. Each hotkey press checks the setup

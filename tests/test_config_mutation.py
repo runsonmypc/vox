@@ -13,11 +13,17 @@ import pytest
 from vox.config import (
     RECORDING_LIMIT_CHOICES,
     load_config,
+    update_attenuation_level,
+    update_audio_device,
     update_dictionary,
+    update_flag,
     update_hotkey,
+    update_language,
     update_max_recording_seconds,
+    update_prompt,
     update_snippet,
     update_transcription_mode,
+    update_whisper_cpp,
     write_atomically,
 )
 from vox.errors import ConfigError
@@ -243,6 +249,167 @@ def test_hotkey_update_creates_a_private_file(tmp_path):
     update_hotkey(path, "f13", "")
     assert tomllib.loads(path.read_text()) == {"hotkey": {"key": "f13"}}
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+# -- The Settings window's writers ---------------------------------------------
+
+_KEPT_LINES = (
+    "# Vox configuration", '# openai_api_key = "sk-..."', "sample_rate = 16000  # keep this comment",
+    "# Snippets - exact match on raw transcript -> expansion", '"my email" = "alex@example.com"  # personal',
+)
+
+
+@pytest.mark.parametrize("write, section, key, value, field", [
+    (lambda p: update_audio_device(p, "USB Mic"), "audio", "device", "USB Mic", "audio_device"),
+    (lambda p: update_flag(p, "sounds", "enabled", False), "sounds", "enabled", False, "sounds_enabled"),
+    (lambda p: update_flag(p, "attenuation", "enabled", False), "attenuation", "enabled", False, "attenuation_enabled"),
+    (lambda p: update_flag(p, "context", "screen", False), "context", "screen", False, "context_screen"),
+    (lambda p: update_attenuation_level(p, 0.3), "attenuation", "level", 0.3, "attenuation_level"),
+    (lambda p: update_language(p, "de"), "transcription", "language", "de", "whisper_language"),
+    (lambda p: update_prompt(p, "Vox, pytest"), "transcription", "prompt", "Vox, pytest", "whisper_prompt"),
+    (lambda p: update_whisper_cpp(p, binary="/opt/whisper-cli"), "whisper_cpp", "binary", "/opt/whisper-cli",
+     "whisper_cpp_binary"),
+    (lambda p: update_whisper_cpp(p, model="~/models/ggml-base.bin"), "whisper_cpp", "model", "~/models/ggml-base.bin",
+     "whisper_cpp_model"),
+])
+def test_each_settings_writer_writes_its_own_key_and_keeps_the_rest(cfg, write, section, key, value, field):
+    write(cfg)
+    data = tomllib.loads(cfg.read_text())
+    assert data[section][key] == value
+    assert getattr(load_config(cfg), field) == value
+    for line in _KEPT_LINES:
+        assert line in cfg.read_text()
+
+
+@pytest.mark.parametrize("text, remove, section, key", [
+    ('[audio]\ndevice = "USB"\nsample_rate = 16000\n', lambda p: update_audio_device(p, None), "audio", "device"),
+    ("[audio]\ndevice = 3\nsample_rate = 16000\n", lambda p: update_audio_device(p, ""), "audio", "device"),
+    ('[transcription]\nlanguage = "de"\nmode = "batch"\n', lambda p: update_language(p, None), "transcription", "language"),
+    ('[transcription]\nprompt = "Hi"\nmode = "batch"\n', lambda p: update_prompt(p, "  "), "transcription", "prompt"),
+    ('[whisper_cpp]\nbinary = "/x"\nmodel = "m.bin"\n', lambda p: update_whisper_cpp(p, binary=None), "whisper_cpp", "binary"),
+])
+def test_none_or_empty_removes_the_key(tmp_path, text, remove, section, key):
+    path = tmp_path / "config.toml"
+    path.write_text(text)
+    remove(path)
+    table = tomllib.loads(path.read_text())[section]
+    assert key not in table
+    assert table  # the rest of the section stays
+
+
+def test_removing_the_last_key_drops_an_empty_table_but_not_a_commented_one(tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_text('[audio]\ndevice = "USB"\n\n[sounds]\nenabled = false\n')
+    update_audio_device(path, None)
+    assert tomllib.loads(path.read_text()) == {"sounds": {"enabled": False}}
+    path.write_text('[audio]\n# the desk microphone\ndevice = "USB"\n')
+    update_audio_device(path, None)
+    assert "# the desk microphone" in path.read_text()
+    assert load_config(path).audio_device is None
+
+
+@pytest.mark.parametrize("key", ["language", "prompt"])
+def test_clearing_language_or_prompt_also_clears_the_legacy_whisper_value(tmp_path, key):
+    """Otherwise the old [whisper] value would apply again once [transcription] stops overriding it."""
+    path = tmp_path / "config.toml"
+    path.write_text(f'[whisper]\n{key} = "old"\n\n[transcription]\n{key} = "new"\n')
+    if key == "language":
+        update_language(path, None)
+    else:
+        update_prompt(path, "")
+    config = load_config(path)
+    assert (config.whisper_language, config.whisper_prompt) == (None, "")
+
+
+def test_whisper_cpp_model_replaces_a_generic_model_that_would_shadow_it(tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_text('[transcription]\nmode = "whisper_cpp"\nmodel = "old.bin"\n')
+    update_whisper_cpp(path, model="/models/new.bin")
+    assert load_config(path).whisper_cpp_model == "/models/new.bin"
+    path.write_text('[transcription]\nmode = "batch"\nmodel = "gpt-4o-transcribe"\n')
+    update_whisper_cpp(path, model="/models/new.bin")
+    assert load_config(path).whisper_model == "gpt-4o-transcribe"  # the OpenAI model it names stays
+
+
+@pytest.mark.parametrize("write", [
+    lambda p: update_audio_device(p, "USB"),
+    lambda p: update_flag(p, "sounds", "enabled", False),
+    lambda p: update_attenuation_level(p, 0.25),
+    lambda p: update_language(p, "fr"),
+    lambda p: update_prompt(p, "Hello"),
+    lambda p: update_whisper_cpp(p, binary="whisper-cli-2"),
+])
+def test_settings_writers_create_a_private_file(tmp_path, write):
+    path = tmp_path / "new" / "config.toml"
+    write(path)
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert load_config(path) != load_config(tmp_path / "missing.toml")
+
+
+@pytest.mark.parametrize("write", [
+    lambda p: update_flag(p, "sounds", "enabled", "no"),
+    lambda p: update_flag(p, "audio", "sample_rate", True),
+    lambda p: update_attenuation_level(p, 1.5),
+    lambda p: update_attenuation_level(p, True),
+])
+def test_settings_writers_reject_invalid_values(cfg, write):
+    before = cfg.read_text()
+    with pytest.raises(ValueError):
+        write(cfg)
+    assert cfg.read_text() == before
+
+
+@pytest.mark.parametrize("text", [
+    '[transcription]\nmode = "bogus"\n',  # a file that already doesn't load
+    '[audio]\nsample_rate = "fast"\n',
+])
+def test_a_result_that_would_not_load_is_refused(tmp_path, text):
+    path = tmp_path / "config.toml"
+    path.write_text(text)
+    for write in (lambda: update_flag(path, "sounds", "enabled", False), lambda: update_language(path, "de"),
+                  lambda: update_dictionary(path, add=["Vox"])):
+        with pytest.raises(ConfigError, match="config.toml"):
+            write()
+    assert path.read_text() == text
+
+
+_UNCHANGED_WRITES = [
+    lambda p, c: update_audio_device(p, c.audio_device),
+    lambda p, c: update_flag(p, "sounds", "enabled", c.sounds_enabled),
+    lambda p, c: update_flag(p, "attenuation", "enabled", c.attenuation_enabled),
+    lambda p, c: update_flag(p, "context", "screen", c.context_screen),
+    lambda p, c: update_attenuation_level(p, c.attenuation_level),
+    lambda p, c: update_language(p, c.whisper_language),
+    lambda p, c: update_prompt(p, c.whisper_prompt),
+    lambda p, c: update_whisper_cpp(p, binary=c.whisper_cpp_binary, model=c.whisper_cpp_model),
+    lambda p, c: update_transcription_mode(p, c.mode),
+    lambda p, c: update_max_recording_seconds(p, c.max_recording_seconds),
+    lambda p, c: update_hotkey(p, c.hotkey, c.hotkey_fallback),
+    lambda p, c: update_dictionary(p, add=c.dictionary),
+    lambda p, c: update_snippet(p, "no such trigger", None),
+]
+
+
+@pytest.mark.parametrize("write", _UNCHANGED_WRITES)
+def test_setting_a_value_the_file_has_never_creates_the_file(tmp_path, write):
+    path = tmp_path / "config.toml"
+    write(path, load_config(path))
+    assert not path.exists()
+
+
+@pytest.mark.parametrize("write", _UNCHANGED_WRITES)
+def test_setting_a_value_the_file_has_leaves_it_byte_identical(tmp_path, write):
+    path = tmp_path / "config.toml"
+    path.write_text(
+        '# mine\ndictionary = ["Vox"]\n\n[audio]\ndevice = "USB"  # desk\nmax_recording_seconds = 600\n\n'
+        '[whisper]\nmode = "streaming"  # legacy section\nlanguage = "de"\n\n[attenuation]\nlevel = 0.33\n\n'
+        '[whisper_cpp]\nmodel = "m.bin"\n\n[hotkey]\nkey = "cmd_r"\nfallback = "ctrl+space"\n'
+    )
+    os.utime(path, (1_000_000, 1_000_000))
+    before = path.read_bytes()
+    write(path, load_config(path))
+    assert path.read_bytes() == before
+    assert path.stat().st_mtime == 1_000_000
 
 
 def test_preserves_file_permissions(cfg):

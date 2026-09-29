@@ -27,7 +27,7 @@ DOCUMENTED = {
     ("audio", "sample_rate"), ("audio", "channels"), ("audio", "max_recording_seconds"),
     ("transcription", "mode"), ("transcription", "streaming_model"), ("transcription", "prompt"),
     ("whisper", "model"),
-    ("whisper_cpp", "binary"), ("whisper_cpp", "model"),
+    ("whisper_cpp", "binary"), ("whisper_cpp", "model"), ("whisper_cpp", "cpu_fallback"),
     ("context", "screen"),
     ("sounds", "enabled"),
     ("attenuation", "enabled"), ("attenuation", "level"),
