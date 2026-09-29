@@ -447,14 +447,28 @@ def test_paste_keycode_off_the_main_thread_runs_the_lookup_on_the_main_loop(monk
     """The input source API traps off the main thread: a worker must hand the lookup over."""
     from PyObjCTools import AppHelper
 
-    _fake_layout(monkeypatch, {9: "k", 47: "v"})
     _fake_app(monkeypatch, running=True)
-    handed_over = []
-    monkeypatch.setattr(AppHelper, "callAfter", lambda fn: handed_over.append(fn) or threading.Thread(target=fn).start())
-    monkeypatch.setattr(injector, "_layout_paste_keycode", lambda: 47)
+    handed_over: list = []
+    monkeypatch.setattr(AppHelper, "callAfter", handed_over.append)  # the main loop runs it later
+    looked_up_on: list[threading.Thread] = []
 
-    assert _paste_keycode_from_worker() == 47
-    assert len(handed_over) == 1
+    def layout_lookup() -> int:
+        looked_up_on.append(threading.current_thread())
+        return 47
+
+    monkeypatch.setattr(injector, "_layout_paste_keycode", layout_lookup)
+    result: list[int] = []
+    worker = threading.Thread(target=lambda: result.append(injector._paste_keycode()))
+    worker.start()
+    deadline = time.monotonic() + 5
+    while not handed_over and time.monotonic() < deadline:
+        time.sleep(0.001)
+    assert len(handed_over) == 1 and not looked_up_on  # the worker waits for the main loop
+    handed_over[0]()  # what the main loop does: this test runs on the main thread
+    worker.join(timeout=5)
+
+    assert result == [47]
+    assert looked_up_on == [threading.main_thread()]
 
 
 @darwin_only
