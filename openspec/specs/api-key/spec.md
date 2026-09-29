@@ -18,11 +18,11 @@ The system SHALL store the OpenAI API key in the operating system's keychain: th
 
 #### Scenario: Linux without a keyring
 - **WHEN** the user saves a key on Linux and no Secret Service provider is available
-- **THEN** the key is saved to `~/.config/vox/.env` readable only by the user, and the key window warns beforehand that it will not be encrypted
+- **THEN** the key is saved to `~/.config/vox/.env` readable only by the user, and the Transcription page of Settings warns beforehand that it will not be encrypted
 
 #### Scenario: Unreadable plain-text file
 - **WHEN** Vox has a tray, no keyring is available, and `~/.config/vox/.env` cannot be read (no permission, a directory, or not UTF-8 text)
-- **THEN** Vox still starts and reports a key it can't read (the tray's first line says "Can’t read the keyring" and the key window shows the reason), and saving or removing a key fails with that reason and leaves the file as it is
+- **THEN** Vox still starts and reports a key it can't read (the tray's first line says "Can’t read the keyring" and the Transcription page of Settings shows the reason), and saving or removing a key fails with that reason and leaves the file as it is
 
 #### Scenario: Keyring locked or refusing
 - **WHEN** a keychain is available but locked, or refuses access
@@ -83,7 +83,7 @@ The system SHALL use the `OPENAI_API_KEY` environment variable when it is set, a
 
 #### Scenario: Environment variable override
 - **WHEN** `OPENAI_API_KEY` is set in Vox's environment
-- **THEN** Vox uses it, removes it from its own environment at startup so processes Vox starts (whisper-cli, xclip, its windows and others) do not inherit it, and the key window, which learns of the override without receiving the key, says the environment variable is overriding the stored key
+- **THEN** Vox uses it, removes it from its own environment at startup so processes Vox starts (whisper-cli, xclip, its windows and others) do not inherit it, and the Transcription page of Settings, which learns of the override without receiving the key, says the environment variable is overriding the stored key
 
 #### Scenario: Stale key files
 - **WHEN** a key remains in a checkout's `.env` or elsewhere Vox no longer reads
@@ -110,7 +110,7 @@ On start, when a keychain is available and holds no key, the system SHALL move a
 
 #### Scenario: Several keys in .env
 - **WHEN** `~/.config/vox/.env` holds more than one different `OPENAI_API_KEY` value
-- **THEN** none of them is moved, the file is left unchanged, and a warning names the file and asks the user to save the right key with Set API Key…
+- **THEN** none of them is moved, the file is left unchanged, and a warning names the file and asks the user to save the right key on the Transcription page of Settings
 
 #### Scenario: Symlinked .env
 - **WHEN** `~/.config/vox/.env` is a symlink, for example into a dotfiles repository
