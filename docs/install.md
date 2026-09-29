@@ -94,7 +94,7 @@ into a file Vox Transfer writes in plain text, unless your Linux system has no k
 which case it goes into `~/.config/vox/.env`, readable only by you. An `OPENAI_API_KEY` environment
 variable overrides the stored key.
 
-The key window refuses a key with an invisible or typographic character, such as a zero-width space
+Settings refuses an API key with an invisible or typographic character, such as a zero-width space
 or a curly quote, which copying from a web page or a chat can pick up; copy the key again.
 
 No key? Choose **Local (whisper.cpp)** instead: see

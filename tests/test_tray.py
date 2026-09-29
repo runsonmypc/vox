@@ -11,6 +11,7 @@ pytest.importorskip("pystray")
 
 from vox.config import Config
 from vox.history import HistoryDB
+from vox.modes import LABELS
 from vox.ui.icons import IconState, make_icon
 from vox.ui.tray import (
     CONFIG_ERROR,
@@ -215,7 +216,7 @@ async def test_recent_dictations_are_their_own_menu_section(tmp_path):
         ["Vox Transfer · Idle"],
         ["Pause Dictation"],
         [RECENT_HEADER, "“three”", "“two”", "“one”"],
-        ["Search History…", SETTINGS],
+        ["Search History…", "Transcription", SETTINGS],
         ["Quit Vox Transfer"],
     ]
     history.close()
@@ -232,17 +233,79 @@ def test_a_missing_key_puts_set_api_key_under_the_status_line():
         ["Vox Transfer · API key needed", SET_KEY],
         ["Pause Dictation"],
         ["No dictations yet"],
-        ["Search History…", SETTINGS],
+        ["Search History…", "Transcription", SETTINGS],
         ["Quit Vox Transfer"],
     ]
 
 
-def test_the_menu_has_no_settings_submenus_or_separate_windows():
+def test_transcription_is_the_only_settings_submenu_and_there_are_no_separate_windows():
     _, icon = make_tray()
     texts = [item.text for item in items(icon.menu)]
-    for gone in ("Input Device", "Transcription", "Recording Limit", "Vocabulary & Snippets…", "Set Hotkey…", SET_KEY):
+    for gone in ("Input Device", "Recording Limit", "Vocabulary & Snippets…", "Set Hotkey…", SET_KEY):
         assert gone not in texts
-    assert all(item.submenu is None for item in items(icon.menu))
+    assert [item.text for item in items(icon.menu) if item.submenu is not None] == ["Transcription"]
+
+
+def test_transcription_submenu_shows_modes_and_availability():
+    config = Config(openai_api_key="test")
+    tray, icon = make_tray(config)
+    modes = items(find(icon.menu, "Transcription").submenu)
+    assert [(item.text, item.checked, item.enabled) for item in modes] == [
+        ("OpenAI (batch)", True, True),
+        ("OpenAI (streaming)", False, True),
+        ("Local (whisper.cpp)", False, False),
+    ]
+    tray.set_state("RECORDING")
+    assert all(not item.enabled for item in items(find(icon.menu, "Transcription").submenu))
+
+    config.mode = "whisper_cpp"
+    config.openai_api_key = ""
+    tray.set_state("IDLE")
+    modes = items(find(icon.menu, "Transcription").submenu)
+    assert [(item.checked, item.enabled) for item in modes] == [
+        (False, False), (False, False), (True, True),
+    ]
+
+
+def test_transcription_submenu_follows_vox_modes():
+    problems = {"batch": "Broken setup", "streaming": "Set an OpenAI API key first", "whisper_cpp": None}
+    _, icon = make_tray(Config(mode="batch", openai_api_key="test"))
+    with patch("vox.ui.tray.mode_problem", side_effect=lambda config, mode: problems[mode]) as problem:
+        modes = items(find(icon.menu, "Transcription").submenu)
+        assert [(item.text, item.enabled) for item in modes] == [
+            (LABELS["batch"], True),  # the current mode stays clickable: picking it again retries its setup
+            (LABELS["streaming"], False),
+            (LABELS["whisper_cpp"], True),
+        ]
+    assert {call.args[1] for call in problem.call_args_list} == {"streaming", "whisper_cpp"}
+
+
+def test_transcription_submenu_waits_while_settings_is_open():
+    tray, icon = make_tray(Config(openai_api_key="test"))
+    tray._apply_settings_open(True)
+    assert all(not item.enabled for item in items(find(icon.menu, "Transcription").submenu))
+    tray._apply_settings_open(False)
+    assert find(find(icon.menu, "Transcription").submenu, "OpenAI (streaming)").enabled
+
+
+def test_transcription_submenu_waits_for_the_settings_file_to_load():
+    config = Config(openai_api_key="test")
+    config.config_error = "Invalid config.toml"
+    tray, icon = make_tray(config)
+    assert all(not item.enabled for item in items(find(icon.menu, "Transcription").submenu))
+    config.config_error = None
+    tray.mode_changed()
+    assert find(find(icon.menu, "Transcription").submenu, "OpenAI (streaming)").enabled
+
+
+@pytest.mark.anyio
+async def test_transcription_menu_sends_mode_to_daemon():
+    tray, icon = make_tray(Config(openai_api_key="test"))
+    queue: asyncio.Queue[str] = asyncio.Queue()
+    tray.attach(asyncio.get_running_loop(), queue, None, MagicMock())
+    find(find(icon.menu, "Transcription").submenu, "OpenAI (streaming)")(icon)
+    await settle()
+    assert queue.get_nowait() == "mode:streaming"
 
 
 @pytest.mark.anyio

@@ -8,6 +8,7 @@ import logging
 import os
 import threading
 import time
+import tomllib
 import wave
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -460,6 +461,74 @@ async def test_a_key_saved_in_settings_applies_when_it_closes():
 
 
 # -- Transcription mode ---------------------------------------------------------------
+
+
+@pytest.mark.anyio
+async def test_a_failed_mode_switch_from_the_menu_changes_nothing(tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_text('[transcription]\nmode = "batch"\n')
+    config = openai_config()
+    config._config_path = path
+    tray = MagicMock()
+
+    async with running(config, tray, cpp={"side_effect": ConfigError("whisper.cpp model not found: x.bin")}) as h:
+        h.send("mode:whisper_cpp")
+        await until(lambda: h.played("error"))
+        assert config.mode == "batch"
+        assert path.read_text() == '[transcription]\nmode = "batch"\n'
+        tray.mode_changed.assert_not_called()
+
+        h.sounds.reset_mock()
+        h.send("mode:bogus")
+        await until(lambda: h.played("error"))
+        assert config.mode == "batch"
+
+        h.send("mode:streaming")
+        await until(lambda: tray.mode_changed.called)
+        assert config.mode == "streaming"
+        assert tomllib.loads(path.read_text())["transcription"]["mode"] == "streaming"
+
+
+@pytest.mark.anyio
+async def test_switching_to_local_transcription_from_the_menu_tries_its_setup_once(tmp_path):
+    local = MagicMock()
+    config = openai_config()
+    config._config_path = tmp_path / "config.toml"
+    tray = MagicMock()
+    async with running(config, tray, cpp={"return_value": local}) as h:
+        h.send("mode:whisper_cpp")
+        await until(lambda: tray.mode_changed.called)
+        assert config.mode == "whisper_cpp"
+        assert h.daemon.batch_transcriber is local
+        h.cpp.assert_called_once_with(config)  # building it is the setup check
+    assert tomllib.loads(config.config_path.read_text())["transcription"]["mode"] == "whisper_cpp"
+
+
+@pytest.mark.anyio
+async def test_an_openai_mode_needs_a_key_before_the_menu_can_choose_it(tmp_path):
+    config = Config(mode="whisper_cpp")
+    config._config_path = tmp_path / "config.toml"
+    tray = MagicMock()
+    async with running(config, tray, cpp={"return_value": MagicMock()}) as h:
+        h.send("mode:streaming")
+        await until(lambda: h.played("error"))
+        assert config.mode == "whisper_cpp"
+        assert not config.config_path.exists()
+        tray.mode_changed.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_the_menu_cannot_change_the_mode_while_the_settings_file_does_not_load(tmp_path):
+    config = broken_settings(tmp_path)
+    config.openai_api_key = KEY
+    before = config.config_path.read_text()
+    tray = MagicMock()
+    async with running(config, tray) as h:
+        h.send("mode:streaming")
+        await until(lambda: h.played("error"))
+    assert config.config_path.read_text() == before
+    assert config.mode == "batch"
+    tray.mode_changed.assert_not_called()
 
 
 @pytest.mark.anyio

@@ -139,8 +139,8 @@ The system SHALL provide one Settings window, native to each platform (AppKit on
 
 #### Scenario: Tray menu
 - **WHEN** the user opens the tray menu
-- **THEN** it shows, in order: the status line; "Set API Key…" only while the key is missing or unreadable; Pause Dictation; the recent dictations; Search History… and Settings…; and Quit Vox Transfer
-- **AND** it has no Input Device, Transcription or Recording Limit submenu, and no Vocabulary & Snippets…, Set Hotkey… or separate Set API Key… item
+- **THEN** it shows, in order: the status line; "Set API Key…" only while the key is missing or unreadable; Pause Dictation; the recent dictations; Search History…, the Transcription submenu and Settings…; and Quit Vox Transfer
+- **AND** it has no Input Device or Recording Limit submenu, and no Vocabulary & Snippets…, Set Hotkey… or separate Set API Key… item
 
 #### Scenario: Missing key shortcut
 - **WHEN** the user chooses "Set API Key…" at the top of the menu
@@ -241,7 +241,7 @@ The General page of Settings SHALL list the audio input devices, with System Def
 - **THEN** Vox still records from that device
 
 ### Requirement: Transcription Selection in Settings
-The Transcription page of Settings SHALL let the user choose OpenAI batch, OpenAI streaming, or local whisper.cpp transcription, the spoken language, the prompt, and the whisper.cpp program and model files, and SHALL save each choice to `config.toml`. Whether a mode can be chosen SHALL follow the same rules everywhere Vox checks it: the OpenAI modes need an API key, and the local mode needs a working whisper.cpp binary and model.
+The Transcription page of Settings SHALL let the user choose OpenAI batch, OpenAI streaming, or local whisper.cpp transcription, the spoken language, the prompt, and the whisper.cpp program and model files, and SHALL save each choice to `config.toml`. Whether Vox can switch to another mode SHALL follow the same rules everywhere Vox checks it: the OpenAI modes need an API key, and the local mode needs a working whisper.cpp binary and model. The tray menu SHALL also offer the three modes in a Transcription submenu, available only while Vox is idle, Settings is closed and `config.toml` has no error. The current mode SHALL stay selectable there even when its setup is not ready, so that picking it again retries that setup.
 
 #### Scenario: Switching providers
 - **WHEN** the user selects an available transcription mode
@@ -258,6 +258,11 @@ The Transcription page of Settings SHALL let the user choose OpenAI batch, OpenA
 #### Scenario: Configured mode cannot run
 - **WHEN** the saved mode cannot run, for example because the whisper.cpp model file is missing
 - **THEN** it stays selected, the page shows why it cannot run, and choosing another available mode clears the problem once the window closes
+
+#### Scenario: Switching from the tray menu
+- **WHEN** Vox is idle, Settings is closed, and the user picks an available mode from the Transcription submenu
+- **THEN** `[transcription] mode` is saved and the next recording uses that mode
+- **AND** a mode that cannot be chosen is disabled, while the current mode stays clickable so that picking it again retries a setup that failed
 
 #### Scenario: whisper.cpp files
 - **WHEN** the user clicks Choose… next to the whisper.cpp program or model
