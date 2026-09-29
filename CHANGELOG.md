@@ -3,43 +3,18 @@
 All notable changes to Vox Transfer are listed here. Vox Transfer follows
 [semantic versioning](https://semver.org/).
 
-## [Unreleased]
-
-### Fixed
-
-- On macOS, Vox Transfer no longer crashes when it pastes. It read the keyboard layout from a
-  background thread, which newer macOS versions stop with a trap; the lookup now runs on the main
-  thread, and without an answer within a second the paste uses the standard V key.
-- Local (whisper.cpp) transcription no longer fails when the graphics card has no memory left for
-  the model, as when a game is running: it transcribes on the processor instead, more slowly.
-  `[whisper_cpp] cpu_fallback = false` turns this off, and the error then says the graphics card
-  is full.
-
-### Settings
-
-- One Settings window, opened with Settings… in the menu, replaces the Input Device, Transcription
-  and Recording Limit submenus and the Vocabulary & Snippets, Set API Key and Set Hotkey windows.
-  Its pages are General (microphone, recording limit, sounds, lowering other audio, screen hints),
-  Hotkey, Transcription (mode, API key, spoken language, prompt, whisper.cpp program and model),
-  Vocabulary and Snippets. Each change is saved to `config.toml` as it is made and applies when the
-  window closes; the hotkey does not dictate while it is open.
-- The microphone you pick is now kept: it is saved to `[audio] device` by name, where a choice from
-  the old Input Device menu lasted only until Vox Transfer quit. System Default removes it.
-- Set API Key… appears at the top of the menu only while the key is missing or can't be read, and
-  opens Settings on its Transcription page. Settings… is available only while Vox Transfer is idle.
-
-## [1.0.0] - 2026-09-27
+## [1.0.0] - 2026-09-29
 
 The first public release. The command is `vox`, and its settings live in `~/.config/vox`.
 
 ### Dictation
 
 - Tap right Shift to record and tap again to paste the transcript into the focused app;
-  double-tap to cancel. Set Hotkey… in the menu picks another key, and an optional key combination
-  that toggles dictation too.
+  double-tap to cancel. The Hotkey page of Settings picks another key, and an optional key
+  combination that toggles dictation too.
 - Transcription with OpenAI in batch or live streaming mode, or on your computer with whisper.cpp,
-  switchable from the menu.
-- A recording limit, 15 minutes by default and adjustable from the new Recording Limit menu
+  switchable from the Transcription submenu or in Settings.
+- A recording limit, 15 minutes by default and adjustable in Settings
   (5 to 60 minutes). A recording that reaches it stops and is transcribed like any other.
 - Long recordings are sent as 16 kHz mono audio and split at pauses when they would exceed
   OpenAI's upload limit, then joined in order. A part with nothing audible in it, such as the
@@ -48,7 +23,11 @@ The first public release. The command is `vox`, and its settings live in `~/.con
   partway, the parts already transcribed are saved there, and the menu says so; if history cannot
   store them, they are pasted instead.
 - History records which transcription produced each dictation: batch, streaming or whisper.cpp.
-- Custom dictionary and snippets, edited in the Vocabulary & Snippets window.
+- Custom dictionary and snippets, edited on the Vocabulary and Snippets pages of Settings.
+- Local transcription keeps working when the graphics card has no memory left for the model, as
+  when a game is running: it transcribes on the processor instead, more slowly.
+  `[whisper_cpp] cpu_fallback = false` turns this off, and the error then says the graphics card
+  is full.
 - Local transcription keeps a transcript even when whisper.cpp returns a broken character
   (possible with Chinese, Japanese, Korean or emoji): the character shows as � instead of the
   whole transcript being lost.
@@ -86,11 +65,17 @@ The first public release. The command is `vox`, and its settings live in `~/.con
 
 ### Desktop
 
-- Menu bar (macOS) and tray (Linux) icon with status, pause, input device, transcription mode,
-  recording limit, recent dictations, history search, vocabulary, API key and hotkey.
-- Set Hotkey… records the key you tap and an optional key combination as you press them, refuses
-  keys you type with, and applies the new hotkey as soon as you save, with no restart. While the
-  window is open the hotkey does not dictate.
+- Menu bar (macOS) and tray (Linux) icon with status, pause, recent dictations, history search,
+  a Transcription submenu and Settings…. Set API Key… appears at the top of the menu only while
+  the key is missing or can't be read, and opens Settings on its Transcription page.
+- One Settings window, opened with Settings… while Vox Transfer is idle, with the pages General
+  (microphone, recording limit, sounds, lowering other audio, screen hints), Hotkey, Transcription
+  (mode, API key, spoken language, prompt, whisper.cpp program and model), Vocabulary and
+  Snippets. Each change is saved to `config.toml` as it is made and applies when the window
+  closes, with no restart; the hotkey does not dictate while it is open.
+- The microphone you pick is saved to `[audio] device` by name. System Default removes it.
+- The Hotkey page records the key you tap and an optional key combination as you press them, and
+  refuses keys you type with.
 - Besides the modifier keys and F1 to F20, the hotkey can be fn (Globe) on macOS, or Pause or
   Scroll Lock on Linux.
 - Hotkey settings edited in the settings file also apply within seconds, without a restart.
@@ -99,16 +84,17 @@ The first public release. The command is `vox`, and its settings live in `~/.con
   dictation that was only partly transcribed.
 - An error in the settings file no longer stops Vox Transfer from starting: it starts, shows the
   problem, and does not record until the file is fixed, which it picks up without a restart. While
-  the file has an error, the Vocabulary & Snippets window is read-only.
+  the file has an error, Settings names the problem and changes nothing but the API key.
 - Local (whisper.cpp) mode checks its setup on each hotkey press, before recording, and the menu
   follows edits to the settings file within seconds, including a switch to another mode.
-- The Set API Key window refuses a key with an invisible or typographic character (such as a
+- Settings refuses an API key with an invisible or typographic character (such as a
   zero-width space or a curly quote) picked up while copying, and asks you to copy it again.
 - Without a keyring, a `~/.config/vox/.env` that Vox Transfer cannot read no longer stops it from
-  starting: the menu shows "Can’t read the keyring", and the Set API Key window says why.
+  starting: the menu shows "Can’t read the keyring", and the Transcription page of Settings says
+  why.
 - Stopping Vox Transfer as a service (`systemctl --user stop vox` on Linux, logging out, an update)
   quits like Quit Vox Transfer, so a volume lowered for a recording is restored.
-- Microphones connected while Vox Transfer runs appear in the Input Device menu.
+- Microphones connected while Vox Transfer runs appear in Settings.
 
 ### Installing
 
