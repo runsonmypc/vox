@@ -22,6 +22,7 @@ from typing import Any
 
 from ..config import DEFAULT_CONFIG_PATH, Config
 from ..history import HistoryDB, HistoryRecord
+from ..modes import LABELS, mode_problem
 from .icons import IconState, is_template, make_icon
 
 log = logging.getLogger(__name__)
@@ -434,6 +435,7 @@ class TrayManager:
             yield Item(_recent_label(rec.text), self._copier(rec.text))
         yield Menu.SEPARATOR
         yield Item("Search History…", self._open_history, enabled=self._history is not None)
+        yield Item("Transcription", Menu(self._transcription_items))
         yield Item(SETTINGS, self._open_settings_item, enabled=lambda _: self._state is IconState.IDLE)
         yield Menu.SEPARATOR
         yield Item("Quit Vox Transfer", self._quit)
@@ -445,6 +447,29 @@ class TrayManager:
                 log.info("Copied recent dictation to clipboard (%d chars)", len(text))
             except Exception as e:
                 log.warning("Failed to copy dictation: %s", e)
+
+        return action
+
+    def _transcription_items(self):
+        Item = self._pystray.MenuItem
+        for mode, label in LABELS.items():
+            yield Item(
+                label, self._mode_setter(mode),
+                checked=lambda _, mode=mode: self._config.mode == mode,
+                enabled=lambda _, mode=mode: self._can_select_mode(mode),
+                radio=True,
+            )
+
+    def _can_select_mode(self, mode: str) -> bool:
+        # While Settings is open, its Transcription page owns the choice
+        if self._state is not IconState.IDLE or self._settings_open:
+            return False
+        # The current mode stays clickable: picking it again retries a setup that failed
+        return mode == self._config.mode or mode_problem(self._config, mode) is None
+
+    def _mode_setter(self, mode: str):
+        def action(icon, item):
+            self._send(f"mode:{mode}")
 
         return action
 

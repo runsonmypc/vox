@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any
 
 from .attenuation import get_volume, set_volume
 from .audio import Recorder, has_speech, is_digital_silence
-from .config import DEFAULT_CONFIG_PATH, Config, file_stamp, load_config, snippet_key
+from .config import DEFAULT_CONFIG_PATH, Config, file_stamp, load_config, snippet_key, update_transcription_mode
 from .errors import ConfigError, DependencyError, InjectionError, StreamingError, VoxError
 from .history import HistoryDB
 from .hotkey import HotkeyListener
@@ -297,6 +297,9 @@ class _Daemon:
             self._shutdown(reload_task)
 
     async def _handle(self, event: str) -> None:
+        if event.startswith("mode:"):
+            await self._switch_mode(event.partition(":")[2])
+            return
         if event == "settings:open":
             await self._settings_opened()
             return
@@ -626,6 +629,35 @@ class _Daemon:
             await asyncio.to_thread(transcriber.warm_up)
         except Exception:
             log.warning("Could not prepare the OpenAI client", exc_info=True)
+
+    async def _switch_mode(self, mode: str) -> None:
+        """Switch to a transcription mode picked from the menu, and save it to config.toml."""
+        config = self.config
+        if self.state is not State.IDLE:
+            return
+        if config.config_error is not None:
+            log.warning("Can't change the transcription mode until the settings file loads: %s", config.config_error)
+            self.sounds.play("error")
+            return
+        if mode == config.mode and config.mode_error is None:
+            return
+        try:
+            # Building the transcriber tries the whisper.cpp setup, so mode_problem needn't
+            problem = mode_problem(config, mode, check_setup=False)
+            if problem is not None:
+                raise ConfigError(problem)
+            candidate = self._build_transcriber(mode)
+            update_transcription_mode(config.config_path or DEFAULT_CONFIG_PATH, mode)
+        except (ConfigError, OSError, ValueError) as e:
+            log.warning("Could not switch transcription mode: %s", e)
+            self.sounds.play("error")
+            return
+        config.mode = mode
+        config.mode_error = None
+        self._use_transcriber(candidate, mode)
+        log.info("Transcription mode set to %s", mode)
+        if self.tray is not None:
+            self.tray.mode_changed()
 
     # -- The Settings window ------------------------------------------------------
 
