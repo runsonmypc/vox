@@ -15,10 +15,16 @@
   <a href="LICENSE"><img alt="License: GPL-3.0" src="https://img.shields.io/badge/license-GPL--3.0-blue"></a>
 </p>
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/images/hero-dark.png">
-  <img src="docs/images/hero-light.png" alt="The Vox Transfer icon in the macOS menu bar, above the General page of its Settings window">
-</picture>
+<a href="docs/images/hero-light.png">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/hero-dark.png">
+    <img src="docs/images/hero-light.png" alt="Vox Transfer's active Transcription settings on macOS, with OpenAI batch, streaming and local whisper.cpp options">
+  </picture>
+</a>
+
+<p align="center">
+  Choose OpenAI or fully offline transcription · <a href="docs/images/hero-dark.png">Full size (dark)</a>
+</p>
 
 ## How it works
 
@@ -79,23 +85,44 @@ transcription) and set it up.
 <table>
   <tr>
     <td width="50%">
-      <picture>
-        <source media="(prefers-color-scheme: dark)" srcset="docs/images/snippets-dark.png">
-        <img src="docs/images/snippets-light.png" alt="The Snippets page of Settings on macOS">
-      </picture>
+      <a href="docs/images/snippets-light.png">
+        <picture>
+          <source media="(prefers-color-scheme: dark)" srcset="docs/images/snippets-dark.png">
+          <img src="docs/images/snippets-light.png" alt="Active Snippets settings on macOS, with voice shortcuts for an email address, sign-off, meeting link and availability">
+        </picture>
+      </a>
     </td>
     <td width="50%">
-      <picture>
-        <source media="(prefers-color-scheme: dark)" srcset="docs/images/history-linux-dark.png">
-        <img src="docs/images/history-linux-light.png" alt="The History window on Linux, listing past dictations">
-      </picture>
+      <a href="docs/images/history-linux-light.png">
+        <picture>
+          <source media="(prefers-color-scheme: dark)" srcset="docs/images/history-linux-dark.png">
+          <img src="docs/images/history-linux-light.png" alt="Active History window on Linux, with searchable dictations from several apps and meeting notes ready to copy">
+        </picture>
+      </a>
     </td>
   </tr>
   <tr>
-    <td align="center">Snippets in Settings on macOS</td>
-    <td align="center">History on Linux</td>
+    <td align="center">
+      Voice snippets on macOS<br>
+      <a href="docs/images/snippets-light.png">Full size</a> · <a href="docs/images/snippets-dark.png">Dark</a>
+    </td>
+    <td align="center">
+      Searchable history on Linux<br>
+      <a href="docs/images/history-linux-light.png">Full size</a> · <a href="docs/images/history-linux-dark.png">Dark</a>
+    </td>
   </tr>
 </table>
+
+<p align="center">
+  <a href="docs/images/vocabulary-light.png">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="docs/images/vocabulary-dark.png">
+      <img src="docs/images/vocabulary-light.png" width="600" alt="Active Vocabulary settings on macOS, with custom spellings for names and technical terms such as FastAPI, Kubernetes and PostgreSQL">
+    </picture>
+  </a>
+  <br>
+  Teach Vox Transfer your names and jargon · <a href="docs/images/vocabulary-dark.png">Full size (dark)</a>
+</p>
 
 ## Learn more
 
