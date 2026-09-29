@@ -310,7 +310,7 @@ async def test_without_the_fallback_a_full_graphics_card_says_so(tmp_path):
 async def test_a_cpu_run_that_also_runs_out_of_memory_fails_once(tmp_path):
     script = GPU_FULL.replace('if "-ng" not in a:', "if True:")
     config = _config(tmp_path, script)
-    with pytest.raises(TranscriptionError, match="ran out of memory: close apps that use the graphics card$"):
+    with pytest.raises(TranscriptionError, match="ran out of memory on the CPU as well: close other apps, or use a smaller model$"):
         await WhisperCppTranscriber(config).transcribe(_wav())
     assert len(_calls(tmp_path)) == 2
 

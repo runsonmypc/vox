@@ -127,10 +127,15 @@ class WhisperCppTranscriber:
 
             started = time.monotonic()
             returncode, log_output = await _run(command)
+            on_cpu = False
             if returncode != 0 and _out_of_gpu_memory(log_output) and config.whisper_cpp_cpu_fallback:
                 log.warning("whisper.cpp ran out of GPU memory; transcribing on the CPU instead")
+                on_cpu = True
                 returncode, log_output = await _run([*command, "-ng"])
             if returncode != 0:
+                if on_cpu and _out_of_gpu_memory(log_output):
+                    raise TranscriptionError("whisper.cpp ran out of memory on the CPU as well: close other apps, "
+                                             "or use a smaller model")
                 if _out_of_gpu_memory(log_output):
                     fix = "" if config.whisper_cpp_cpu_fallback else ", or set [whisper_cpp] cpu_fallback = true"
                     raise TranscriptionError(f"whisper.cpp ran out of memory: close apps that use the graphics card{fix}")
