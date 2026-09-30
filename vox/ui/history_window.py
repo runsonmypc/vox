@@ -28,6 +28,9 @@ def main(argv: list[str] | None = None) -> None:
         from .gtk.history import run
     db = HistoryDB(args.db)
     try:
+        from ..recovery import RecoveryStore
+
+        RecoveryStore(db).reconcile()
         run(db)
     finally:
         db.close()

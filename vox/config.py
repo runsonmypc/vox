@@ -35,6 +35,7 @@ class Config:
     max_recording_seconds: int = 900
 
     # Transcription
+    keep_failed_audio: bool = True
     mode: str = "batch"
     streaming_model: str = "gpt-live-transcribe"
     whisper_cpp_binary: str = "whisper-cli"
@@ -162,6 +163,8 @@ def _apply(config: Config, data: dict) -> None:
         "language": ("whisper_language", _text),
         "prompt": ("whisper_prompt", _text),
     })
+    if "keep_failed_audio" in _section(data, "transcription"):
+        config.keep_failed_audio = _flag("[transcription] keep_failed_audio", data["transcription"]["keep_failed_audio"])
     transcription = _section(data, "transcription")
     if "model" in transcription:
         # A generic model belongs to the provider the mode selects, overriding its own model setting
@@ -386,7 +389,7 @@ def update_hotkey(path: Path, key: str, fallback: str) -> None:
 
 
 # The on/off settings the Settings window shows: (section, key)
-FLAGS: tuple[tuple[str, str], ...] = (("sounds", "enabled"), ("attenuation", "enabled"), ("context", "screen"))
+FLAGS: tuple[tuple[str, str], ...] = (("sounds", "enabled"), ("attenuation", "enabled"), ("context", "screen"), ("transcription", "keep_failed_audio"))
 
 
 def update_audio_device(path: Path, name: str | None) -> None:

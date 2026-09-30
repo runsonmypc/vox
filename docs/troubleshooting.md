@@ -59,3 +59,25 @@ The commands below use `~/.local/bin/vox`, where the installer puts Vox Transfer
 
 Still stuck? An AI coding assistant can read the log and your settings with you: point it at
 [the setup guide for AI assistants](ai-setup.md).
+
+## Failed recording recovery
+
+Open **Search History…** after a terminal transcription error. Local retry needs a working
+whisper.cpp executable and model; OpenAI Batch needs a key and uploads the entire saved
+recording, potentially incurring another charge. The selected method is checked independently
+of the default method. Close Settings and wait for the current dictation before retrying.
+
+If recovery is disabled, enable **Keep failed recordings for retry** in General Settings.
+If Vox is not running, start it and reopen History. A failed control connection while Vox is
+running blocks deletion until it reconnects, so deletion cannot race an active retry.
+
+“Recording could not be saved” means the WAV was not retained; any available partial text
+is preserved when possible. “Audio was saved but is not yet available in History” means the
+index could not be written: fix storage permissions or free disk space, then restart Vox or
+reopen History to reconcile it without retranscription. Missing or corrupt audio is refused
+before calling a provider; copy available text and delete the entry or record again.
+
+If History cannot yield focus, select an external app and try again. Reopening a Vox window
+at completion leaves the full result ready to copy. A paste failure also leaves completed
+text in History. Saved audio is removed after full text is saved or through Delete/Clear;
+cleanup errors remain pending and are retried on startup. There is no expiry.

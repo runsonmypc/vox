@@ -8,6 +8,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 
+from ..control import ControlClient, ControlError, ControlUnavailable
 from ..history import HistoryDB, HistoryRecord
 
 log = logging.getLogger(__name__)
@@ -98,12 +99,13 @@ def build_rows(records: list[HistoryRecord], today: date, clock24: bool = False)
             current = day
         time = time_label(moment, clock24) if moment else rec.created_at or ""
         app, took = app_label(rec.app_type), duration_label(rec.duration_seconds)
+        status = {"failed": "Failed recording", "partial": "Partial transcript", "retrying": "Retrying…"}.get(rec.status, "")
         rows.append(Entry(
             record=rec,
-            preview=one_line(rec.text),
+            preview=(f"{status}: " if status and rec.text else "") + (one_line(rec.text) or status),
             meta=" · ".join(p for p in (time, app) if p),
             stamp=f"{day} at {time}" if moment else time,
-            details=" · ".join(p for p in (app, took) if p),
+            details=" · ".join(p for p in (app, took, status, rec.attempted_mode, rec.error_summary) if p),
         ))
     return rows
 
@@ -119,10 +121,14 @@ class HistoryModel:
         today: Callable[[], date] = date.today,
     ) -> None:
         self._db = db
+        self.control = ControlClient(db.path)
+        self.control_status: dict = {}
+        self.control_error: str | None = None
         self._copy = copy
         self._clock24 = clock24
         self._today = today
         self._stats: tuple[int, int | None] = (0, None)
+        self._revision = -1
         self.query = ""
         self.rows: list[Row] = []
         self.truncated = False  # more matches exist than the list shows
@@ -135,6 +141,11 @@ class HistoryModel:
     def total(self) -> int:
         """Dictations in the whole history, not just the current results."""
         return self._stats[0]
+
+    @property
+    def has_retained_audio(self) -> bool:
+        root = self._db.path.parent / "audio"
+        return root.exists() and any(root.iterdir())
 
     @property
     def placeholder(self) -> str:
@@ -152,6 +163,7 @@ class HistoryModel:
     def search(self, query: str) -> None:
         """Newest-first matches for ``query``; an empty query lists everything."""
         self.query = query
+        self._revision = self._db.change_revision()
         self._stats = self._db.stats()
         found = self._db.search(query, limit=PAGE_SIZE + 1)  # one extra shows whether there are more
         self.truncated = len(found) > PAGE_SIZE
@@ -159,7 +171,7 @@ class HistoryModel:
 
     def refresh_if_changed(self) -> bool:
         """Re-run the search when dictations were added since the last one."""
-        if self._db.stats() == self._stats:
+        if self._db.change_revision() == self._revision:
             return False
         self.search(self.query)
         return True
@@ -178,6 +190,8 @@ class HistoryModel:
 
     def copy(self, entry: Entry) -> str | None:
         """Put the full dictation on the clipboard. Returns an error message on failure."""
+        if not entry.text.strip():
+            return "This recording has no transcript to copy."
         return self.copy_text(entry.text)
 
     def copy_text(self, text: str) -> str | None:
@@ -202,13 +216,64 @@ class HistoryModel:
     def delete(self, entry: Entry) -> str | None:
         """Delete one dictation for good and search again. Returns an error message on failure."""
         try:
-            self._db.delete(entry.record.id)
-        except sqlite3.Error as e:
+            self._delete_online_or_offline("delete", id=entry.record.id)
+        except (sqlite3.Error, OSError, ControlError) as e:
             log.warning("Could not delete the dictation: %s", e)
             return str(e) or type(e).__name__
         log.info("Deleted a dictation from history")
         self.search(self.query)
         return None
+
+    def poll_control(self) -> None:
+        try:
+            self.control_status = self.control.request("status")
+            self.control_error = None
+        except ControlError as e:
+            self.control_status = {}
+            self.control_error = str(e)
+
+    def retry_problem(self, entry: Entry, mode: str) -> str | None:
+        if entry.record.status == "completed":
+            return "This dictation is already complete."
+        if not entry.record.audio_id:
+            return "No saved audio is available. Record this dictation again."
+        return (self.control_error or self.control_status.get("disabled")
+                or self.control_status.get("methods", {}).get(mode))
+
+    def retry(self, entry: Entry, mode: str) -> tuple[str | None, str | None]:
+        try:
+            result = self.control.request("retry", id=entry.record.id, revision=entry.record.revision, mode=mode)
+            return result["token"], None
+        except ControlError as e:
+            return None, str(e)
+
+    def focus_released(self, token: str) -> str | None:
+        try:
+            self.control.request("ready", token=token)
+        except ControlError as e:
+            return str(e)
+        return None
+
+    def cancel_retry(self, entry: Entry) -> str | None:
+        try:
+            self.control.request("cancel", id=entry.record.id)
+        except ControlError as e:
+            return str(e)
+        return None
+
+    def attempts(self, entry: Entry) -> list[tuple[str, str, str]]:
+        return self._db.attempts(entry.record.id)
+
+    def _delete_online_or_offline(self, action: str, **fields: object) -> None:
+        try:
+            self.control.request(action, **fields)
+        except ControlUnavailable:
+            # Keep ownership until the mutation completes; inability to connect alone proves nothing.
+            with self.control.offline():
+                if action == "delete":
+                    self._db.delete(fields["id"])
+                else:
+                    self._db.clear()
 
     def clear_confirmation(self) -> tuple[str, str]:
         """Title and message for the question asked before clearing the history."""
@@ -218,8 +283,8 @@ class HistoryModel:
     def clear(self) -> str | None:
         """Delete every dictation for good. Returns an error message on failure."""
         try:
-            self._db.clear()
-        except sqlite3.Error as e:
+            self._delete_online_or_offline("clear")
+        except (sqlite3.Error, OSError, ControlError) as e:
             log.warning("Could not clear the history: %s", e)
             return str(e) or type(e).__name__
         log.info("Cleared the dictation history")

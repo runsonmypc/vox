@@ -79,7 +79,7 @@ transcription) and set it up.
   Settings.
 - **Spells your words right.** Add names and jargon to your vocabulary.
 - **Snippets.** Say "my email" and get your email address.
-- **Searchable history** of everything you've dictated, kept on your computer.
+- **Searchable history** of everything you've dictated, kept on your computer. Failed recordings can be retried locally or with OpenAI Batch.
 - **Private.** No analytics and no telemetry. [What leaves your computer](docs/privacy.md)
 
 <table>

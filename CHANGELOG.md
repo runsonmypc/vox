@@ -3,6 +3,31 @@
 All notable changes to Vox Transfer are listed here. Vox Transfer follows
 [semantic versioning](https://semver.org/).
 
+## [1.1.0] - 2026-09-30
+
+### Failed recording recovery
+
+- Failed transcriptions now retain the complete original recording locally by default.
+  History offers Local (whisper.cpp) and OpenAI Batch retries on macOS and Linux;
+  choosing Batch uploads the recording and may incur another charge.
+- Successful retries update the original History entry and paste into the focused
+  external app, restoring its clipboard. Reopening History suppresses the paste,
+  and the completed text remains available to copy.
+- Retry progress, cancellation and separately copyable partial attempts appear in
+  History. Recovery survives restarts without automatically retrying or uploading.
+- General Settings includes "Keep failed recordings for retry". Turning it off
+  stops new retention and retries; existing recordings remain until deleted.
+- Deleting an entry or clearing History also deletes retained audio. Deletion
+  cancels an active retry and prevents its result from recreating the entry.
+- Recovery files are private to your account. Retries omit window and screen hints,
+  and normal logs omit dictated text and provider credentials.
+
+### Validation
+
+- Added native desktop integration on macOS AppKit and Linux GTK, covering real
+  focus changes, paste keystrokes, clipboard restoration and recovery controls.
+- Linux CI now runs the desktop recovery integration under Openbox and Xvfb.
+
 ## [1.0.0] - 2026-09-29
 
 The first public release. The command is `vox`, and its settings live in `~/.config/vox`.
@@ -120,4 +145,5 @@ The first public release. The command is `vox`, and its settings live in `~/.con
 - `install.sh` refuses to run as root, retries `apt-get` after refreshing package lists, and tells
   users of other distributions which packages to install.
 
+[1.1.0]: https://github.com/runsonmypc/vox/releases/tag/v1.1.0
 [1.0.0]: https://github.com/runsonmypc/vox/releases/tag/v1.0.0

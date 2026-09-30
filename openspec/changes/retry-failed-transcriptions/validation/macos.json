@@ -1,0 +1,19 @@
+{
+  "platform": "darwin",
+  "passed": 10,
+  "scenarios": [
+    "failed capture persists across daemon restart without automatic retry",
+    "instant Local retry yields History focus, updates one row, pastes once and restores clipboard",
+    "cross-method OpenAI Batch retry uploads full converted audio to loopback provider and pastes",
+    "reopened History suppresses real paste and refreshes existing row",
+    "switching external apps during retry sends the actual paste to the current target",
+    "native Cancel Retry works with hotkeys paused and preserves original audio",
+    "native Delete cancels retry and removes audio without a late paste",
+    "partial attempt is separately copyable through native controls; narrow layout checked on GTK",
+    "live retention opt-out and re-enable update both native retry controls",
+    "native Clear removes all text, partial attempts, indexed and unindexed recordings"
+  ],
+  "providers": "controlled whisper-cli executable and loopback OpenAI-compatible HTTP endpoint",
+  "desktop": "real AppKit GUI",
+  "native_focus_clipboard_and_keypress": true
+}

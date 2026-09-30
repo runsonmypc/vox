@@ -569,3 +569,42 @@ async def test_invalid_edit_keeps_the_running_value(tmp_path, caplog):
             await wait_until(lambda: "Config reload failed" in caplog.text)
     assert config.attenuation_level == 0.3
     assert "[attenuation] level" in caplog.text
+
+
+@pytest.mark.parametrize('value', ['0', '1', '"false"', '[]'])
+def test_keep_failed_audio_requires_boolean(tmp_path, value):
+    path = tmp_path / 'config.toml'
+    path.write_text('[transcription]\nkeep_failed_audio = ' + value)
+    with pytest.raises(ConfigError, match='keep_failed_audio'):
+        load_config(path)
+
+
+def test_keep_failed_audio_default_and_persistence(tmp_path):
+    from vox.config import update_flag
+
+    path = tmp_path / 'config.toml'
+    path.write_text('# keep this\n[transcription]\nmode = "batch" # and this\n')
+    assert load_config(path).keep_failed_audio is True
+    update_flag(path, 'transcription', 'keep_failed_audio', False)
+    assert load_config(path).keep_failed_audio is False
+    assert '# keep this' in path.read_text()
+    assert '# and this' in path.read_text()
+    update_flag(path, 'transcription', 'keep_failed_audio', True)
+    assert load_config(path).keep_failed_audio is True
+
+
+@pytest.mark.anyio
+async def test_keep_failed_audio_hot_reload_preserves_last_valid(tmp_path, caplog):
+    from unittest.mock import MagicMock
+
+    path = tmp_path / 'config.toml'
+    path.write_text('[transcription]\nkeep_failed_audio = true\n')
+    config = load_config(path)
+    async with running_reloader(config, MagicMock()) as wait_until:
+        path.write_text('[transcription]\nkeep_failed_audio = false\n')
+        await wait_until(lambda: not config.keep_failed_audio)
+        path.write_text('[transcription]\nkeep_failed_audio = "false"\n')
+        await wait_until(lambda: 'Config reload failed' in caplog.text)
+        assert config.keep_failed_audio is False
+        path.write_text('[transcription]\nkeep_failed_audio = true\n')
+        await wait_until(lambda: config.keep_failed_audio)

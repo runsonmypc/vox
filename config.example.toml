@@ -41,6 +41,8 @@
 # max_recording_seconds = 900
 
 [transcription]
+# Save failed audio locally until recovery or deletion in History. Turning off stops new saves and retries.
+# keep_failed_audio = true
 # "batch" and "streaming" send audio to OpenAI; "whisper_cpp" transcribes on this computer.
 # The Transcription page of Settings switches between them and saves the choice here.
 # mode = "batch"

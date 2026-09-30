@@ -1060,6 +1060,7 @@ async def test_a_partial_transcription_is_kept_in_history(tmp_path, speech, capl
     history = HistoryDB(tmp_path / "history.db")
     tray = MagicMock()
     kwargs = process_kwargs(history=history, tray=tray)
+    kwargs["config"].keep_failed_audio = False
     kwargs["batch_transcriber"].transcribe.side_effect = PartialTranscriptionError(
         "part 2 of 3 failed: rate limited", "the first ten minutes",
     )
@@ -1070,7 +1071,6 @@ async def test_a_partial_transcription_is_kept_in_history(tmp_path, speech, capl
     [rec] = history.search()
     assert rec.text == "the first ten minutes"
     tray.history_changed.assert_called_once()
-    assert "the parts transcribed so far are saved in history" in caplog.text
     assert kwargs["queue"].get_nowait() == "process_done"
     history.close()
 
@@ -1084,6 +1084,7 @@ async def test_a_partial_transcription_that_history_cannot_keep_is_pasted(tmp_pa
         history.insert = MagicMock(side_effect=OSError("disk full"))
     tray = MagicMock()
     kwargs = process_kwargs(history=history, tray=tray)
+    kwargs["config"].keep_failed_audio = False
     kwargs["batch_transcriber"].transcribe.side_effect = PartialTranscriptionError(
         "part 2 of 3 failed: rate limited", "the first ten minutes",
     )
@@ -1096,7 +1097,6 @@ async def test_a_partial_transcription_that_history_cannot_keep_is_pasted(tmp_pa
     assert outcome is None  # not a success, and nothing in History for the notice to point to
     tray.history_changed.assert_not_called()
     assert "saved in history" not in caplog.text
-    assert "history is unavailable, so the parts transcribed so far are pasted" in caplog.text
     assert kwargs["queue"].get_nowait() == "process_done"
     if history is not None:
         history.close()
@@ -1105,16 +1105,16 @@ async def test_a_partial_transcription_that_history_cannot_keep_is_pasted(tmp_pa
 @pytest.mark.anyio
 @pytest.mark.parametrize(
     ("error", "traceback"),
-    [(RuntimeError("a bug"), True), (TranscriptionError("Transcription API failed: 500"), False)],
+    [(RuntimeError("a bug"), False), (TranscriptionError("Transcription API failed: 500"), False)],
 )
-async def test_processing_errors_log_a_traceback_only_for_bugs(speech, caplog, error, traceback):
+async def test_processing_errors_log_safe_types_without_provider_bodies(speech, caplog, error, traceback):
     kwargs = process_kwargs()
     kwargs["batch_transcriber"].transcribe.side_effect = error
     with patch("vox.daemon.paste") as paste:
         await _process(**kwargs)
     paste.assert_not_called()
     kwargs["sounds"].play.assert_called_once_with("error")
-    [record] = [r for r in caplog.records if r.getMessage().startswith("Processing error")]
+    [record] = [r for r in caplog.records if r.getMessage().startswith("Processing failed")]
     assert bool(record.exc_info) == traceback
     assert kwargs["queue"].get_nowait() == "process_done"
 
@@ -1383,3 +1383,20 @@ async def test_a_reload_away_from_a_broken_local_setup_clears_its_problem(tmp_pa
 
     assert config.mode == "batch"
     assert config.mode_error is None  # the status line no longer names the whisper.cpp problem
+
+
+@pytest.mark.anyio
+async def test_partial_audio_storage_error_notice_survives_processing_outcome(tmp_path):
+    history = HistoryDB(tmp_path / 'history.db')
+    tray = MagicMock()
+    async with running(openai_config(), tray, history=history) as h:
+        h.batch.transcribe.side_effect = PartialTranscriptionError('secret', 'partial')
+        with patch('vox.recovery.RecoveryStore.stage', side_effect=OSError('disk full')):
+            h.send('toggle')
+            await until(lambda: h.state is State.RECORDING)
+            h.send('toggle')
+            await until(lambda: h.state is State.IDLE)
+        tray.set_notice.assert_called_with('Recording could not be saved.')
+        assert history.search()[0].text == 'partial'
+        assert history.search()[0].audio_id is None
+    history.close()

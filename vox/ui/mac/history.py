@@ -13,6 +13,7 @@ import logging
 import AppKit
 import objc
 from Foundation import NSObject
+from PyObjCTools import AppHelper
 
 from ...history import HistoryDB
 from ..history_model import CLEAR_BUTTON, Entry, HistoryModel
@@ -85,6 +86,7 @@ class EntryCell(kit.RowCell):
         name = kit.APP_SYMBOLS.get(entry.record.app_type or "", kit.DEFAULT_APP_SYMBOL)
         self.icon.setImage_(kit.symbol(name, 13))
         self.accessory.setImage_(kit.symbol("doc.on.doc"))
+        self.accessory.setEnabled_(bool(entry.text.strip()))
 
 
 class HistoryController(NSObject):
@@ -96,6 +98,7 @@ class HistoryController(NSObject):
         self._flash_token = 0
         self._shown_id: int | None = None  # the dictation in the reading pane
         self.confirm = kit.confirm  # replaced in tests
+        self.model.poll_control()
         self._build()
         kit.attach(self.table, self)
         self.refresh()
@@ -205,8 +208,19 @@ class HistoryController(NSObject):
         self.text_view.setTextContainerInset_((_TEXT_INSET, 4))
         self.text_view.textContainer().setLineFragmentPadding_(0)
 
+        self.retry_local = AppKit.NSButton.buttonWithTitle_target_action_("Retry with Local", self, "retryLocal:")
+        self.retry_batch = AppKit.NSButton.buttonWithTitle_target_action_("Retry with OpenAI Batch", self, "retryBatch:")
+        self.retry_batch.setToolTip_("Uploads the full saved recording to OpenAI; another charge may apply.")
+        self.cancel_retry = AppKit.NSButton.buttonWithTitle_target_action_("Cancel Retry", self, "cancelRetry:")
+        self.attempts = AppKit.NSPopUpButton.alloc().initWithFrame_pullsDown_(AppKit.NSZeroRect, True)
+        self.attempts.setTarget_(self)
+        self.attempts.setAction_("copyAttempt:")
+        self.recovery_note = kit.label("", 11, color=secondary, wrap=True)
+        self.recovery_controls = kit.stack([self.retry_local, self.retry_batch, self.cancel_retry, self.attempts],
+                                           vertical=False, spacing=6)
+        recovery = kit.stack([self.recovery_controls, self.recovery_note], spacing=4)
         self.content = AppKit.NSView.alloc().init()
-        for sub in (titles, self.delete_button, self.copy_button, self.text_scroll):
+        for sub in (titles, self.delete_button, self.copy_button, recovery, self.text_scroll):
             self.content.addSubview_(sub)
         kit.constrain(
             titles.topAnchor().constraintEqualToAnchor_constant_(self.content.topAnchor(), 18),
@@ -216,7 +230,10 @@ class HistoryController(NSObject):
             self.copy_button.leadingAnchor().constraintEqualToAnchor_constant_(self.delete_button.trailingAnchor(), 12),
             self.copy_button.centerYAnchor().constraintEqualToAnchor_(titles.centerYAnchor()),
             self.content.trailingAnchor().constraintEqualToAnchor_constant_(self.copy_button.trailingAnchor(), _TEXT_INSET - 4),
-            self.text_scroll.topAnchor().constraintEqualToAnchor_constant_(titles.bottomAnchor(), 18),
+            recovery.topAnchor().constraintEqualToAnchor_constant_(titles.bottomAnchor(), 12),
+            recovery.leadingAnchor().constraintEqualToAnchor_constant_(self.content.leadingAnchor(), _TEXT_INSET),
+            recovery.trailingAnchor().constraintEqualToAnchor_constant_(self.content.trailingAnchor(), -_TEXT_INSET),
+            self.text_scroll.topAnchor().constraintEqualToAnchor_constant_(recovery.bottomAnchor(), 12),
             self.text_scroll.leadingAnchor().constraintEqualToAnchor_(self.content.leadingAnchor()),
             self.text_scroll.trailingAnchor().constraintEqualToAnchor_(self.content.trailingAnchor()),
             self.text_scroll.bottomAnchor().constraintEqualToAnchor_constant_(self.content.bottomAnchor(), -12),
@@ -313,11 +330,54 @@ class HistoryController(NSObject):
         self._render(keep)
 
     def clearHistory_(self, sender) -> None:
-        if self.model.total:
+        if self.model.total or self.model.has_retained_audio:
             title, message = self.model.clear_confirmation()
             self.confirm(self.window, title, message, CLEAR_BUTTON, True, self._clear)
 
+    def retryLocal_(self, sender) -> None:
+        self._retry("whisper_cpp")
+
+    def retryBatch_(self, sender) -> None:
+        self._retry("batch")
+
+    @objc.python_method
+    def _retry(self, mode: str) -> None:
+        entry = self.selected_entry()
+        if entry is None:
+            return
+        token, error = self.model.retry(entry, mode)
+        if error:
+            kit.alert(self.window, "Couldn’t Retry", error)
+            return
+        AppKit.NSApp().hide_(None)
+
+        def acknowledged():
+            error = self.model.focus_released(token)
+            if error:
+                self.model.cancel_retry(entry)
+                AppKit.NSApp().unhide_(None)
+                kit.alert(self.window, "Couldn’t Retry", error)
+        AppHelper.callLater(0.2, acknowledged)
+
+    def cancelRetry_(self, sender) -> None:
+        entry = self.selected_entry()
+        if entry is not None:
+            error = self.model.cancel_retry(entry)
+            if error:
+                kit.alert(self.window, "Couldn’t Cancel Retry", error)
+
+    def copyAttempt_(self, sender) -> None:
+        entry = self.selected_entry()
+        index = self.attempts.indexOfSelectedItem() - 1
+        attempts = self.model.attempts(entry) if entry else []
+        if 0 <= index < len(attempts):
+            error = self.model.copy_text(attempts[index][1])
+            if error:
+                kit.alert(self.window, "Couldn’t Copy", error)
+
     def poll_(self, timer) -> None:
+        self.model.poll_control()
+        self._show_selected()
         entry = self.selected_entry()
         if self.model.refresh_if_changed():
             self._render(entry.record.id if entry else None)
@@ -350,7 +410,7 @@ class HistoryController(NSObject):
     @objc.python_method
     def _render(self, keep_id: int | None) -> None:
         self.search.setPlaceholderString_(self.model.placeholder)
-        self.clear_button.setEnabled_(self.model.total > 0)
+        self.clear_button.setEnabled_(self.model.total > 0 or self.model.has_retained_audio)
         footer = self.model.footer
         self.footer.setStringValue_(footer or "")
         self.footer.setHidden_(footer is None)
@@ -395,11 +455,26 @@ class HistoryController(NSObject):
         # The stamp can say "Today" or "Yesterday", so it's redrawn even when the dictation is the same
         self.stamp.setStringValue_(entry.stamp)
         self.details.setStringValue_(entry.details or "Dictation")
+        self.copy_button.setEnabled_(bool(entry.text.strip()))
+        for mode, button in (("whisper_cpp", self.retry_local), ("batch", self.retry_batch)):
+            problem = self.model.retry_problem(entry, mode)
+            button.setHidden_(entry.record.status == "completed")
+            button.setEnabled_(problem is None)
+            button.setToolTip_(problem or ("Uploads the entire saved recording; another charge may apply." if mode == "batch" else "Transcribe locally."))
+        self.cancel_retry.setHidden_(entry.record.status != "retrying")
+        self.recovery_note.setStringValue_(self.model.retry_problem(entry, "whisper_cpp") or
+                                          ("OpenAI Batch uploads the full recording and may charge again." if entry.record.status != "completed" else ""))
+        self.attempts.removeAllItems()
+        attempts = self.model.attempts(entry)
+        self.attempts.addItemWithTitle_("Copy partial attempt…")
+        for stamp, _text, mode in attempts:
+            self.attempts.addItemWithTitle_(f"{stamp} · {mode}")
+        self.attempts.setHidden_(not attempts)
         name = kit.APP_SYMBOLS.get(entry.record.app_type or "", kit.DEFAULT_APP_SYMBOL)
         self.app_icon.setImage_(kit.symbol(name, 11))
-        if entry.record.id == self._shown_id:
+        if (entry.record.id, entry.record.revision) == self._shown_id:
             return  # already showing: keep the reader's scroll position and selected words
-        self._shown_id = entry.record.id
+        self._shown_id = (entry.record.id, entry.record.revision)
         self._reset_copy_button()
 
         paragraph = AppKit.NSMutableParagraphStyle.alloc().init()

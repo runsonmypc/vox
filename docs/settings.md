@@ -77,6 +77,7 @@ that section.
 | `[whisper_cpp] binary` | `"whisper-cli"` | The whisper.cpp command; a full path is safest. |
 | `[whisper_cpp] model` | `""` | Path to a GGML model file; required for whisper.cpp mode. |
 | `[whisper_cpp] cpu_fallback` | `true` | When the graphics card has no memory left for the model (a game is running, say), transcribe on the processor instead, more slowly. |
+| `[transcription] keep_failed_audio` | `true` | Keep failed recordings locally until recovery or deletion. Turning off stops new retention and retries; delete existing audio in History. |
 | `[context] screen` | `true` | Screen hints, see [Privacy](privacy.md#screen-hints-context-screen). |
 | `[sounds] enabled` | `true` | Play sounds for start, stop, cancel and errors. |
 | `[attenuation] enabled` | `true` | Lower the system volume while recording. |
@@ -149,3 +150,12 @@ problem in its menu, and lets you switch back to an OpenAI mode. Each hotkey pre
 again before recording: while it is broken, Vox Transfer plays the error sound and records nothing,
 and once you fix it, dictation works without restarting Vox Transfer. An edit to `[whisper_cpp]` or
 the mode in `config.toml` updates the menu's first line within a few seconds.
+
+### Failed recording recovery
+
+General Settings includes **Keep failed recordings for retry**, enabled by default. Changes
+save immediately, preserve TOML comments, and take effect within the normal reload interval
+(two seconds), or when Settings closes. Invalid file edits keep the last valid setting.
+Turning it off cancels an active retry and prevents new failed-audio retention. Existing
+recordings remain stored and deletable; turning it on restores their retries. See
+[Privacy](privacy.md#failed-recordings) for storage and deletion details.

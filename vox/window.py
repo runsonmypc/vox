@@ -505,3 +505,22 @@ def _classify(wm_class: str, title: str, config: Config) -> AppType:
         return AppType.EDITOR
 
     return AppType.OTHER
+
+
+def detect_paste_target(config: Config) -> AppContext:
+    """Identify focus for recovery delivery without collecting titles or screen hints."""
+    if sys.platform == 'darwin':
+        import objc
+        from AppKit import NSWorkspace
+
+        with objc.autorelease_pool():
+            app = NSWorkspace.sharedWorkspace().frontmostApplication()
+            if app is None:
+                return AppContext('', '', AppType.OTHER)
+            identifier = f'{app.bundleIdentifier() or ""} {app.localizedName() or ""}'.strip()
+            return AppContext(identifier, '', _classify(identifier, '', config), pid=str(app.processIdentifier()))
+    win_id = (_run_tool(['xdotool', 'getactivewindow']) or '').strip()
+    if not _is_number(win_id):
+        return AppContext('', '', AppType.OTHER)
+    wm_class, pid = _parse_xprop(_run_tool(['xprop', '-id', win_id, 'WM_CLASS', '_NET_WM_PID']) or '')
+    return AppContext(wm_class, '', _classify(wm_class, '', config), win_id=win_id, pid=pid)

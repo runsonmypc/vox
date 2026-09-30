@@ -12,19 +12,21 @@ import threading
 import time
 import wave
 from collections.abc import Callable, Coroutine
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
 from .attenuation import get_volume, set_volume
 from .audio import Recorder, has_speech, is_digital_silence
 from .config import DEFAULT_CONFIG_PATH, Config, file_stamp, load_config, snippet_key, update_transcription_mode
-from .errors import ConfigError, DependencyError, InjectionError, StreamingError, VoxError
+from .errors import ConfigError, DependencyError, InjectionError, VoxError
 from .history import HistoryDB
 from .hotkey import HotkeyListener
 from .injector import check_accessibility_permission, paste
 from .keystore import KeystoreError, get_api_key
 from .modes import mode_problem
+from .recovery import RETENTION_LOCK, RecoveryStore
 from .sounds import SoundPlayer, sound_playing_until
 from .streaming import StreamingTranscriber
 from .transcribe import PartialTranscriptionError, Transcriber
@@ -184,6 +186,7 @@ class _Session:
 
     mode: str
     limit_seconds: int
+    created_at: str = field(default_factory=lambda: datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S"))
     streaming: StreamingTranscriber | None = None
     stream_task: asyncio.Task | None = None
     screen_future: asyncio.Future | None = None
@@ -251,6 +254,7 @@ class _Daemon:
         # What the tray's notice says, most pressing first; the platform's notice shows when neither is set
         self.mic_silent = False
         self.partly_transcribed = False
+        self.recovery_notice: str | None = None
 
         self.batch_transcriber: Transcriber | WhisperCppTranscriber | None = None
         self.transcriber_local = False
@@ -264,12 +268,24 @@ class _Daemon:
         self._device_timer: asyncio.TimerHandle | None = None
         self._device_job: asyncio.Task | None = None
         # One applier for the poll and for Settings closing, so its audio rule sees every version of the file
-        self._apply_config = _ConfigApplier(config, self.recorder, tray, self._apply_hotkey)
+        self.retry = None
+        if self.history is not None:
+            from .retry import RetryController
+
+            self.retry = RetryController(self)
+        self._apply_config = _ConfigApplier(config, self.recorder, tray, self._apply_hotkey, self._recovery_config_changed)
+
+    def _recovery_config_changed(self) -> None:
+        if self.retry is not None and self.retry.active_id is not None and not self.config.keep_failed_audio:
+            self.retry.cancelled = True
+            asyncio.create_task(self.retry.cancel(self.retry.token))
 
     # -- Loop ---------------------------------------------------------------
 
     async def run(self) -> None:
         config, tray = self.config, self.tray
+        if self.retry is not None:
+            await self.retry.server.start()
         self.hotkey.start()
         log.info("Vox Transfer ready (%s mode). Press %s to toggle recording.", config.mode, config.hotkey)
         if tray is not None:
@@ -294,6 +310,13 @@ class _Daemon:
         except asyncio.CancelledError:
             pass
         finally:
+            if self.retry is not None:
+                await self.retry.server.close()
+                if self.retry.active_id is not None:
+                    await self.retry.cancel()
+            if self.process_task is not None and not self.process_task.done():
+                self.process_task.cancel()
+                await asyncio.gather(self.process_task, return_exceptions=True)
             self._shutdown(reload_task)
 
     async def _handle(self, event: str) -> None:
@@ -346,6 +369,8 @@ class _Daemon:
             task = self.process_task
             if self.state is State.PROCESSING and (task is None or task.done()):
                 outcome = task.result() if task is not None and not task.cancelled() else None
+                if outcome is Outcome.TRANSCRIBED:
+                    self._set_recovery_notice(None)
                 if outcome is not None:
                     self._update_notice(partly_transcribed=outcome is Outcome.PARTIAL)
                 self._end_processing()
@@ -453,6 +478,8 @@ class _Daemon:
             history=self.history,
             tray=self.tray,
             mode=session.mode,
+            created_at=session.created_at,
+            recovery_notice=self._set_recovery_notice,
         ))
 
     def _abandon_recording(self) -> None:
@@ -475,10 +502,15 @@ class _Daemon:
             log.info("Recording cancelled, state reset to IDLE")
 
         elif self.state is State.PROCESSING:
+            if self.retry is not None and self.retry.active_id is not None:
+                await self.retry.cancel()
+                self.sounds.play("cancel")
+                return
             log.info("Cancelling in-flight processing...")
             await self._restore_volume()
             if self.process_task is not None and not self.process_task.done():
                 self.process_task.cancel()
+                await asyncio.gather(self.process_task, return_exceptions=True)
             # The task may be cancelled before it ever ran, so its own cleanup can't be relied on
             self._end_processing()
             self.sounds.play("cancel")
@@ -698,6 +730,16 @@ class _Daemon:
 
     # -- Notices and input devices --------------------------------------------
 
+    def _set_recovery_notice(self, notice: str | None) -> None:
+        if notice == PARTIAL_NOTICE:
+            return  # processing outcome sets the existing partial notice once
+        if self.recovery_notice == notice:
+            return
+        self.recovery_notice = notice
+        retention_error = notice is not None and notice.startswith(("Recording could not", "Audio was saved"))
+        if not self.mic_silent and (not self.partly_transcribed or retention_error) and self.tray is not None:
+            self.tray.set_notice(notice or _platform_notice())
+
     def _update_notice(self, *, mic_silent: bool | None = None, partly_transcribed: bool | None = None) -> None:
         """Note what the last recording showed, and give the tray the most pressing notice if that changed it."""
         state = (
@@ -708,8 +750,11 @@ class _Daemon:
             return
         self.mic_silent, self.partly_transcribed = state
         if self.tray is not None:
-            notice = SILENT_MIC_NOTICE if self.mic_silent else PARTIAL_NOTICE if self.partly_transcribed else None
-            self.tray.set_notice(notice or _platform_notice())
+            retention_error = (self.recovery_notice if self.recovery_notice is not None
+                               and self.recovery_notice.startswith(("Recording could not", "Audio was saved")) else None)
+            notice = (SILENT_MIC_NOTICE if self.mic_silent else retention_error or
+                      (PARTIAL_NOTICE if self.partly_transcribed else None))
+            self.tray.set_notice(notice or self.recovery_notice or _platform_notice())
 
     def _scan_devices_while_idle(self) -> None:
         """Where a re-scan is cheap, keep one scheduled while idle, so a new microphone shows up without a recording."""
@@ -747,7 +792,12 @@ class _Daemon:
 
 def _open_history() -> HistoryDB | None:
     try:
-        return HistoryDB()
+        db = HistoryDB()
+        db.reset_interrupted_retries()
+        errors = RecoveryStore(db).reconcile()
+        if errors:
+            log.warning("Recovery startup: %s", errors[0])
+        return db
     except Exception as e:
         log.warning("Dictation history disabled: %s", e)
         return None
@@ -767,7 +817,7 @@ async def _stream_worker(
             await streaming_transcriber.send_audio_chunk(chunk)
     except Exception as e:
         if not streaming_transcriber.closed:
-            log.warning("Live audio streaming failed: %s (will fall back to OpenAI batch)", e)
+            log.warning("Live audio streaming failed (error_type=%s; will fall back to OpenAI batch)", type(e).__name__)
             await streaming_transcriber.close()
 
 
@@ -784,6 +834,8 @@ async def _process(
     mode: str,
     history: HistoryDB | None = None,
     tray: TrayManager | None = None,
+    created_at: str | None = None,
+    recovery_notice: Callable[[str | None], None] | None = None,
 ) -> Outcome | None:
     """Transcribe a finished recording (finish the live stream, else batch), paste it, and keep it in history.
 
@@ -791,6 +843,7 @@ async def _process(
     Returns how the transcription went, or None when it failed or gave no text.
     """
     use_streaming = streaming_transcriber is not None  # only a streaming recording has one
+    transcribing = False
     provider = mode  # what history records: a live session that failed hands the recording to batch
     try:
         t0 = time.monotonic()
@@ -809,6 +862,7 @@ async def _process(
             if screen_capture_future is not None:
                 screen_capture_future.cancel()  # a live session got its keywords when it connected
                 screen_capture_future = None
+            transcribing = True
             text = await _finish_streaming(streaming_transcriber, stream_task)
             if text is not None:
                 log.info("Streaming transcription succeeded in %.3fs", time.monotonic() - t0)
@@ -823,7 +877,10 @@ async def _process(
                 context.screen_text = await _screen_text(screen_capture_future)
                 screen_capture_future = None
             log.info("Using %s transcription", "whisper.cpp" if mode == "whisper_cpp" else "OpenAI batch")
+            transcribing = True
             text = await batch_transcriber.transcribe(wav_data, context)
+
+        transcribing = False
 
         if not text or not text.strip():
             log.info("Empty transcription result, skipping injection")
@@ -853,24 +910,108 @@ async def _process(
             await streaming_transcriber.close()
         raise
     except PartialTranscriptionError as e:
-        # The parts that did transcribe are billed: keep them where the user can copy them
         sounds.play("error")
-        if history is not None and await _record_history(history, e.text, context, wav_data, provider):
-            log.error("Transcription failed partway (%s); the parts transcribed so far are saved in history", e)
-            if tray is not None:
+        saved = await _retain_failure(wav_data, config, history, context, mode, provider, e.text, tray, created_at, recovery_notice) if transcribing else False
+        if saved is False and history is not None:
+            saved = await _record_history(history, e.text, context, wav_data, provider)
+        if saved:
+            if tray is not None and not config.keep_failed_audio:
                 tray.history_changed()
-            return Outcome.PARTIAL  # the tray points to History until a dictation succeeds
-        log.error(
-            "Transcription failed partway (%s) and history is unavailable, so the parts transcribed so far "
-            "are pasted", e,
-        )
+            return Outcome.PARTIAL
         await _paste(e.text, context, config)
     except Exception as e:
-        log.error("Processing error: %s", e, exc_info=not isinstance(e, VoxError))
+        log.error("Processing failed (phase=%s, error_type=%s)", "transcription" if transcribing else "delivery", type(e).__name__)
         sounds.play("error")
+        if transcribing:
+            await _retain_failure(wav_data, config, history, context, mode, provider, "", tray, created_at, recovery_notice)
     finally:
         queue.put_nowait("process_done")
     return None
+
+
+async def _retain_failure(
+    wav_data: bytes, config: Config, history: HistoryDB | None, context: AppContext,
+    original_mode: str, provider: str, text: str, tray: TrayManager | None, created_at: str | None = None, recovery_notice: Callable[[str | None], None] | None = None,
+) -> bool | None:
+    """Stage off the loop, publish only under the current live privacy choice."""
+    if not config.keep_failed_audio:
+        return False
+    metadata = dict(text=text, original_mode=original_mode, attempted_mode=provider,
+                    error_summary="Transcription failed. Check the selected provider and retry.",
+                    created_at=created_at or datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S"),
+                    duration_seconds=_wav_duration(wav_data), app_type=context.app_type.value)
+    store = None
+    audio_id = None
+    published = False
+    notice = "Recording could not be saved."
+    try:
+        store = await asyncio.to_thread(RecoveryStore, history)
+        worker = asyncio.create_task(asyncio.to_thread(store.stage, wav_data, metadata))
+        try:
+            audio_id = await asyncio.shield(worker)
+        except asyncio.CancelledError:
+            [result] = await asyncio.gather(worker, return_exceptions=True)
+            if isinstance(result, str):
+                await asyncio.to_thread(store.discard_stage, result)
+            raise
+        if not config.keep_failed_audio:
+            await asyncio.to_thread(store.discard_stage, audio_id)
+            return False
+        worker = asyncio.create_task(asyncio.to_thread(store.publish, audio_id, lambda: config.keep_failed_audio))
+        try:
+            published = await asyncio.shield(worker)
+        except asyncio.CancelledError:
+            await asyncio.gather(worker, return_exceptions=True)
+            await asyncio.to_thread(store.discard_unindexed, audio_id)
+            await asyncio.to_thread(store.discard_stage, audio_id)
+            raise
+        if not published:
+            return False
+        notice = "Audio was saved but is not yet available in History."
+        worker = asyncio.create_task(asyncio.to_thread(store.index, audio_id))
+        try:
+            await asyncio.shield(worker)
+        except asyncio.CancelledError:
+            try:
+                entry_id = await worker
+            except Exception:
+                await asyncio.to_thread(store.discard_unindexed, audio_id)
+            else:
+                await asyncio.to_thread(history.delete, entry_id)
+            raise
+        notice = PARTIAL_NOTICE if text.strip() else "Last dictation failed: retry in History"
+        if tray is not None:
+            tray.history_changed()
+        return True
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        log.warning("Recording retention failed (audio_saved=%s, error_type=%s)", published, type(e).__name__)
+        if audio_id is not None and not published:
+            published = (store.root / audio_id).exists()
+            if not published:
+                await asyncio.to_thread(store.discard_stage, audio_id)
+            elif not config.keep_failed_audio:
+                await asyncio.to_thread(store.discard_unindexed, audio_id)
+                published = False
+            else:
+                notice = "Audio was saved but is not yet available in History."
+        if not config.keep_failed_audio and not published:
+            return False
+        if not published and history is not None:
+            try:
+                await asyncio.to_thread(history.insert_failure, **metadata)
+                if tray is not None:
+                    tray.history_changed()
+                return True
+            except Exception:
+                pass
+        return None if published else False
+    finally:
+        if recovery_notice is not None:
+            recovery_notice(notice)
+        elif tray is not None and notice != PARTIAL_NOTICE:
+            tray.set_notice(notice)
 
 
 async def _finish_streaming(transcriber: StreamingTranscriber, stream_task: asyncio.Task | None) -> str | None:
@@ -885,8 +1026,7 @@ async def _finish_streaming(transcriber: StreamingTranscriber, stream_task: asyn
         return await transcriber.finish()
     except Exception as e:
         log.warning(
-            "Streaming transcription failed (%s: %s), falling back to OpenAI batch", type(e).__name__, e,
-            exc_info=not isinstance(e, StreamingError),
+            "Streaming transcription failed (error_type=%s), falling back to OpenAI batch", type(e).__name__,
         )
         await transcriber.close()
         return None
@@ -971,11 +1111,13 @@ class _ConfigApplier:
         recorder: Recorder,
         tray: TrayManager | None = None,
         apply_hotkey: Callable[[Config], None] | None = None,
+        recovery_changed: Callable[[], None] | None = None,
     ) -> None:
         self.config = config
         self.recorder = recorder
         self.tray = tray
         self.apply_hotkey = apply_hotkey
+        self.recovery_changed = recovery_changed
         self.file_audio = (config.audio_device, config.sample_rate, config.channels)
 
     def __call__(self, new_config: Config, *, gone: bool = False) -> None:
@@ -985,6 +1127,10 @@ class _ConfigApplier:
         config.dictionary = new_config.dictionary
         config.window_classes = new_config.window_classes
         config.context_screen = new_config.context_screen
+        with RETENTION_LOCK:
+            config.keep_failed_audio = new_config.keep_failed_audio
+        if self.recovery_changed is not None:
+            self.recovery_changed()
         config.sounds_enabled = new_config.sounds_enabled
         config.attenuation_enabled = new_config.attenuation_enabled
         config.attenuation_level = new_config.attenuation_level

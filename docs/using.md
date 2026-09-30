@@ -51,7 +51,7 @@ Choose **Settings…** from the menu while Vox Transfer is idle. It has five pag
 
 - **General**: the microphone (the refresh button next to it looks for one you just connected), the
   recording limit (5, 10, 15, 30 or 60 minutes), sounds, how far to lower other audio while
-  recording, and screen hints.
+  recording, screen hints, and whether to keep failed recordings for retry.
 - **Hotkey**: see [Choosing another hotkey](#choosing-another-hotkey).
 - **Transcription**: OpenAI (batch), OpenAI (streaming) or Local (whisper.cpp), your OpenAI API key,
   the spoken language, a prompt, and the whisper.cpp program and model. A mode that is not set up
@@ -90,3 +90,29 @@ A recording that reaches the recording limit (15 minutes unless you change it) s
 transcribed as if you had tapped the key. In batch mode a recording longer than about 13 minutes is
 uploaded in parts, split at pauses; a part with nothing audible in it is not uploaded, and if a part
 fails, the text of the parts before it is kept in history (or pasted, if history cannot store it).
+
+## Recover a failed recording
+
+Open **Search History…** and select a failed recording or partial transcript. Choose
+**Retry with Local** to use whisper.cpp, or **Retry with OpenAI Batch** to upload the complete
+saved recording to OpenAI. Batch may charge again for the whole recording, including parts
+already transcribed. Both methods use current transcription settings without changing the
+default mode; streaming recordings can be recovered through either method.
+
+History hides or minimizes before transcription starts. A complete result replaces the
+original entry and automatically pastes into the external app focused when retry finishes.
+If a Vox window has focus, the result stays ready to copy in History. The original time and
+duration are retained, and audio is removed after the complete transcript is saved, even if
+paste fails. If another attempt fails, the audio remains and distinct partial attempts can
+be copied separately. Retry never starts or pastes automatically after restart.
+
+Use **Cancel Retry** in History even when hotkeys are paused. Cancellation before completion
+keeps the audio and earlier text. After the full transcript is saved, cancellation preserves
+that text and suppresses paste that has not begun. A paste already sent finishes restoring
+the clipboard. **Delete** and **Clear History** cancel affected retries and remove retained
+audio, including recordings not yet indexed. Vox must be running to retry; offline copying
+and deletion remain available.
+
+Recovery is enabled by default. Turn **Keep failed recordings for retry** off in General
+Settings to stop new saves and retries. Existing recordings stay until you delete them;
+re-enabling restores their eligibility. Audio normally lives in `~/.local/share/vox/audio/`.

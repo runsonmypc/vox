@@ -46,6 +46,11 @@ DETECT_LANGUAGE = "Detect automatically"
 MICROPHONE = "Microphone"
 RECORDING_LIMIT = "Recording limit"
 RECORDING_LIMIT_NOTE = "A recording stops and is transcribed once it reaches this length."
+KEEP_FAILED_AUDIO = "Keep failed recordings for retry"
+KEEP_FAILED_AUDIO_NOTE = (
+    "Save failed audio locally until recovery or deletion. Turning this off stops new saves and retries. "
+    "Delete existing recordings in History."
+)
 SOUNDS = "Sounds"
 SOUNDS_NOTE = "Play a sound when dictation starts, stops, is cancelled or fails."
 LOWER_AUDIO = "Lower other audio while recording"
@@ -230,6 +235,9 @@ class SettingsModel:
 
     def set_limit(self, seconds: int) -> str | None:
         return self._change(lambda: update_max_recording_seconds(self.path, seconds))
+
+    def set_keep_failed_audio(self, on: bool) -> str | None:
+        return self._change(lambda: update_flag(self.path, "transcription", "keep_failed_audio", on))
 
     def set_sounds(self, on: bool) -> str | None:
         return self._change(lambda: update_flag(self.path, "sounds", "enabled", on))

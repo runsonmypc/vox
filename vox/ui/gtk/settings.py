@@ -17,6 +17,8 @@ from ..key_model import REMOVE_BUTTON, REMOVE_FAILED_TITLE, REMOVE_MESSAGE, REMO
 from ..settings_model import (
     CHOOSE,
     DICTATION_OFF,
+    KEEP_FAILED_AUDIO,
+    KEEP_FAILED_AUDIO_NOTE,
     LANGUAGE,
     LOWER_AUDIO,
     LOWER_AUDIO_LEVEL,
@@ -173,6 +175,9 @@ class GeneralPage:
         link = Gtk.LinkButton(uri=PRIVACY_URL, label=PRIVACY_LINK, valign=Gtk.Align.CENTER)
         hints = Adw.PreferencesGroup(title="Privacy", header_suffix=link)
         hints.add(self.screen[0])
+        self.keep_failed_audio = _switch(KEEP_FAILED_AUDIO, KEEP_FAILED_AUDIO_NOTE,
+                                         lambda on: owner.changed(self.model.set_keep_failed_audio(on)))
+        hints.add(self.keep_failed_audio[0])
 
         self.view = Adw.PreferencesPage()
         for group in (recording, sound, hints):
@@ -184,6 +189,7 @@ class GeneralPage:
         writable = model.writable
         self.microphone.fill(*model.microphones())
         self.limit.fill(*model.limits())
+        _set_switch(self.keep_failed_audio, config.keep_failed_audio)
         _set_switch(self.sounds, config.sounds_enabled)
         _set_switch(self.lower, config.attenuation_enabled)
         if not self.dragging:
@@ -195,7 +201,7 @@ class GeneralPage:
             self.level_text.set_label(f"{percent(config.attenuation_level)}%")
         _set_switch(self.screen, config.context_screen)
         for widget in (self.microphone_row, self.refresh_button, self.limit_row,
-                       self.sounds[0], self.lower[0], self.screen[0]):
+                       self.sounds[0], self.lower[0], self.screen[0], self.keep_failed_audio[0]):
             widget.set_sensitive(writable)
         self.level_row.set_sensitive(writable and config.attenuation_enabled)
         self.owner.set_footer(self.footer)

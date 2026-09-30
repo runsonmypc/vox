@@ -413,7 +413,7 @@ class TrayManager:
         if self._history is None:
             return
         try:
-            self._recent = self._history.recent(_RECENT_COUNT)
+            self._recent = [rec for rec in self._history.search(limit=200) if rec.text.strip()][:_RECENT_COUNT]
         except sqlite3.Error as e:
             log.debug("Could not read recent dictations: %s", e)
             return
@@ -432,7 +432,7 @@ class TrayManager:
         yield Menu.SEPARATOR
         yield Item(RECENT_HEADER if self._recent else "No dictations yet", None, enabled=False)
         for rec in self._recent:
-            yield Item(_recent_label(rec.text), self._copier(rec.text))
+            yield Item(("Partial: " if rec.status == "partial" else "") + _recent_label(rec.text), self._copier(rec.text))
         yield Menu.SEPARATOR
         yield Item("Search History…", self._open_history, enabled=self._history is not None)
         yield Item("Transcription", Menu(self._transcription_items))

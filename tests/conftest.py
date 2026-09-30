@@ -167,3 +167,13 @@ def gtk():
         _gtk_unavailable(f"GTK 4 and libadwaita unavailable: {e}")
     common.setup()
     return common
+
+
+@pytest.fixture(autouse=True)
+def _isolate_control_socket(monkeypatch):
+    # Darwin limits Unix socket paths to 104 bytes; pytest's TMPDIR paths exceed that.
+    from pathlib import Path
+
+    with tempfile.TemporaryDirectory(prefix="vox-", dir="/tmp") as directory:
+        monkeypatch.setattr("vox.control._lock_dir", lambda: Path(directory))
+        yield

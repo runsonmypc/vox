@@ -11,6 +11,7 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from .errors import DependencyError, InjectionError
@@ -105,13 +106,19 @@ def set_clipboard(text: str) -> None:
     _x11_write(text.encode())
 
 
-def paste(text: str, app_type: AppType = AppType.OTHER) -> None:
+def paste(text: str, app_type: AppType = AppType.OTHER, *, eligible: Callable[[], bool] | None = None) -> None:
     """Paste text at the cursor, then put the user's clipboard back. Safe to call from a worker thread."""
     with _paste_lock:
-        if sys.platform == "darwin":
-            _paste_macos(text, app_type)
-        else:
-            _paste_linux(text, app_type)
+        if eligible is None:
+            if sys.platform == "darwin":
+                _paste_macos(text, app_type)
+            else:
+                _paste_linux(text, app_type)
+        elif eligible():
+            if sys.platform == "darwin":
+                _paste_macos(text, app_type, eligible)
+            else:
+                _paste_linux(text, app_type, eligible)
 
 
 # -- macOS -------------------------------------------------------------------------
@@ -123,7 +130,7 @@ def _general_pasteboard():
     return NSPasteboard.generalPasteboard()
 
 
-def _paste_macos(text: str, app_type: AppType) -> None:
+def _paste_macos(text: str, app_type: AppType, eligible: Callable[[], bool] | None = None) -> None:
     import objc
 
     # A long-lived worker thread has no autorelease pool of its own
@@ -133,7 +140,9 @@ def _paste_macos(text: str, app_type: AppType) -> None:
         written: int | None = None
         try:
             written = _write_transient(pb, text)
-            _post_cmd_v()
+            if eligible is not None and not eligible():
+                return
+            _post_cmd_v(eligible) if eligible is not None else _post_cmd_v()
             log.debug("Injected %d chars via Cmd+V on macOS (app_type=%s)", len(text), app_type.value)
             time.sleep(_MACOS_RESTORE_DELAY)
         finally:
@@ -291,11 +300,13 @@ def _layout_paste_keycode() -> int:
     return _KVK_ANSI_V
 
 
-def _post_cmd_v() -> None:
+def _post_cmd_v(eligible: Callable[[], bool] | None = None) -> None:
     try:
         from Quartz import CGEventCreateKeyboardEvent, CGEventPost, CGEventSetFlags, kCGEventFlagMaskCommand, kCGHIDEventTap
 
         keycode = _paste_keycode()
+        if eligible is not None and not eligible():
+            return
         for key_down in (True, False):
             event = CGEventCreateKeyboardEvent(None, keycode, key_down)
             CGEventSetFlags(event, kCGEventFlagMaskCommand)
@@ -313,7 +324,7 @@ class _Selection:
     data: bytes
 
 
-def _paste_linux(text: str, app_type: AppType) -> None:
+def _paste_linux(text: str, app_type: AppType, eligible: Callable[[], bool] | None = None) -> None:
     saved = _x11_snapshot()
     try:
         owner = _ClipboardOwner(text.encode())
@@ -327,6 +338,8 @@ def _paste_linux(text: str, app_type: AppType) -> None:
         time.sleep(0.05)
         owner.drain()
         before = owner.served
+        if eligible is not None and not eligible():
+            return
         _send_paste_keys(app_type)
         log.debug("Injected %d chars (app_type=%s)", len(text), app_type.value)
         # Restore only once the target has fetched the text, or it pastes the old clipboard

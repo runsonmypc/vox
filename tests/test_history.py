@@ -24,7 +24,8 @@ def test_creates_parent_dirs_and_schema(tmp_path):
     cols = [row[1] for row in conn.execute("PRAGMA table_info(history)")]
     indexes = [row[1] for row in conn.execute("PRAGMA index_list(history)")]
     conn.close()
-    assert cols == ["id", "created_at", "text", "app_type", "duration_seconds", "transcription_mode"]
+    assert cols[:6] == ["id", "created_at", "text", "app_type", "duration_seconds", "transcription_mode"]
+    assert "revision" in cols and "audio_id" in cols
     assert "idx_history_created_at" in indexes
 
 
@@ -196,3 +197,38 @@ def test_deleted_text_is_erased_from_the_file(tmp_path, erase):
         history.clear()
     history.close()
     assert b"hunter2-zebra" not in path.read_bytes()
+
+
+def test_legacy_migration_is_additive_and_idempotent(tmp_path):
+    path = tmp_path / 'legacy.db'
+    conn = sqlite3.connect(path)
+    conn.execute('CREATE TABLE history (id INTEGER PRIMARY KEY AUTOINCREMENT, created_at DATETIME, text TEXT NOT NULL, '
+                 'app_type TEXT, duration_seconds REAL, transcription_mode TEXT)')
+    conn.execute('INSERT INTO history VALUES (42, "2024-01-02 03:04:05", "old words", "EDITOR", 3.5, "batch")')
+    conn.commit()
+    conn.close()
+    for _ in range(2):
+        db = HistoryDB(path)
+        rec = db.get(42)
+        assert (rec.id, rec.created_at, rec.text, rec.app_type, rec.duration_seconds, rec.transcription_mode) == (
+            42, '2024-01-02 03:04:05', 'old words', 'EDITOR', 3.5, 'batch')
+        assert rec.status == 'completed' and rec.audio_id is None
+        db.close()
+
+
+def test_conditional_updates_and_existing_model_refresh(db):
+    from vox.ui.history_model import HistoryModel
+
+    entry_id = db.insert_failure(original_mode='streaming', attempted_mode='batch', error_summary='Transcription failed.',
+                                 created_at='2025-01-02 03:04:05')
+    model = HistoryModel(db)
+    model.search('')
+    assert model.entries[0].text == ''
+    rec = db.get(entry_id)
+    assert db.update_recovery(entry_id, rec.revision, status='retrying')
+    assert not db.update_recovery(entry_id, rec.revision, text='stale')
+    assert model.refresh_if_changed()
+    assert model.entries[0].record.status == 'retrying'
+    db.delete(entry_id)
+    assert not db.update_recovery(entry_id, rec.revision + 1, text='deleted')
+    assert model.refresh_if_changed() and model.entries == []

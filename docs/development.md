@@ -40,3 +40,43 @@ docker run --rm -v "$PWD:/src:ro" -w /src ubuntu:24.04 packaging/deb/smoke-test.
 
 [RELEASING.md](../RELEASING.md) describes how to make a release and how to try the release workflow
 without publishing anything.
+
+## Native recovery integration
+
+`scripts/integration/recovery_desktop.py` opens real History and text-target windows in
+separate processes and runs the production daemon loop, control socket, recording store,
+provider converters, focus detection, clipboard and paste keystrokes. Microphone, hotkey
+and sound hardware are replaced; a controlled whisper CLI and a loopback HTTP endpoint
+supply provider results. The script uses a temporary database and audio directory and
+never contacts OpenAI. It checks Local and Batch retry, daemon restart, clipboard
+restoration, History reopening, switching target apps, cancellation while paused,
+Delete/Clear, partial-attempt copying, live opt-out and GTK's narrow layout.
+
+On macOS, run in a logged-in desktop with Accessibility permission for Python:
+
+```sh
+uv run python scripts/integration/recovery_desktop.py --report /tmp/vox-desktop-macos.json
+```
+
+The test briefly changes focus and clipboard contents. It uses dedicated target windows,
+then restores the original foreground application and all original clipboard types.
+
+On Linux, CI runs the same test under Openbox and Xvfb. A disposable Ubuntu environment
+can also run it from macOS or Linux:
+
+```sh
+integration_build_dir=$(mktemp -d)
+cp requirements.lock scripts/integration/Dockerfile "$integration_build_dir/"
+docker build -t vox-recovery-desktop "$integration_build_dir"
+docker run --rm --network none -v "$PWD:/src:ro" vox-recovery-desktop
+```
+
+The image installs the hash-pinned runtime dependencies and GTK 4, libadwaita, Openbox,
+Xvfb, xdotool and xclip. Window activation and paste events go through the real X11
+server; no focus or injector functions are mocked. The Linux integration is also a
+required step in `.github/workflows/ci.yml`.
+
+This is automated native desktop validation. Buttons are activated programmatically,
+synthetic audio bypasses VAD, partial attempts are seeded, and the Clear confirmation
+is accepted by the fixture. It tests desktop recovery behavior; actual microphone
+capture, provider accuracy and human mouse interaction require separate validation.

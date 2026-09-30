@@ -244,7 +244,7 @@ class StreamingTranscriber:
 
                 elif event_type == "error" and not self._completed:
                     err_msg = event.get("error", {}).get("message", "Realtime API error")
-                    log.error("Realtime WS error event: %s", err_msg)
+                    log.error("Realtime WS error event received")
                     self._last_error = StreamingError(f"Realtime API error: {err_msg}")
                     self._completed_event.set()
 
@@ -252,7 +252,7 @@ class StreamingTranscriber:
                 self._last_error = StreamingError("Realtime connection closed before the transcription completed")
                 self._completed_event.set()
         except Exception as e:
-            log.warning("Realtime WS receive loop error: %s", e)
+            log.warning("Realtime WS receive loop failed (error_type=%s)", type(e).__name__)
             self._last_error = e
             self._completed_event.set()
 

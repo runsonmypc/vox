@@ -53,6 +53,7 @@ class EntryRow(Gtk.ListBoxRow):
         copy = Gtk.Button(icon_name="edit-copy-symbolic", valign=Gtk.Align.CENTER, tooltip_text="Copy")
         for css in ("flat", "circular", "row-copy"):
             copy.add_css_class(css)
+        copy.set_sensitive(bool(entry.text.strip()))
         copy.connect("clicked", lambda _button: on_copy(self))
 
         box = Gtk.Box(spacing=12)
@@ -66,6 +67,7 @@ class HistoryWindow(Adw.ApplicationWindow):
     def __init__(self, model: HistoryModel, **kwargs) -> None:
         super().__init__(title="History", default_width=920, default_height=620, **kwargs)
         self.model = model
+        self.model.poll_control()
         self.confirm = confirm  # replaced in tests
         self._toast: Adw.Toast | None = None
         self._rendering = False  # rebuilding the list: row-selected fires for rows about to come back
@@ -150,7 +152,22 @@ class HistoryWindow(Adw.ApplicationWindow):
         # Selectable with the mouse, but never focused: a focused label selects all of its text
         self.text = label("", "reading", wrap=True, selectable=True, yalign=0, focusable=False)
         self.text.set_wrap_mode(Pango.WrapMode.WORD_CHAR)
-        clamp = Adw.Clamp(maximum_size=720, tightening_threshold=560, child=self.text,
+        self.recovery_controls = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        self.recovery_note = label("", "caption", "dim-label", wrap=True)
+        self.retry_local = Gtk.Button(label="Retry with Local")
+        self.retry_batch = Gtk.Button(label="Retry with OpenAI Batch (uploads audio)")
+        self.retry_batch.set_tooltip_text("Uploads the entire saved recording to OpenAI; another charge may apply.")
+        self.cancel_retry = Gtk.Button(label="Cancel Retry")
+        self.retry_local.connect("clicked", lambda _button: self.retry("whisper_cpp"))
+        self.retry_batch.connect("clicked", lambda _button: self.retry("batch"))
+        self.cancel_retry.connect("clicked", lambda _button: self.cancel())
+        self.attempts = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        for widget in (self.retry_local, self.retry_batch, self.cancel_retry, self.recovery_note, self.attempts):
+            self.recovery_controls.append(widget)
+        content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        content.append(self.recovery_controls)
+        content.append(self.text)
+        clamp = Adw.Clamp(maximum_size=720, tightening_threshold=560, child=content,
                           margin_top=18, margin_bottom=32, margin_start=28, margin_end=28)
         self.text_scroller = Gtk.ScrolledWindow(child=clamp, hscrollbar_policy=Gtk.PolicyType.NEVER)
 
@@ -183,7 +200,7 @@ class HistoryWindow(Adw.ApplicationWindow):
 
     def _render(self, keep_id: int | None) -> None:
         self.search.set_placeholder_text(self.model.placeholder)
-        self.clear_button.set_sensitive(self.model.total > 0)
+        self.clear_button.set_sensitive(self.model.total > 0 or self.model.has_retained_audio)
         footer = self.model.footer
         self.footer.set_label(footer or "")
         self.footer.set_visible(footer is not None)
@@ -226,8 +243,22 @@ class HistoryWindow(Adw.ApplicationWindow):
         # The stamp can say "Today" or "Yesterday", so it's redrawn even when the dictation is the same
         self.title.set_title(entry.stamp)
         self.title.set_subtitle(entry.details)
-        if entry.record.id != self._shown_id:  # otherwise keep the reader's scroll position and selected words
-            self._shown_id = entry.record.id
+        self.copy_button.set_sensitive(bool(entry.text.strip()))
+        for mode, button in (("whisper_cpp", self.retry_local), ("batch", self.retry_batch)):
+            problem = self.model.retry_problem(entry, mode)
+            button.set_visible(entry.record.status != "completed")
+            button.set_sensitive(problem is None)
+            button.set_tooltip_text(problem or ("Uploads the entire recording; another charge may apply." if mode == "batch" else "Transcribe locally."))
+        self.cancel_retry.set_visible(entry.record.status == "retrying")
+        self.recovery_note.set_label(self.model.retry_problem(entry, "whisper_cpp") or "")
+        while child := self.attempts.get_first_child():
+            self.attempts.remove(child)
+        for stamp, text, mode in self.model.attempts(entry):
+            button = Gtk.Button(label=f"Copy partial: {stamp} · {mode}")
+            button.connect("clicked", lambda _button, text=text: self._copied(self.model.copy_text(text)))
+            self.attempts.append(button)
+        if (entry.record.id, entry.record.revision) != self._shown_id:  # otherwise keep the reader's scroll position and selected words
+            self._shown_id = (entry.record.id, entry.record.revision)
             self.text.set_label(entry.text)
             self.text.select_region(0, 0)
             self.text_scroller.get_vadjustment().set_value(0)
@@ -304,7 +335,7 @@ class HistoryWindow(Adw.ApplicationWindow):
         self._render(keep)
 
     def clear_history(self) -> None:
-        if self.model.total:
+        if self.model.total or self.model.has_retained_audio:
             title, message = self.model.clear_confirmation()
             self.confirm(self, title, message, CLEAR_BUTTON, True, self._clear)
 
@@ -348,7 +379,35 @@ class HistoryWindow(Adw.ApplicationWindow):
             return True
         return False
 
+    def retry(self, mode: str) -> None:
+        entry = self.selected_entry()
+        if entry is None:
+            return
+        token, error = self.model.retry(entry, mode)
+        if error:
+            error_dialog(self, "Couldn’t Retry", error)
+            return
+        self.minimize()
+
+        def acknowledged():
+            error = self.model.focus_released(token)
+            if error:
+                self.model.cancel_retry(entry)
+                self.present()
+                error_dialog(self, "Couldn’t Retry", error)
+            return GLib.SOURCE_REMOVE
+        GLib.timeout_add(200, acknowledged)
+
+    def cancel(self) -> None:
+        entry = self.selected_entry()
+        if entry is not None:
+            error = self.model.cancel_retry(entry)
+            if error:
+                error_dialog(self, "Couldn’t Cancel Retry", error)
+
     def _on_poll(self) -> bool:
+        self.model.poll_control()
+        self._show_selected()
         entry = self.selected_entry()
         if self.model.refresh_if_changed():
             self._render(entry.record.id if entry else None)
