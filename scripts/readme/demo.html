@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Vox Transfer — README demonstration</title>
+<style>
+* { box-sizing: border-box; }
+html, body { margin: 0; width: 768px; height: 550px; background: transparent; color: #e9ebee; font: 15px -apple-system, BlinkMacSystemFont, sans-serif; }
+p, h3 { margin: 0; }
+.voice { position: absolute; top: 8px; left: 12px; width: 744px; height: 70px; padding: 13px 20px; border: 1px solid #454443; border-radius: 12px; background: #1b1d20; }
+.voice-label { color: #a1a2a5; font-size: 10px; letter-spacing: 1px; text-transform: uppercase; margin-bottom: 5px; }
+.voice-text { color: #ddc38b; font-size: 16px; line-height: 1.45; }
+.voice-text span { opacity: .25; }
+.voice-text .spoken { opacity: 1; }
+.window { position: absolute; left: 12px; top: 92px; width: 744px; height: 342px; border: 1px solid #454443; border-radius: 11px; overflow: hidden; background: #222426; }
+.windowbar { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; height: 36px; padding: 0 16px; border-bottom: 1px solid #363739; background: #282a2c; color: #c6c6c9; font-size: 12px; }
+.dots { display: flex; gap: 7px; }
+.dots i { width: 10px; height: 10px; border-radius: 50%; background: #ff5f57; }
+.dots i:nth-child(2) { background: #febc2e; }
+.dots i:nth-child(3) { background: #28c840; }
+.document { position: relative; height: 306px; }
+.surface { position: absolute; inset: 0; }
+[hidden] { display: none !important; }
+.output { display: inline; white-space: pre-wrap; overflow-wrap: anywhere; }
+.cursor { display: inline-block; vertical-align: -.15em; width: 1.5px; height: 1.05em; margin-left: 2px; background: #d7c08d; }
+.terminal { padding: 24px 28px; background: #151c20; font-family: Menlo, monospace; }
+.terminal-history { font-size: 12px; line-height: 2; color: #849399; }
+.path { color: #8da7b2; }
+.change { color: #baa376; }
+.terminal-path { margin-top: 23px; margin-bottom: 10px; font-size: 12px; color: #a3ba9b; }
+.terminal-input { font-size: 14px; line-height: 1.8; color: #e7ebef; }
+.prompt { color: #879599; }
+.notes { display: grid; grid-template-columns: 152px 1fr; background: #272725; }
+.notes-sidebar { padding: 20px 9px; border-right: 1px solid #3a3a36; background: #222220; }
+.sidebar-label { padding: 0 10px; margin-bottom: 18px; font-size: 10px; color: #929292; text-transform: uppercase; letter-spacing: .7px; }
+.note-item { margin: 5px 0; padding: 12px 10px; border-radius: 5px; font-size: 11px; color: #b3b2ae; }
+.note-item.selected { background: #655330; color: #fff; }
+.notes-editor { padding: 20px 26px; }
+.note-date { margin-bottom: 25px; color: #96958f; font-size: 10px; text-align: center; }
+h3 { font-size: 24px; letter-spacing: -.6px; margin-bottom: 16px; }
+.notes-input { font-size: 17px; line-height: 1.6; }
+.mail { background: #252a31; }
+.mail-fields { height: 38px; padding: 11px 24px; border-bottom: 1px solid #3b424d; color: #e1e5ea; font-size: 12px; }
+.mail-fields span { margin-right: 16px; color: #97a1ad; }
+.mail-body { padding: 20px 26px; }
+.thread { padding-left: 12px; border-left: 2px solid #626b76; color: #c2c9d2; line-height: 1.7; font-size: 14px; }
+.thread-from { display: flex; justify-content: space-between; margin-bottom: 7px; }
+.thread-from small { color: #97a1ad; font-size: 10px; }
+mark { color: inherit; background: transparent; }
+.reply-label { margin: 26px 0 10px; color: #aeb6c0; font-size: 11px; }
+.mail-input { font-size: 17px; line-height: 1.6; }
+.mail-tools { position: absolute; left: 0; right: 0; bottom: 0; padding: 9px 24px; border-top: 1px solid #343b44; color: #8d99a8; font-size: 10px; display: flex; justify-content: space-between; }
+.overlay { position: absolute; width: 224px; height: 44px; left: 272px; top: 450px; }
+.caption { position: absolute; top: 510px; left: 12px; width: 744px; height: 32px; display: flex; justify-content: space-between; align-items: center; padding: 0 15px; border-radius: 8px; background: #1b1d20; color: #c7c9cd; font-size: 12px; }
+.chapter { color: #d6bd84; font-weight: 600; }
+</style>
+<div class="voice"><p class="voice-label">You say</p><p class="voice-text"></p></div>
+<div class="window">
+  <div class="windowbar"><div class="dots"><i></i><i></i><i></i></div><span class="app">Terminal</span><span></span></div>
+  <div class="document">
+    <div class="surface terminal" data-app="terminal">
+      <div class="terminal-history"><p><span class="path">~/projects</span> $ pwd</p><p>/Users/alex/projects</p><p><span class="path">~/projects</span> $ git status --short</p><p class="change"> M README.md</p></div>
+      <p class="terminal-path">alex <span class="path">~/projects</span></p>
+      <div class="terminal-input"><span class="prompt">$ </span><span class="output"></span><span class="cursor"></span></div>
+    </div>
+    <div class="surface notes" data-app="notes" hidden>
+      <aside class="notes-sidebar"><p class="sidebar-label">My notes</p><p class="note-item selected">Connected notes</p><p class="note-item">Weekend plans</p><p class="note-item">Reading list</p></aside>
+      <div class="notes-editor"><p class="note-date">Today</p><h3>A map of my ideas</h3><div class="notes-input"><span class="output"></span><span class="cursor"></span></div></div>
+    </div>
+    <div class="surface mail" data-app="mail" hidden>
+      <p class="mail-fields"><span>Subject:</span>Ready to ship</p>
+      <div class="mail-body"><div class="thread"><p class="thread-from"><strong>Priya</strong><small>Earlier message</small></p><p>Can we check PostgreSQL before the Kubernetes rollout?</p></div><p class="reply-label">Your reply</p><div class="mail-input"><span class="output"></span><span class="cursor"></span></div></div>
+      <div class="mail-tools"><span>Aa　⌁</span><span>Draft</span></div>
+    </div>
+  </div>
+</div>
+<img class="overlay" alt="Native Vox recording overlay" hidden>
+<div class="caption"><span class="chapter"></span><span class="detail"></span></div>
+<script>
+// Examples and app surfaces adapted from the personal site's VoxShowcase.
+// These are illustrations; only the overlay pixels come from the production renderer.
+window.scenes = [
+  { id: 'snippets', app: 'Terminal', surface: 'terminal', label: 'Voice snippets', spoken: 'dev server', output: 'npm run dev -- --host 127.0.0.1 --port 4321', recordUntil: 1800, pasteAt: 2700, duration: 6000, caption: 'Your saved command, inserted without running it.' },
+  { id: 'dictation', app: 'Notes', surface: 'notes', label: 'Dictation', spoken: 'What if my notes became a map of everything I’m working on, with connections I hadn’t noticed?', output: 'What if my notes became a map of everything I’m working on, with connections I hadn’t noticed?', recordUntil: 3400, pasteAt: 4300, duration: 7800, caption: 'Text at your cursor. Clipboard restored.' },
+  { id: 'context', app: 'Mail', surface: 'mail', label: 'Screen context', spoken: 'Ask Priya to check PostgreSQL before the Kubernetes rollout.', output: 'Ask Priya to check PostgreSQL before the Kubernetes rollout.', recordUntil: 2900, pasteAt: 3800, duration: 7400, caption: 'On-screen names guide spelling through local OCR.' },
+];
+window.renderFrame = async function(index, elapsed, overlayUrl) {
+  const scene = scenes[index];
+  const phase = elapsed < 250 ? 'waiting' : elapsed < scene.recordUntil ? 'recording' : elapsed < scene.pasteAt ? 'processing' : 'delivered';
+  document.body.dataset.phase = phase;
+  document.body.dataset.scene = scene.id;
+  document.querySelector('.app').textContent = scene.app;
+  document.querySelector('.chapter').textContent = scene.label;
+  document.querySelector('.detail').textContent = scene.caption;
+  document.querySelectorAll('.surface').forEach(el => el.hidden = el.dataset.app !== scene.surface);
+  document.querySelectorAll('.output').forEach(el => el.textContent = el.closest('.surface').dataset.app === scene.surface && phase === 'delivered' ? scene.output : '');
+  const words = scene.spoken.split(' ');
+  const count = Math.max(0, Math.ceil((elapsed - 250) / (scene.recordUntil - 450) * words.length));
+  const speech = document.querySelector('.voice-text');
+  speech.replaceChildren(...words.map((text, i) => {
+    const word = document.createElement('span'); word.className = i < count ? 'spoken' : '';
+    word.textContent = text + (i < words.length - 1 ? ' ' : ''); return word;
+  }));
+  const overlay = document.querySelector('.overlay');
+  // The production panel dismisses before paste; batch results appear all at once.
+  overlay.hidden = !overlayUrl || elapsed >= scene.pasteAt - 50 || phase === 'waiting';
+  if (!overlay.hidden) { overlay.src = overlayUrl; await overlay.decode(); }
+  return { phase, output: document.querySelector('.surface:not([hidden]) .output').textContent, overlay: !overlay.hidden };
+};
+</script>
+</html>

@@ -131,7 +131,7 @@ Common requests:
   ```toml
   [snippets]
   "my email" = "sam@example.com"
-  "sign off" = "Best,\nSam"
+  "dev server" = "npm run dev -- --host 127.0.0.1 --port 4321"
   ```
 
 - **Language** (an ISO code; without it, the language is detected):

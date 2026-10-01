@@ -15,15 +15,15 @@
   <a href="LICENSE"><img alt="License: GPL-3.0" src="https://img.shields.io/badge/license-GPL--3.0-blue"></a>
 </p>
 
-<a href="docs/images/hero-light.png">
+<a href="docs/images/app-demo.png">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/images/hero-dark.png">
-    <img src="docs/images/hero-light.png" alt="Vox Transfer's active Transcription settings on macOS, with OpenAI batch, streaming and local whisper.cpp options">
+    <source media="(prefers-reduced-motion: reduce)" srcset="docs/images/app-demo-still.png">
+    <img src="docs/images/app-demo.png" width="768" alt="Vox Transfer demonstration: say dev server to insert npm run dev -- --host 127.0.0.1 --port 4321 in Terminal; dictate into Notes; use on-screen names as spelling hints in Mail. The native recording overlay disappears before each paste.">
   </picture>
 </a>
 
 <p align="center">
-  Choose OpenAI or fully offline transcription · <a href="docs/images/hero-dark.png">Full size (dark)</a>
+  Voice snippets, dictation and screen context · Illustrated app examples with the native Vox overlay
 </p>
 
 ## How it works
@@ -42,12 +42,6 @@ searching what you've dictated.
 On macOS or Linux/X11, enable **Settings → General → Show recording overlay** for a small microphone
 waveform and transcription status near the bottom of the target display. It is off by default
 and follows Reduce Motion. [Overlay settings and platform coverage](docs/settings.md#recording-overlay)
-
-<p align="center">
-  <a href="docs/images/recording-overlay.png">
-    <img src="docs/images/recording-overlay.png" width="496" alt="Animated recording overlay: microphone-responsive waveform while listening, a glowing bead while transcribing, with a cancel button at the top right">
-  </a>
-</p>
 
 ## Install
 
@@ -88,7 +82,8 @@ transcription) and set it up.
 - **OpenAI or fully offline.** Transcribe with OpenAI, or locally with whisper.cpp. Switch in
   Settings.
 - **Spells your words right.** Add names and jargon to your vocabulary.
-- **Snippets.** Say "my email" and get your email address.
+- **Snippets.** Say "dev server" on its own to insert `npm run dev -- --host 127.0.0.1 --port 4321`.
+  Save your own phrases and expansions in Settings; commands are pasted, not executed.
 - **Searchable history** of everything you've dictated, kept on your computer. Failed recordings can be retried locally or with OpenAI Batch.
 - **Private.** No analytics and no telemetry. [What leaves your computer](docs/privacy.md)
 
@@ -98,7 +93,7 @@ transcription) and set it up.
       <a href="docs/images/snippets-light.png">
         <picture>
           <source media="(prefers-color-scheme: dark)" srcset="docs/images/snippets-dark.png">
-          <img src="docs/images/snippets-light.png" alt="Active Snippets settings on macOS, with voice shortcuts for an email address, sign-off, meeting link and availability">
+          <img src="docs/images/snippets-light.png" alt="Active Snippets settings on macOS, with voice shortcuts for an email address, a localhost dev-server command, meeting link and availability">
         </picture>
       </a>
     </td>
