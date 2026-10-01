@@ -45,7 +45,7 @@ and follows Reduce Motion. [Overlay settings and platform coverage](docs/setting
 
 <p align="center">
   <a href="docs/images/recording-overlay.png">
-    <img src="docs/images/recording-overlay.png" width="496" alt="Animated recording overlay: microphone-responsive waveform while listening, a glowing bead while transcribing, brass for cloud and silver for local, with a cancel button at the top right">
+    <img src="docs/images/recording-overlay.png" width="496" alt="Animated recording overlay: microphone-responsive waveform while listening, a glowing bead while transcribing, with a cancel button at the top right">
   </a>
 </p>
 
