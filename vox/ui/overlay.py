@@ -18,6 +18,7 @@ log = logging.getLogger(__name__)
 FADE_SECONDS = 0.19
 CAPTURE_TIMEOUT = 0.3
 PANEL_SIZE = (224, 44)
+PANEL_RADIUS = 8  # match the personal-site overlay demo
 SIGNAL_X, SIGNAL_WIDTH, SIGNAL_HEIGHT = 50, 153, 20  # 40 rendered pixels beside mic body and inside rim at 2×
 CANCEL_RECT = (204, 2, 18, 18)  # top-left origin; only this corner accepts clicks
 SIGNAL_Y = PANEL_SIZE[1] / 2  # centered vertically; status sits below
@@ -144,7 +145,7 @@ class Overlay:
                 self._change('hidden')
 
     def begin(self, generation):
-        """Capture opt-in before microphone startup; later enabling waits for the next turn."""
+        """Capture the preference before microphone startup; later enabling waits for the next turn."""
         with self._lock:
             self.dismiss()
             self._eligible = generation if self.enabled and not self.closed and not self.failed else None
@@ -311,7 +312,7 @@ class Overlay:
                 self._captures.add(token)
                 self._acks.add(ack)
                 if self.backend is None and not self.failed:
-                    # No native panel has ever appeared (including default-off operation).
+                    # No native panel has ever appeared (including explicitly disabled operation).
                     # The lease still suppresses a recording enabled during this capture.
                     ack.set()
                 else:

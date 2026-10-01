@@ -1,6 +1,6 @@
 ## 1. Settings and platform boundary
 
-- [x] 1.1 Add default-off `overlay_enabled` and strict `[overlay] enabled` loading, with persistence through the shared flag mutation path; verify default/missing config, true/false round trips, invalid types, and preservation of unrelated TOML content in config tests.
+- [x] 1.1 Add default-on `overlay_enabled` and strict `[overlay] enabled` loading, with persistence through the shared flag mutation path; verify default/missing config, true/false round trips, invalid types, and preservation of unrelated TOML content in config tests.
 - [x] 1.2 Add the shared SettingsModel preference setter and macOS General toggle, plus available Linux/X11 GTK toggle and an X11 availability note on unsupported displays; verify save errors restore persisted state and native settings use the shared model.
 - [x] 1.3 Apply the preference through daemon config reload and Settings-close handling, including deletion resetting defaults and enable waiting for the next recording; verify live-disable and reload tests.
 
@@ -29,7 +29,7 @@
 - [x] 5.2 Review on an available macOS desktop with real microphone input: silence, quiet/loud speech, cloud/local processing, cancellation, fast restart, off/on settings, reduced motion, and quit; record visual/performance observations and explicitly identify unavailable checks rather than marking them passed.
 - [x] 5.3 Verify actual app focus, cursor, click-through, hotkeys, paste destination, and clipboard restoration in editor and terminal, including app switches and full-screen Spaces; compare with overlay off and record any unavailable desktop checks.
 - [x] 5.4 Verify actual screenshot pixels/OCR exclude the visible overlay during initial capture and cloud fallback, and verify placement on multiple displays with differing layouts/scales where available; record evidence or the precise hardware/permission limitation.
-- [x] 5.5 Update README, settings/config documentation, and relevant UI documentation with enablement instructions, default-off behavior, macOS and Linux/X11 coverage, unsupported/headless limits, and reduced-motion behavior; verify documentation agrees with implemented settings and delivered coverage.
+- [x] 5.5 Update README, settings/config documentation, and relevant UI documentation with enablement instructions, default-on behavior, macOS and Linux/X11 coverage, unsupported/headless limits, and reduced-motion behavior; verify documentation agrees with implemented settings and delivered coverage.
 - [x] 5.6 Review implementation against every delta scenario and deliver a validation record with automated results, performed manual checks, unavailable checks, remaining risks, and how to enable; complete tasks only with evidence matching their acceptance criteria.
 
 Validation evidence and explicitly unavailable desktop checks: [validation.md](validation.md).
@@ -64,7 +64,7 @@ Validation evidence and explicitly unavailable desktop checks: [validation.md](v
 - [x] 7.10 Integrate the microphone directly into the pill without the square plate and reduce status text to 8 px; show native Mac/Linux previews.
 - [x] 7.11 Hide and acknowledge dismissal before text injection, including partial fallback, without a completion fade or history-save delay; test ordering and bounded failure behavior and update the local build.
 
-- [x] 7.12 Distinguish recording with a red microphone grille and transcription with blue in both overlay and menu bar, and trim the panel to 224 × 44; render, verify and install the refined build. After comparing alternatives, the user chose to keep sky blue (#50BEFF).
+- [x] 7.12 Distinguish recording with a red microphone grille and transcription with blue in both overlay and menu bar, and trim the panel to 224 × 44; render, verify and install the refined build. After comparing alternatives, the user chose sky blue (#50BEFF); superseded on 2026-10-01 by transparent slots without glow in the overlay.
 
 - [x] 7.13 Use silver for local waveform/processing feedback and show a silver microphone-grille preview beside the selected sky blue.
 

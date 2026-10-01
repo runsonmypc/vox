@@ -65,7 +65,7 @@ class Config:
     sounds_enabled: bool = True
 
     # Optional native recording feedback (macOS and Linux X11)
-    overlay_enabled: bool = False
+    overlay_enabled: bool = True
 
     # Attenuation
     attenuation_enabled: bool = True

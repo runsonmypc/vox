@@ -82,7 +82,7 @@ that section.
 | `[transcription] keep_failed_audio` | `true` | Keep failed recordings locally until recovery or deletion. Turning off stops new retention and retries; delete existing audio in History. |
 | `[context] screen` | `true` | Screen hints, see [Privacy](privacy.md#screen-hints-context-screen). |
 | `[sounds] enabled` | `true` | Play sounds for start, stop, cancel and errors. |
-| `[overlay] enabled` | `false` | Show the recording waveform and transcription status on macOS and Linux/X11 desktops. |
+| `[overlay] enabled` | `true` | Show the recording waveform and transcription status on macOS and Linux/X11 desktops. |
 | `[attenuation] enabled` | `true` | Lower the system volume while recording. |
 | `[attenuation] level` | `0.5` | Recording volume as a fraction of the current volume. |
 | `[snippets]` | none | `"trigger phrase" = "expansion"` pairs. |
@@ -106,20 +106,22 @@ Vox Transfer is running is logged and ignored, and the previous settings stay in
 
 ## Recording overlay
 
-On macOS or Linux/X11, choose **General → Show recording overlay**, or add:
+The overlay is on by default on macOS and Linux/X11. To turn it off, uncheck
+**General → Show recording overlay**, or add:
 
 ```toml
 [overlay]
-enabled = true
+enabled = false
 ```
 
-It is off by default. Enabling applies to the next recording; disabling dismisses the current
-panel as soon as Settings closes or the file change is picked up. Deleting the settings file
+An explicit `enabled = false` remains off after an update. Enabling applies to the next recording;
+disabling dismisses the current panel as soon as Settings closes or the file change is picked up. Deleting the settings file
 restores the default. Native Wayland and headless sessions continue without a panel.
 Linux Settings marks the option unavailable outside X11.
 
-The compact panel places its status beneath the waveform. Its microphone grille is red while
-recording and blue while transcribing, matching the menu bar/tray. It shows **Listening** with a stylized drifting waveform whose height follows microphone levels. It then shows **Transcribing…** or
+The panel stays charcoal in both light and dark system appearances, with 8-point corners matching
+the website demo. Its microphone grille is red while recording and transparent while transcribing,
+showing the panel background through the slots. It shows **Listening** with a stylized drifting waveform whose height follows microphone levels. It then shows **Transcribing…** or
 **Transcribing locally…** in silver for local processing. During transcription, a glowing bead
 loops across a horizontal line to indicate activity, without estimating completion. It stays near the bottom of the display
 where recording started, lets clicks through outside the small **×** button at the top right, and disappears before text is pasted. Click **×** to cancel recording or transcription without changing app focus. Double-tap cancellation is off by default; set `[hotkey] double_tap_cancel = true` to enable it. Empty or

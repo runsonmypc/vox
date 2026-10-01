@@ -4,7 +4,7 @@ Vox Transfer currently gives desktop users little visual feedback while dictatin
 
 ## What Changes
 
-- Add a persisted “Show recording overlay” General setting, off by default, using the shared settings model and native settings controls.
+- Add a persisted “Show recording overlay” General setting, on by default, using the shared settings model and native settings controls.
 - Deliver a native macOS and Linux/X11 floating panel near the bottom center of the target app's display, starting at approximately 224 × 44 logical pixels, with a prominent Vox icon, charcoal background, rounded border, layered waveform in brass for cloud or silver for local, and short status centered underneath the waveform.
 - Drive “Listening” and smooth waveform amplitude from actual recording and microphone levels. Show a horizontal line with a looping glowing bead and “Transcribing…” while processing, or “Transcribing locally…” with silver for whisper.cpp.
 - Hide before pasting text, fade on empty/no-speech completion, dismiss immediately on cancellation, and clear stale state on errors, disable, and quit. Isolate updates by dictation generation.

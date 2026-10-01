@@ -101,8 +101,10 @@ def make_icon(state: IconState, size: int = ICON_SIZE, light: bool = False) -> I
     return img.resize((size, size), Image.LANCZOS)
 
 
-def make_app_icon(size: int = 1024, *, with_plate: bool = True, state: IconState | None = None) -> Image.Image:
-    """Brass cog microphone, with an optional gunmetal launcher plate."""
+def make_app_icon(
+    size: int = 1024, *, with_plate: bool = True, state: IconState | None = None, grille_lit: bool = True,
+) -> Image.Image:
+    """Brass cog microphone; an unlit grille has transparent slots and no glow."""
     img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     if with_plate:
         inset, radius = round(size * 100 / 1024), round(size * 185 / 1024)  # the macOS app icon grid
@@ -127,11 +129,14 @@ def make_app_icon(size: int = 1024, *, with_plate: bool = True, state: IconState
         placed.append(full)
     capsule, stand, slots = placed
 
-    grille = _ACTIVE_COLORS.get(state, _LIT)
-    glow = Image.new("RGBA", (size, size), _ACTIVE_COLORS.get(state, _GLOW))
-    glow.putalpha(slots.filter(ImageFilter.GaussianBlur(size / 34)))
-    img.alpha_composite(glow)
+    if grille_lit:
+        glow = Image.new("RGBA", (size, size), _ACTIVE_COLORS.get(state, _GLOW))
+        glow.putalpha(slots.filter(ImageFilter.GaussianBlur(size / 34)))
+        img.alpha_composite(glow)
     _fill(img, stand, _BRASS)
     _fill(img, capsule, _BONE)
-    _fill(img, slots, grille)
+    if grille_lit:
+        _fill(img, slots, _ACTIVE_COLORS.get(state, _LIT))
+    else:
+        _fill(img, slots, (0, 0, 0, 0))
     return img

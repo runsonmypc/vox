@@ -93,7 +93,7 @@
 # Also available in General Settings. Native Wayland/headless sessions have no overlay.
 # Enabling waits for the next recording; disabling dismisses it when the change is applied.
 # Follows macOS Reduce Motion or disabled Linux animations with a static line and immediate transitions.
-# enabled = false
+# enabled = true
 
 [sounds]
 # Play a sound when dictation starts, stops, is cancelled or fails, when the hotkey is ignored

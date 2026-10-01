@@ -4,8 +4,8 @@ Date: 2026-09-30. Change: `add-recording-overlay` (spec-driven).
 
 ## Delivered behavior and enablement
 
-The overlay is **off by default**. On macOS or Linux/X11, enable **Settings → General → Show recording
-overlay**, or use `[overlay] enabled = true` in `config.toml`. Enabling during an operation waits
+The overlay is **on by default** on macOS and Linux/X11. Turn it off in **Settings → General → Show recording
+overlay**, or use `[overlay] enabled = false` in `config.toml`. Enabling during an operation waits
 for the next recording; disabling applies through the existing poll/Settings-close path and
 releases the panel, meter, timer and observers. Native Wayland and headless operation use a no-op backend.
 
@@ -105,12 +105,12 @@ implementation defect was found.
 | Screen hints | Existing settings and window capture regression tests pass. |
 | A level from the file that is not a step | Existing settings tests preserve 33% until editing. |
 | Overlay opt in | Config round trips, real macOS checkbox, Settings-close and poll tests. |
-| Default off | Missing/default config tests; headless/no-op and deferred enabling tests. |
+| Original default off (superseded on 2026-10-01) | Missing/default config tests; headless/no-op and deferred enabling tests. |
 | Save failure | Invalid TOML and write-error tests restore persisted model/control state. |
 | Linux availability | Native GTK4 toggle persists on X11; unsupported display note; all 54 GTK4 tests pass. |
 | Recording starts on a secondary display | Negative-origin/spanning/mixed logical geometry tests and native injected-screen tests; physical secondary display unavailable. |
 | No target window geometry | Quartz application-PID fallback, primary fallback, visible bounds, small screens and display-removal tests. |
-| Disabled or failed start | Daemon failed-start/default-off tests; no panel is created before microphone success. |
+| Disabled or failed start | Daemon failed-start/explicitly-disabled tests; no panel is created before microphone success. |
 | Speech and silence | Silence/quiet/loud/int16-limit/stereo block tests, deterministic attack/release/stale decay, real quiet-room microphone; human speech tuning unavailable. |
 | Slow UI | One pending dispatch after repeated changes; latest-value slot, streaming-preservation tests and callback benchmark. |
 | Streaming fallback | Daemon integration keeps cloud processing and passes the guard to the fallback screenshot; real guarded processing screenshot/OCR tested separately. |
@@ -420,3 +420,15 @@ actual processing panel are in `validation/linux-release-1.2.0/`.
 Release preparation: version 1.2.0, changelog and locks regenerated with uv 0.12.19.
 Lock consistency and all supported-platform wheel checks passed. The complete local
 macOS suite passed (1,297 tests, 68 skips), as did Ruff.
+
+## Default preference correction (2026-10-01)
+
+The overlay now defaults to enabled on supported macOS and Linux/X11 desktops. Missing files, omitted preferences, and empty overlay sections inherit this default; explicit false preferences remain off. Config deletion enables the next recording, and live disabling still dismisses the current panel.
+
+Validation: 242 focused tests passed, 1 skipped; Ruff and whitespace checks passed. Installed on the Mac and Linux PC and restarted both services. Three actual daemon startups on each native GUI loop, using the default preference, real screenshots, and OCR of a synthetic window, each produced one screenshot followed by one overlay appearance with no subsequent hide. Audio was controlled and no provider was contacted. Independent implementation review found no material code defects; its two wording findings were corrected. Earlier default-off evidence above records the superseded behavior.
+
+## Final overlay appearance (2026-10-01)
+
+The user selected transparent transcription grille slots without glow and 8-point corners matching the personal-site demo. Both native backends use the shared radius for drawing; X11 also uses it for the window shape. The overlay palette stays charcoal across system appearances. Historical blue-grille and 12-point-corner previews above are superseded.
+
+Validation: 122 focused tests passed, 7 platform tests skipped. Native pixel renders of the installed Mac and Linux backends were byte-for-byte identical between light and dark system appearances, and sampled panel pixels remained dark. Three actual daemon startups on each desktop retained screenshot-before-show ordering without subsequent hides. Installed and restarted both services. The README app animation was regenerated from production AppKit frames with complete-result paste, text-bound and screen-hint checks.
