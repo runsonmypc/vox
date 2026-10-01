@@ -278,6 +278,24 @@ class Overlay:
             except Exception:
                 self._fail()
 
+    def defer_for_capture(self):
+        """Reserve suppression before queuing screen capture; return an idempotent release.
+
+        The worker may wait for the OCR pool or try accessibility before taking a
+        screenshot. Reserving on the daemon loop prevents a show/hide/show flash.
+        """
+        token = object()
+        with self._lock:
+            self._captures.add(token)
+
+        def release():
+            with self._lock:
+                if token in self._captures:
+                    self._captures.remove(token)
+                    self._schedule()
+
+        return release
+
     @contextmanager
     def capture_guard(self, timeout=CAPTURE_TIMEOUT):
         """Worker-only guard for screenshot acquisition (OCR itself need not hold it).

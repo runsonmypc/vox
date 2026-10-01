@@ -444,10 +444,17 @@ class _Daemon:
         #    its keywords when it connects, before any capture could finish, so it doesn't start one.
         #    Local mode on Linux leaves screen words out of its prompt, so it doesn't capture either.
         context = await asyncio.to_thread(detect_active_window, config)
-        self.overlay.listening(session.generation, context, session.mode, self.recorder)
         local_without_hints = session.mode == "whisper_cpp" and not uses_screen_hints()
         if config.context_screen and session.mode != "streaming" and not local_without_hints:
-            session.screen_future = start_screen_capture(context, capture_guard=self.overlay.capture_guard)
+            release_capture = self.overlay.defer_for_capture()
+            try:
+                session.screen_future = start_screen_capture(
+                    context, capture_guard=self.overlay.capture_guard, on_capture_ready=release_capture,
+                )
+            except Exception:
+                release_capture()
+                raise
+        self.overlay.listening(session.generation, context, session.mode, self.recorder)
 
         # 5. If streaming mode, initiate streaming connection and chunk worker
         if session.mode == "streaming":

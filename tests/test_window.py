@@ -5,14 +5,17 @@ All platform tools and frameworks are faked: nothing captures the screen or quer
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import itertools
 import re
 import subprocess
 import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 
@@ -566,3 +569,89 @@ def test_linux_capture_guard_restores_before_ocr(acquired, raises):
     with patch('vox.window.subprocess.run', side_effect=run):
         assert window._read_ocr('123', guard) == ('target text' if acquired and not raises else '')
     assert events[-1] == ('ocr' if acquired and not raises else 'restored')
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize('platform', ['darwin', 'linux'])
+async def test_capture_ready_follows_screenshot_and_precedes_recognition(platform):
+    events = []
+    vision, _ = _fake_vision('target text')
+    handler = vision.VNImageRequestHandler.alloc.return_value.initWithURL_options_.return_value
+
+    def recognize(*_):
+        assert events == ['screenshot', 'ready']
+        events.append('ocr')
+        return True, None
+
+    handler.performRequests_error_.side_effect = recognize
+
+    def run(args, **_):
+        if args[0] in ('screencapture', 'maim'):
+            assert not events
+            events.append('screenshot')
+            if args[0] == 'screencapture':
+                Path(args[-1]).write_bytes(b'PNG')
+            return SimpleNamespace(returncode=0, stdout=b'PNG')
+        assert args[0] == 'tesseract'
+        recognize()
+        return SimpleNamespace(stdout=b'target text')
+
+    modules = {'objc': _fake_objc(), 'Vision': vision, 'Foundation': MagicMock()}
+    with patch('vox.window.sys', SimpleNamespace(platform=platform)), \
+         patch.dict(sys.modules, modules), \
+         patch('vox.window._read_atspi_text', return_value=''), \
+         patch('vox.window._has_ocr', return_value=True), \
+         patch('vox.window.subprocess.run', side_effect=run):
+        context = AppContext('code', 'editor', AppType.EDITOR, win_id='123', pid='456')
+        result = await window.start_screen_capture(context, on_capture_ready=lambda: events.append('ready'))
+    assert result == 'target text'
+    assert events == ['screenshot', 'ready', 'ocr']
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize('fails', [False, True])
+async def test_capture_ready_without_screenshot_or_after_worker_failure(fails):
+    ready = Mock()
+    with patch('vox.window._capture_screen_text', side_effect=RuntimeError('failed') if fails else None,
+               return_value='accessible text'):
+        context = AppContext('code', 'editor', AppType.EDITOR)
+        future = window.start_screen_capture(context, on_capture_ready=ready)
+        if fails:
+            with pytest.raises(RuntimeError, match='failed'):
+                await future
+        else:
+            assert await future == 'accessible text'
+    ready.assert_called_once_with()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize('queued', [False, True])
+async def test_capture_cancellation_releases_when_worker_is_safe(queued):
+    entered, release, ready = [threading.Event() for _ in range(3)]
+
+    def block(*_):
+        entered.set()
+        assert release.wait(2)
+        return ''
+
+    with ThreadPoolExecutor(max_workers=1) as pool, \
+         patch('vox.window._ocr_pool', pool), \
+         patch('vox.window._capture_screen_text', side_effect=block) as capture:
+        if queued:
+            pool.submit(block)
+            assert await asyncio.to_thread(entered.wait, 1)
+        try:
+            context = AppContext('code', 'editor', AppType.EDITOR)
+            future = window.start_screen_capture(context, on_capture_ready=ready.set)
+            if not queued:
+                assert await asyncio.to_thread(entered.wait, 1)
+            future.cancel()
+            await asyncio.sleep(0)  # propagate cancellation to the concurrent future
+            if queued:
+                assert await asyncio.to_thread(ready.wait, 1)
+                capture.assert_not_called()
+            else:
+                assert not ready.is_set()  # cancellation cannot expose a running screenshot
+        finally:
+            release.set()
+        assert await asyncio.to_thread(ready.wait, 1)

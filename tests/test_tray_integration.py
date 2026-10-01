@@ -93,7 +93,9 @@ def daemon_env(transcript="hello world", screen_capture=None):
 
     loop = asyncio.get_running_loop()
 
-    def captured(ctx, *, capture_guard=None):
+    def captured(ctx, *, capture_guard=None, on_capture_ready=None):
+        if on_capture_ready is not None:
+            on_capture_ready()
         future = loop.create_future()
         future.set_result("")
         return future

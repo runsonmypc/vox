@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from enum import Enum
 
@@ -283,13 +284,36 @@ def detect_active_window(config: Config) -> AppContext:
     return _detect_active_window_linux(config)
 
 
-def start_screen_capture(ctx: AppContext, *, capture_guard=None) -> asyncio.Future:
+def start_screen_capture(ctx: AppContext, *, capture_guard=None, on_capture_ready=None) -> asyncio.Future:
     """Start screen text capture in background. Returns a future with the result.
 
     Call this when recording starts. By the time recording stops,
-    the screen text will be ready.
+    the screen text will be ready. on_capture_ready releases initial overlay
+    suppression after the screenshot, before OCR, or when no screenshot is needed.
     """
     loop = asyncio.get_running_loop()
+    if on_capture_ready is not None:
+        released = False
+
+        def ready():
+            nonlocal released
+            if not released:
+                released = True
+                on_capture_ready()
+
+        @contextmanager
+        def guard():
+            try:
+                with capture_guard() if capture_guard is not None else nullcontext(True) as hidden:
+                    yield hidden
+            finally:
+                ready()
+
+        # The underlying future owns cleanup: cancelling its asyncio wrapper must
+        # keep a running screenshot suppressed, but release a job cancelled in queue.
+        future = _ocr_pool.submit(_capture_screen_text, ctx.win_id, ctx.pid, ctx.app_type, guard)
+        future.add_done_callback(lambda _: ready())
+        return asyncio.wrap_future(future, loop=loop)
     if capture_guard is None:
         return loop.run_in_executor(_ocr_pool, _capture_screen_text, ctx.win_id, ctx.pid, ctx.app_type)
     return loop.run_in_executor(_ocr_pool, _capture_screen_text, ctx.win_id, ctx.pid, ctx.app_type, capture_guard)

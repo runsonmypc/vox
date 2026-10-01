@@ -281,6 +281,32 @@ def test_capture_acknowledges_hide_and_overlapping_leases(rig):
     assert backend.visible and backend.snapshot.generation == 2
 
 
+@pytest.mark.parametrize('action', ['processing', 'dismiss', 'restart', 'disable', 'close'])
+def test_deferred_capture_release_renders_current_state(rig, action):
+    release = rig.overlay.defer_for_capture()
+    rig.start()
+    rig.flush()
+    assert not rig.made
+    if action == 'restart':
+        rig.start(2)
+    elif action == 'disable':
+        rig.overlay.set_enabled(False)
+    elif action == 'processing':
+        rig.overlay.processing(1)
+    else:
+        getattr(rig.overlay, action)()
+    rig.flush()
+    release()
+    release()
+    rig.flush()
+    assert not rig.overlay._captures
+    if action in ('processing', 'restart'):
+        assert rig.made[0].visible
+        assert rig.made[0].snapshot == rig.overlay.snapshot
+    else:
+        assert not rig.made
+
+
 @pytest.mark.parametrize('action', ['dismiss', 'close', 'disable'])
 def test_capture_release_does_not_resurrect_ineligible_panel(rig, action):
     rig.start()

@@ -154,6 +154,13 @@ async def running(config, tray=None, *, history=None, cpp=None, streaming=None):
         enter("vox.daemon._config_reloader", side_effect=idle_reloader)
         enter("vox.daemon._platform_notice", return_value=None)
 
+        def captured(*_, on_capture_ready=None, **__):
+            if on_capture_ready is not None:
+                on_capture_ready()
+            return mocks["capture"].return_value
+
+        mocks["capture"].side_effect = captured
+
         daemon = _Daemon(config, tray)
         harness = Harness(daemon, asyncio.create_task(daemon.run()), mocks)
         try:

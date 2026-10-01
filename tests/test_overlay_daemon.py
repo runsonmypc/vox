@@ -1,5 +1,7 @@
 """Use the actual daemon lifecycle with controlled audio and provider boundaries."""
 import asyncio
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
@@ -9,6 +11,74 @@ from test_pipeline_daemon import SILENT, openai_config, running, until
 from vox.config import Config, load_config
 from vox.daemon import State, _config_reloader
 from vox.errors import AudioError
+from vox.window import start_screen_capture
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize('existing_panel', [False, True])
+async def test_startup_capture_shows_once_before_ocr_finishes(rig, existing_panel):
+    entered, screenshot, recognize = [threading.Event() for _ in range(3)]
+    if existing_panel:
+        rig.start(0)
+        rig.flush()
+        rig.overlay.dismiss()
+        rig.flush()
+
+    def capture(_win_id, _pid, _app_type, guard):
+        entered.set()
+        assert screenshot.wait(2)
+        with guard() as hidden:
+            assert hidden
+            assert not any(backend.visible for backend in rig.made)
+        assert recognize.wait(2)
+        return 'screen words'
+
+    with ThreadPoolExecutor(max_workers=1) as pool, \
+         patch('vox.window._ocr_pool', pool), \
+         patch('vox.window._capture_screen_text', capture), \
+         patch('vox.daemon.create_overlay', return_value=rig.overlay):
+        async with running(openai_config(attenuation_enabled=False)) as h:
+            h.recorder.latest_level = None
+            h.capture.side_effect = start_screen_capture
+            try:
+                await h.daemon._start_recording()
+                await until(entered.is_set)
+                rig.flush()
+                h.recorder.start.assert_called_once()
+                assert rig.overlay.snapshot.phase == 'listening'
+                assert not any(backend.visible for backend in rig.made)
+                if not existing_panel:
+                    assert not rig.made  # includes the delay before the screenshot guard is entered
+                screenshot.set()
+
+                def capture_ready():
+                    rig.flush()  # acknowledge the worker's hide when reusing a native panel
+                    return not rig.overlay._captures
+
+                await until(capture_ready)
+                rig.flush()
+                backend = rig.made[0]
+                assert backend.visible
+                assert not h.daemon.session.screen_future.done()  # OCR is still running
+                backend.hide = Mock(wraps=backend.hide)
+                recognize.set()
+                await h.daemon.session.screen_future
+                rig.flush()
+                backend.hide.assert_not_called()
+                assert backend.visible
+            finally:
+                screenshot.set()
+                recognize.set()
+
+
+@pytest.mark.anyio
+async def test_capture_submission_failure_releases_startup_suppression(rig):
+    with patch('vox.daemon.create_overlay', return_value=rig.overlay):
+        async with running(openai_config(attenuation_enabled=False)) as h:
+            h.capture.side_effect = RuntimeError('executor unavailable')
+            with pytest.raises(RuntimeError, match='executor unavailable'):
+                await h.daemon._start_recording()
+            assert not rig.overlay._captures
 
 
 @pytest.mark.anyio

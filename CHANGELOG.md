@@ -3,6 +3,14 @@
 All notable changes to Vox Transfer are listed here. Vox Transfer follows
 [semantic versioning](https://semver.org/).
 
+## [1.2.1] - 2026-10-01
+
+### Fixed
+
+- Prevent the recording overlay from flickering at startup on macOS and Linux X11
+  when screen hints are enabled. It first appears after the screenshot is taken,
+  while text recognition continues in the background.
+
 ## [1.2.0] - 2026-10-01
 
 ### Recording overlay
@@ -166,6 +174,7 @@ The first public release. The command is `vox`, and its settings live in `~/.con
 - `install.sh` refuses to run as root, retries `apt-get` after refreshing package lists, and tells
   users of other distributions which packages to install.
 
+[1.2.1]: https://github.com/runsonmypc/vox/releases/tag/v1.2.1
 [1.2.0]: https://github.com/runsonmypc/vox/releases/tag/v1.2.0
 [1.1.0]: https://github.com/runsonmypc/vox/releases/tag/v1.1.0
 [1.0.0]: https://github.com/runsonmypc/vox/releases/tag/v1.0.0
