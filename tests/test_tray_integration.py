@@ -69,6 +69,9 @@ class RecordingTray:
     def stop(self):
         self.stopped = True
 
+    def dispatch_ui(self, callback):
+        callback()
+
 
 @contextmanager
 def daemon_env(transcript="hello world", screen_capture=None):
@@ -90,7 +93,7 @@ def daemon_env(transcript="hello world", screen_capture=None):
 
     loop = asyncio.get_running_loop()
 
-    def captured(ctx):
+    def captured(ctx, *, capture_guard=None):
         future = loop.create_future()
         future.set_result("")
         return future
@@ -162,7 +165,7 @@ async def test_dictation_turn_propagates_states_and_persists_history():
 async def test_a_screen_capture_that_never_finishes_still_pastes():
     tray = RecordingTray()
     loop = asyncio.get_running_loop()
-    with daemon_env("still pasted", screen_capture=lambda ctx: loop.create_future()) as env:
+    with daemon_env("still pasted", screen_capture=lambda ctx, **kwargs: loop.create_future()) as env:
         task = await start_daemon(tray)
         _, queue, _, _ = tray.attached
         await queue.put("toggle")
@@ -513,7 +516,9 @@ def test_glib_dispatch_runs_once_on_main_loop_and_logs_errors(caplog):
     _glib_dispatch(lambda: 1 / 0)
     assert calls == []  # deferred to the main loop
     context = GLib.MainContext.default()
-    for _ in range(5):
+    for _ in range(100):
+        if not context.pending():
+            break
         context.iteration(False)
     assert calls == [(1, 2)]
     assert "Tray update failed" in caplog.text

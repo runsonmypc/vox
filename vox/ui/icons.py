@@ -38,7 +38,7 @@ class IconState(Enum):
 
 _ACTIVE_COLORS = {
     IconState.RECORDING: (255, 59, 48, 255),   # red
-    IconState.PROCESSING: (255, 159, 10, 255),  # amber
+    IconState.PROCESSING: (80, 190, 255, 255),  # blue, distinct from recording red
 }
 
 
@@ -101,21 +101,22 @@ def make_icon(state: IconState, size: int = ICON_SIZE, light: bool = False) -> I
     return img.resize((size, size), Image.LANCZOS)
 
 
-def make_app_icon(size: int = 1024) -> Image.Image:
-    """Launcher icon: brass cog, bone capsule and red-lit grille on a gunmetal rounded square."""
+def make_app_icon(size: int = 1024, *, with_plate: bool = True, state: IconState | None = None) -> Image.Image:
+    """Brass cog microphone, with an optional gunmetal launcher plate."""
     img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    inset, radius = round(size * 100 / 1024), round(size * 185 / 1024)  # the macOS app icon grid
-    box = (inset, inset, size - inset, size - inset)
+    if with_plate:
+        inset, radius = round(size * 100 / 1024), round(size * 185 / 1024)  # the macOS app icon grid
+        box = (inset, inset, size - inset, size - inset)
 
-    plate = Image.new("L", (size, size), 0)
-    ImageDraw.Draw(plate).rounded_rectangle(box, radius=radius, fill=255)
-    ramp = Image.linear_gradient("L").resize((size, size))
-    shade = Image.merge("RGB", [ramp.point([round(a + (b - a) * v / 255) for v in range(256)])
-                                for a, b in zip(_PLATE_TOP, _PLATE_BOTTOM, strict=True)])
-    img.paste(shade, (0, 0), plate)
-    rim = Image.new("L", (size, size), 0)
-    ImageDraw.Draw(rim).rounded_rectangle(box, radius=radius, outline=70, width=max(2, size // 256))
-    _fill(img, rim, (255, 255, 255, 255))
+        plate = Image.new("L", (size, size), 0)
+        ImageDraw.Draw(plate).rounded_rectangle(box, radius=radius, fill=255)
+        ramp = Image.linear_gradient("L").resize((size, size))
+        shade = Image.merge("RGB", [ramp.point([round(a + (b - a) * v / 255) for v in range(256)])
+                                    for a, b in zip(_PLATE_TOP, _PLATE_BOTTOM, strict=True)])
+        img.paste(shade, (0, 0), plate)
+        rim = Image.new("L", (size, size), 0)
+        ImageDraw.Draw(rim).rounded_rectangle(box, radius=radius, outline=70, width=max(2, size // 256))
+        _fill(img, rim, (255, 255, 255, 255))
 
     glyph_size = round(size * 0.66)
     offset = ((size - glyph_size) // 2, (size - glyph_size) // 2 + round(size * 0.01))
@@ -126,10 +127,11 @@ def make_app_icon(size: int = 1024) -> Image.Image:
         placed.append(full)
     capsule, stand, slots = placed
 
-    glow = Image.new("RGBA", (size, size), _GLOW)
+    grille = _ACTIVE_COLORS.get(state, _LIT)
+    glow = Image.new("RGBA", (size, size), _ACTIVE_COLORS.get(state, _GLOW))
     glow.putalpha(slots.filter(ImageFilter.GaussianBlur(size / 34)))
     img.alpha_composite(glow)
     _fill(img, stand, _BRASS)
     _fill(img, capsule, _BONE)
-    _fill(img, slots, _LIT)
+    _fill(img, slots, grille)
     return img

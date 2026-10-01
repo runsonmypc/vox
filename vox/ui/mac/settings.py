@@ -196,6 +196,7 @@ class GeneralPage(NSObject):
 
         self.keep_failed_audio = _checkbox(KEEP_FAILED_AUDIO, self, "recoveryChanged:")
         self.sounds = _checkbox(SOUNDS_NOTE, self, "soundsChanged:")
+        self.overlay = _checkbox("Show recording overlay", self, "overlayChanged:")
         self.lower = _checkbox(LOWER_AUDIO, self, "lowerChanged:")
         self.level = AppKit.NSSlider.sliderWithValue_minValue_maxValue_target_action_(50, 0, 100, self, "levelChanged:")
         self.level.setNumberOfTickMarks_(21)  # 5% steps
@@ -217,6 +218,7 @@ class GeneralPage(NSObject):
             ("Recovery", self.keep_failed_audio),
             (None, _note(KEEP_FAILED_AUDIO_NOTE)),
             (SOUNDS, self.sounds),
+            ("Overlay", self.overlay),
             ("Other audio", self.lower),
             (LOWER_AUDIO_LEVEL, level_row),
             (SCREEN_HINTS, self.screen),
@@ -231,11 +233,12 @@ class GeneralPage(NSObject):
         _fill(self.limit, *self._labels(model.limits()))
         _set_on(self.keep_failed_audio, config.keep_failed_audio)
         _set_on(self.sounds, config.sounds_enabled)
+        _set_on(self.overlay, config.overlay_enabled)
         _set_on(self.lower, config.attenuation_enabled)
         self.level.setDoubleValue_(percent(config.attenuation_level))
         self.level_text.setStringValue_(f"{percent(config.attenuation_level)}%")
         _set_on(self.screen, config.context_screen)
-        for control in (self.microphone, self.refresh_button, self.limit, self.sounds, self.lower, self.screen, self.keep_failed_audio):
+        for control in (self.microphone, self.refresh_button, self.limit, self.sounds, self.overlay, self.lower, self.screen, self.keep_failed_audio):
             control.setEnabled_(writable)
         self.level.setEnabled_(writable and config.attenuation_enabled)
         self.owner.set_footer(self.footer)
@@ -267,6 +270,9 @@ class GeneralPage(NSObject):
 
     def soundsChanged_(self, sender) -> None:
         self.owner.changed(self.model.set_sounds(_on(self.sounds)))
+
+    def overlayChanged_(self, sender) -> None:
+        self.owner.changed(self.model.set_overlay(_on(self.overlay)))
 
     def lowerChanged_(self, sender) -> None:
         self.owner.changed(self.model.set_attenuation(_on(self.lower)))

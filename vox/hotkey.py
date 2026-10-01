@@ -91,6 +91,7 @@ class HotkeyListener:
         self._queue = queue
         self._hotkey_name = resolve_key(config.hotkey)
         self._fallback = config.hotkey_fallback
+        self._double_tap_cancel = config.double_tap_cancel
         self._double_tap_timeout_ms = config.double_tap_timeout_ms
         self._listener: keyboard.Listener | None = None
 
@@ -160,7 +161,8 @@ class HotkeyListener:
                 with self._lock:
                     if self._modifier_pressed:
                         self._other_key_pressed = True  # the tap-alone key was held for this combination
-                    if self._last_fallback_time > 0 and (now - self._last_fallback_time) * 1000 <= self._double_tap_timeout_ms:
+                    if (self._double_tap_cancel and self._last_fallback_time > 0
+                            and (now - self._last_fallback_time) * 1000 <= self._double_tap_timeout_ms):
                         self._last_fallback_time = 0.0
                         is_cancel = True
                     else:
@@ -197,7 +199,8 @@ class HotkeyListener:
                 held_ms = (now - self._press_time) * 1000
                 self._modifier_pressed = False
                 if was_solo and held_ms >= self._min_hold_ms:
-                    if self._last_release_time > 0 and (now - self._last_release_time) * 1000 <= self._double_tap_timeout_ms:
+                    if (self._double_tap_cancel and self._last_release_time > 0
+                            and (now - self._last_release_time) * 1000 <= self._double_tap_timeout_ms):
                         self._last_release_time = 0.0
                         is_cancel = True
                     else:

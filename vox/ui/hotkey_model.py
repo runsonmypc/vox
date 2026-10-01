@@ -20,11 +20,15 @@ DEFAULT_KEY = Config.hotkey  # "right_shift"; the dataclass default, not a new o
 
 # What both windows say, so macOS and Linux never drift apart
 TITLE = "Hotkey"
-INTRO = "Tap the hotkey on its own to start dictation, and tap it again to stop and paste. Double-tap it to cancel."
+INTRO = (
+    "Tap the hotkey on its own to start dictation, and tap it again to stop and paste. "
+    "Enable the recording overlay in General to cancel with ×. "
+    "Double-tap cancellation is off by default and can be enabled in config.toml."
+)
 KEY_ROW = "Hotkey"
 COMBINATION_ROW = "Key combination"
 COMBINATION_NOTE = (
-    "Optional. Also starts and stops dictation, and cancels when pressed twice quickly. "
+    "Optional. Also starts and stops dictation, and cancels on double-tap when enabled. "
     "The app you’re in receives it too."
 )
 CLEAR_TOOLTIP = "Remove the key combination"

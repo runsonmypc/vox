@@ -7,6 +7,7 @@ import io
 import logging
 import math
 import threading
+import time
 import warnings
 import wave
 from collections.abc import AsyncGenerator, Callable, Iterator
@@ -418,6 +419,9 @@ class Recorder:
         self._resolved_device: int | None = None
         self._last_resolved_spec: int | str | None = None
         self._pending_config: Config | None = None
+        self._level_generation: int | None = None
+        self.latest_level: tuple[int, float, float] | None = None
+        self._meter_failed = False
         # Re-initialising PortAudio must never overlap opening or closing a stream
         self._lock = threading.Lock()
 
@@ -550,6 +554,7 @@ class Recorder:
         """
         # A fresh queue for each recording: the tail and end marker of one that was just stopped or
         # discarded may still be on their way through the loop, and must land in the old queue
+        self.set_level_generation(None)
         self._stream_queue = None
         self.get_chunk_queue(loop)
 
@@ -572,6 +577,7 @@ class Recorder:
 
     def stop(self) -> bytes:
         """Stop active recording turn, close microphone stream, and return WAV bytes."""
+        self.set_level_generation(None)
         with self._lock:
             self._close_stream()
         self._is_recording = False
@@ -590,6 +596,7 @@ class Recorder:
 
     def discard(self) -> None:
         """Stop recording turn, close microphone stream, and discard buffered frames."""
+        self.set_level_generation(None)
         with self._lock:
             self._close_stream()
         self._is_recording = False
@@ -660,6 +667,26 @@ class Recorder:
             self._limit_reached = True
             if self._on_limit is not None:
                 self._post(self._on_limit)
+        # Optional feedback runs after all audio delivery. Only one scalar snapshot is retained;
+        # no UI calls, locks or additional audio queue are involved.
+        generation = self._level_generation
+        if generation is not None and not self._meter_failed:
+            try:
+                level = _rms(chunk.reshape(-1)) / 32768.0 if chunk.size else 0.0
+                if not math.isfinite(level):
+                    raise ValueError("nonfinite microphone level")
+                level = min(1.0, max(0.0, level))
+                if generation == self._level_generation:
+                    self.latest_level = (generation, time.monotonic(), level)
+            except Exception:
+                self._meter_failed = True
+                self.latest_level = None
+                log.warning("Recording overlay metering unavailable; audio capture continues (restart Vox to retry)")
+
+    def set_level_generation(self, generation: int | None) -> None:
+        """Opt in for one recording, or detach. A failed meter stays off for this recorder."""
+        self._level_generation = generation
+        self.latest_level = None
 
     def _to_wav(self, audio: np.ndarray) -> bytes:
         """Convert int16 numpy array to WAV bytes."""

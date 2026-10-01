@@ -46,7 +46,10 @@ py=/opt/vox/venv/bin/python
 # -P keeps the working directory off sys.path as well
 xvfb-run -a "$py" -P -c '
 import sys
-import gi, vox, vox.daemon, vox.ui.tray, pystray
+import gi, cairo, vox, vox.daemon, vox.ui.tray, pystray
+from vox.ui.x11.overlay import NativeOverlay
+panel = NativeOverlay()
+panel.close()
 assert vox.__file__.startswith("/opt/vox/venv/"), "imported vox from " + vox.__file__
 assert "pystray._appindicator" in sys.modules, "pystray fell back from AppIndicator: " + pystray.Icon.__module__
 '

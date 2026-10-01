@@ -509,3 +509,60 @@ def test_vim_title_is_an_editor():
     assert _classify("Unknown", "notes.md", Config()) == AppType.OTHER
     assert _classify("Unknown", "nvim notes.md", Config()) == AppType.EDITOR
     assert _classify("Unknown", "notes.md - VIM", Config()) == AppType.EDITOR
+
+
+@pytest.mark.parametrize('acquired,raises', [(True, False), (True, True), (False, False)])
+def test_overlay_guard_brackets_only_screenshot_and_restores(acquired, raises):
+    from contextlib import contextmanager
+
+    from vox.window import _read_vision_ocr
+
+    events = []
+    @contextmanager
+    def guard():
+        events.append('hidden')
+        try:
+            yield acquired
+        finally:
+            events.append('restored')
+
+    def shot(*args, **kwargs):
+        assert events == ['hidden']
+        events.append('screenshot')
+        if raises:
+            raise OSError('capture failed')
+        return type('Result', (), {'returncode': 1})()
+
+    with patch('vox.window.subprocess.run', side_effect=shot) as capture, patch.dict(sys.modules, {'objc': MagicMock()}):
+        assert _read_vision_ocr('123', guard) == ''
+    assert events == (['hidden', 'screenshot', 'restored'] if acquired else ['hidden', 'restored'])
+    assert capture.call_count == int(acquired)
+
+
+@pytest.mark.parametrize('acquired,raises', [(True, False), (True, True), (False, False)])
+def test_linux_capture_guard_restores_before_ocr(acquired, raises):
+    from contextlib import contextmanager
+
+    events = []
+    @contextmanager
+    def guard():
+        events.append('hidden')
+        try:
+            yield acquired
+        finally:
+            events.append('restored')
+
+    def run(args, **kwargs):
+        if args[0] == 'maim':
+            assert events == ['hidden']
+            events.append('screenshot')
+            if raises:
+                raise OSError('capture failed')
+            return SimpleNamespace(stdout=b'PNG')
+        assert events == ['hidden', 'screenshot', 'restored']
+        events.append('ocr')
+        return SimpleNamespace(stdout=b'target text')
+
+    with patch('vox.window.subprocess.run', side_effect=run):
+        assert window._read_ocr('123', guard) == ('target text' if acquired and not raises else '')
+    assert events[-1] == ('ocr' if acquired and not raises else 'restored')

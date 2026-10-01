@@ -1,0 +1,35 @@
+{
+  "passed": [
+    "focus, paste and clipboard restoration: overlay off",
+    "focus, paste and clipboard restoration: overlay listening",
+    "focus, paste and clipboard restoration: overlay processing",
+    "app switch preserves focus, paste destination and original overlay display",
+    "native raster previews for Listening, cloud processing and local processing",
+    "actual targeted screenshot/OCR excludes overlay during listening and fallback processing",
+    "native click-through moves the underlying target cursor and preserves focus",
+    "native static reduced-motion presentation and immediate completion",
+    "real microphone callbacks drive the native overlay; recorded audio discarded",
+    "disable, re-enable on next recording, and quit release native resources"
+  ],
+  "unavailable": [
+    "Human quiet/loud speech calibration and subjective motion/performance review",
+    "Actual editor and terminal applications, human mouse interaction and physical hotkey input",
+    "Full-screen Spaces and OS Settings reduced-motion toggle (callback tested)",
+    "Physical multiple-display/mixed-scale placement: only one attached display",
+    "Live cloud and whisper.cpp provider runs (lifecycle covered with controlled providers)"
+  ],
+  "screens": 1,
+  "capture_pixels_identical": false,
+  "capture_pixel_difference_bounds": [
+    329,
+    57,
+    334,
+    85
+  ],
+  "microphone": {
+    "samples": 14,
+    "minimum": 0.0,
+    "maximum": 0.002616983750938484,
+    "audio_retained": false
+  }
+}

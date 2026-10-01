@@ -152,6 +152,10 @@ class GeneralPage:
         recording.add(self.limit_row)
 
         self.sounds = _switch(SOUNDS, SOUNDS_NOTE, lambda on: owner.changed(self.model.set_sounds(on)))
+        self.overlay_available = Gdk.Display.get_default().__class__.__name__ == 'X11Display'
+        self.overlay = _switch("Show recording overlay", "" if self.overlay_available else "Available in an X11 session",
+                               lambda on: owner.changed(self.model.set_overlay(on)))
+        recording.add(self.overlay[0])
         self.lower = _switch(LOWER_AUDIO, "", lambda on: owner.changed(self.model.set_attenuation(on)))
         self.level = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, 100, 5)
         self.level.set_size_request(200, -1)
@@ -191,6 +195,8 @@ class GeneralPage:
         self.limit.fill(*model.limits())
         _set_switch(self.keep_failed_audio, config.keep_failed_audio)
         _set_switch(self.sounds, config.sounds_enabled)
+        _set_switch(self.overlay, config.overlay_enabled)
+        self.overlay[0].set_sensitive(writable and self.overlay_available)
         _set_switch(self.lower, config.attenuation_enabled)
         if not self.dragging:
             self.filling_level = True

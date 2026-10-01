@@ -54,6 +54,8 @@ uv pip uninstall --quiet --python "$venv/bin/python" setuptools
 # The tray and windows use the system's PyGObject (python3-gi), which the package depends on
 ln -s /usr/lib/python3/dist-packages/gi \
     "$("$venv/bin/python" -c 'import sysconfig; print(sysconfig.get_path("purelib"))')/gi"
+ln -s /usr/lib/python3/dist-packages/cairo \
+    "$("$venv/bin/python" -c 'import sysconfig; print(sysconfig.get_path("purelib"))')/cairo"
 
 # The package tree
 root="$work/root"
@@ -81,7 +83,7 @@ Version: $version
 Architecture: $arch
 Maintainer: Alex <45095641+runsonmypc@users.noreply.github.com>
 Installed-Size: $(du -sk --exclude=DEBIAN "$root" | cut -f1)
-Depends: python3 (>= 3.12), python3 (<< 3.13), python3-gi, gir1.2-gtk-4.0, gir1.2-adw-1, gir1.2-ayatanaappindicator3-0.1, libportaudio2, xdotool, xclip, x11-utils
+Depends: python3 (>= 3.12), python3 (<< 3.13), python3-gi, python3-gi-cairo, gir1.2-gtk-3.0, gir1.2-gtk-4.0, gir1.2-adw-1, gir1.2-ayatanaappindicator3-0.1, libportaudio2, xdotool, xclip, x11-utils
 Suggests: tesseract-ocr, maim, gir1.2-atspi-2.0
 Section: sound
 Priority: optional

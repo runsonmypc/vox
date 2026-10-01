@@ -30,6 +30,7 @@ from .recovery import RETENTION_LOCK, RecoveryStore
 from .sounds import SoundPlayer, sound_playing_until
 from .streaming import StreamingTranscriber
 from .transcribe import PartialTranscriptionError, Transcriber
+from .ui.overlay import create_overlay
 from .whisper_cpp import WhisperCppTranscriber, uses_screen_hints
 from .window import AppContext, detect_active_window, start_screen_capture
 
@@ -186,6 +187,7 @@ class _Session:
 
     mode: str
     limit_seconds: int
+    generation: int = 0
     created_at: str = field(default_factory=lambda: datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S"))
     streaming: StreamingTranscriber | None = None
     stream_task: asyncio.Task | None = None
@@ -237,6 +239,9 @@ class _Daemon:
             log.error("%s", e)
             raise SystemExit(1) from e
         self.recorder = Recorder(config)
+        self.overlay = create_overlay(config.overlay_enabled, tray.dispatch_ui if tray is not None else None)
+        self.overlay.on_cancel = lambda generation: self.loop.call_soon_threadsafe(self._overlay_cancel, generation)
+        self._generation = 0
         self.recorder.warmup()
         self.sounds = SoundPlayer(config)
         self.history = _open_history()
@@ -273,7 +278,9 @@ class _Daemon:
             from .retry import RetryController
 
             self.retry = RetryController(self)
-        self._apply_config = _ConfigApplier(config, self.recorder, tray, self._apply_hotkey, self._recovery_config_changed)
+        self._apply_config = _ConfigApplier(
+            config, self.recorder, tray, self._apply_hotkey, self._recovery_config_changed, self.overlay.set_enabled,
+        )
 
     def _recovery_config_changed(self) -> None:
         if self.retry is not None and self.retry.active_id is not None and not self.config.keep_failed_audio:
@@ -310,6 +317,7 @@ class _Daemon:
         except asyncio.CancelledError:
             pass
         finally:
+            self.overlay.close()
             if self.retry is not None:
                 await self.retry.server.close()
                 if self.retry.active_id is not None:
@@ -318,6 +326,14 @@ class _Daemon:
                 self.process_task.cancel()
                 await asyncio.gather(self.process_task, return_exceptions=True)
             self._shutdown(reload_task)
+
+    def _overlay_cancel(self, generation: int) -> None:
+        """Interrupt processing even while the event consumer awaits settings or device work."""
+        if generation != self._generation or (self.session is None and self.inflight is None):
+            return
+        if self.process_task is not None and not self.process_task.done():
+            self.process_task.cancel()
+        self.queue.put_nowait(f"overlay:cancel:{generation}")
 
     async def _handle(self, event: str) -> None:
         if event.startswith("mode:"):
@@ -328,6 +344,12 @@ class _Daemon:
             return
         if event == "settings:closed":
             await self._settings_closed()
+            return
+
+        if event.startswith("overlay:cancel:"):
+            if event != f"overlay:cancel:{self._generation}" or (self.session is None and self.inflight is None):
+                return
+            await self._cancel()
             return
 
         if event in ("pause", "resume"):
@@ -392,8 +414,10 @@ class _Daemon:
         if not await self._ready_to_record():
             return
         config = self.config
+        self._generation += 1
+        self.overlay.begin(self._generation)
         self.set_state(State.RECORDING)
-        session = self.session = _Session(mode=config.mode, limit_seconds=config.max_recording_seconds)
+        session = self.session = _Session(mode=config.mode, limit_seconds=config.max_recording_seconds, generation=self._generation)
 
         # 1. Start audio recording IMMEDIATELY with zero startup latency
         try:
@@ -420,9 +444,10 @@ class _Daemon:
         #    its keywords when it connects, before any capture could finish, so it doesn't start one.
         #    Local mode on Linux leaves screen words out of its prompt, so it doesn't capture either.
         context = await asyncio.to_thread(detect_active_window, config)
+        self.overlay.listening(session.generation, context, session.mode, self.recorder)
         local_without_hints = session.mode == "whisper_cpp" and not uses_screen_hints()
         if config.context_screen and session.mode != "streaming" and not local_without_hints:
-            session.screen_future = start_screen_capture(context)
+            session.screen_future = start_screen_capture(context, capture_guard=self.overlay.capture_guard)
 
         # 5. If streaming mode, initiate streaming connection and chunk worker
         if session.mode == "streaming":
@@ -436,6 +461,8 @@ class _Daemon:
             self.recorder.stop_streaming()
 
     async def _stop_recording(self) -> None:
+        if self.session is not None:
+            self.overlay.processing(self.session.generation)
         await self._restore_volume()
         self.set_state(State.PROCESSING)
         self.sounds.play("stop")
@@ -480,15 +507,19 @@ class _Daemon:
             mode=session.mode,
             created_at=session.created_at,
             recovery_notice=self._set_recovery_notice,
+            overlay=self.overlay,
+            overlay_generation=session.generation,
         ))
 
     def _abandon_recording(self) -> None:
         """A recording that can't be transcribed: error sound, release what it held, back to idle."""
+        self.overlay.dismiss()
         self.sounds.play("error")
         self._end_session()
         self.set_state(State.IDLE)
 
     async def _cancel(self) -> None:
+        self.overlay.dismiss()
         if self.state is State.RECORDING:
             log.info("Cancelling active recording...")
             await self._restore_volume()
@@ -543,6 +574,7 @@ class _Daemon:
 
     async def _recover(self) -> None:
         """After an unexpected error: restore the volume, release the mic, and get back to a usable state."""
+        self.overlay.dismiss()
         try:
             await self._restore_volume()
             self.recorder.discard()
@@ -556,6 +588,7 @@ class _Daemon:
             log.exception("Could not recover from the error")
 
     def _shutdown(self, reload_task: asyncio.Task) -> None:
+        self.overlay.close()
         with self._volume_lock:
             self._closing = True
             if self.saved_volume is not None:
@@ -720,10 +753,10 @@ class _Daemon:
         """Listen for the [hotkey] settings in ``new`` if they changed. A pynput listener can't restart,
         so a fresh one replaces it; it applies at once, also during a recording, which the new key then stops."""
         config = self.config
-        settings = (new.hotkey, new.hotkey_fallback, new.double_tap_timeout_ms)
-        if settings == (config.hotkey, config.hotkey_fallback, config.double_tap_timeout_ms):
+        settings = (new.hotkey, new.hotkey_fallback, new.double_tap_timeout_ms, new.double_tap_cancel)
+        if settings == (config.hotkey, config.hotkey_fallback, config.double_tap_timeout_ms, config.double_tap_cancel):
             return
-        config.hotkey, config.hotkey_fallback, config.double_tap_timeout_ms = settings
+        config.hotkey, config.hotkey_fallback, config.double_tap_timeout_ms, config.double_tap_cancel = settings
         self.hotkey.stop()
         self.hotkey = HotkeyListener(config, self.loop, self.queue)
         self.hotkey.start()  # logs "Hotkey listener started (key=…, fallback=…)"
@@ -836,6 +869,8 @@ async def _process(
     tray: TrayManager | None = None,
     created_at: str | None = None,
     recovery_notice: Callable[[str | None], None] | None = None,
+    overlay=None,
+    overlay_generation: int = 0,
 ) -> Outcome | None:
     """Transcribe a finished recording (finish the live stream, else batch), paste it, and keep it in history.
 
@@ -845,6 +880,7 @@ async def _process(
     use_streaming = streaming_transcriber is not None  # only a streaming recording has one
     transcribing = False
     provider = mode  # what history records: a live session that failed hands the recording to batch
+    completed = False
     try:
         t0 = time.monotonic()
 
@@ -852,6 +888,7 @@ async def _process(
             # VAD gate only for batch modes. Streaming has its own silence/hallucination
             # guard and the local VAD produces false negatives that drop real speech.
             if not await asyncio.to_thread(has_speech, wav_data):
+                completed = True
                 log.info("No speech detected, skipping transcription")
                 if screen_capture_future is not None:
                     screen_capture_future.cancel()
@@ -868,7 +905,8 @@ async def _process(
                 log.info("Streaming transcription succeeded in %.3fs", time.monotonic() - t0)
             elif config.context_screen:
                 # Falling back to batch: capture the screen words the live session never needed
-                screen_capture_future = start_screen_capture(context)
+                screen_capture_future = (start_screen_capture(context, capture_guard=overlay.capture_guard)
+                                         if overlay is not None else start_screen_capture(context))
 
         if text is None:
             if use_streaming:
@@ -883,10 +921,15 @@ async def _process(
         transcribing = False
 
         if not text or not text.strip():
+            completed = True
             log.info("Empty transcription result, skipping injection")
             return
 
         text = _expand_snippet(text, config)
+        if overlay is not None:
+            await asyncio.to_thread(overlay.hide_before_paste, overlay_generation)
+            if overlay.is_cancelled(overlay_generation):
+                raise asyncio.CancelledError from None
         pasted = await _paste(text, context, config)
         if not pasted:
             sounds.play("error")  # the text is still in history
@@ -898,9 +941,12 @@ async def _process(
 
         if pasted:
             log.info("Done in %.3fs (%s)", time.monotonic() - t0, provider)
+        completed = pasted
         return Outcome.TRANSCRIBED
 
     except asyncio.CancelledError:
+        if overlay is not None:
+            overlay.complete(overlay_generation, False)
         log.info("Processing task cancelled")
         if screen_capture_future is not None:
             screen_capture_future.cancel()
@@ -910,6 +956,10 @@ async def _process(
             await streaming_transcriber.close()
         raise
     except PartialTranscriptionError as e:
+        if overlay is not None and overlay.is_cancelled(overlay_generation):
+            raise asyncio.CancelledError from None
+        if overlay is not None:
+            overlay.complete(overlay_generation, False)
         sounds.play("error")
         saved = await _retain_failure(wav_data, config, history, context, mode, provider, e.text, tray, created_at, recovery_notice) if transcribing else False
         if saved is False and history is not None:
@@ -918,13 +968,23 @@ async def _process(
             if tray is not None and not config.keep_failed_audio:
                 tray.history_changed()
             return Outcome.PARTIAL
+        if overlay is not None:
+            await asyncio.to_thread(overlay.hide_before_paste, overlay_generation)
+            if overlay.is_cancelled(overlay_generation):
+                raise asyncio.CancelledError from None
         await _paste(e.text, context, config)
     except Exception as e:
+        if overlay is not None and overlay.is_cancelled(overlay_generation):
+            raise asyncio.CancelledError from None
+        if overlay is not None:
+            overlay.complete(overlay_generation, False)
         log.error("Processing failed (phase=%s, error_type=%s)", "transcription" if transcribing else "delivery", type(e).__name__)
         sounds.play("error")
         if transcribing:
             await _retain_failure(wav_data, config, history, context, mode, provider, "", tray, created_at, recovery_notice)
     finally:
+        if overlay is not None:
+            overlay.complete(overlay_generation, completed)
         queue.put_nowait("process_done")
     return None
 
@@ -1112,12 +1172,14 @@ class _ConfigApplier:
         tray: TrayManager | None = None,
         apply_hotkey: Callable[[Config], None] | None = None,
         recovery_changed: Callable[[], None] | None = None,
+        overlay_changed: Callable[[bool], None] | None = None,
     ) -> None:
         self.config = config
         self.recorder = recorder
         self.tray = tray
         self.apply_hotkey = apply_hotkey
         self.recovery_changed = recovery_changed
+        self.overlay_changed = overlay_changed
         self.file_audio = (config.audio_device, config.sample_rate, config.channels)
 
     def __call__(self, new_config: Config, *, gone: bool = False) -> None:
@@ -1127,6 +1189,9 @@ class _ConfigApplier:
         config.dictionary = new_config.dictionary
         config.window_classes = new_config.window_classes
         config.context_screen = new_config.context_screen
+        config.overlay_enabled = new_config.overlay_enabled
+        if self.overlay_changed is not None:
+            self.overlay_changed(config.overlay_enabled)
         with RETENTION_LOCK:
             config.keep_failed_audio = new_config.keep_failed_audio
         if self.recovery_changed is not None:
@@ -1200,7 +1265,7 @@ async def _config_reloader(
         changed, last_stamp = stamp != last_stamp, stamp
         # A fix need not change the stamp (chmod), may predate the first stamp, or may be deleting
         # the file, so a file that doesn't load is retried whatever the stamp says.
-        if config.config_error is None and (stamp is None or not changed):
+        if config.config_error is None and not changed:
             continue
         try:
             apply_config(load_config(path), gone=stamp is None)

@@ -30,7 +30,7 @@ class ControlledClock:
 async def test_hotkey_single_tap_emits_toggle():
     clock = ControlledClock()
     queue: asyncio.Queue[str] = asyncio.Queue()
-    config = Config(hotkey="right_shift", double_tap_timeout_ms=400)
+    config = Config(hotkey="right_shift", double_tap_timeout_ms=400, double_tap_cancel=True)
     loop = asyncio.get_running_loop()
     listener = HotkeyListener(config, loop, queue)
 
@@ -50,7 +50,7 @@ async def test_hotkey_single_tap_emits_toggle():
 async def test_hotkey_double_tap_within_timeout_emits_cancel():
     clock = ControlledClock()
     queue: asyncio.Queue[str] = asyncio.Queue()
-    config = Config(hotkey="right_shift", double_tap_timeout_ms=400)
+    config = Config(hotkey="right_shift", double_tap_timeout_ms=400, double_tap_cancel=True)
     loop = asyncio.get_running_loop()
     listener = HotkeyListener(config, loop, queue)
 
@@ -80,7 +80,7 @@ async def test_hotkey_double_tap_within_timeout_emits_cancel():
 async def test_hotkey_double_tap_outside_timeout_emits_two_toggles():
     clock = ControlledClock()
     queue: asyncio.Queue[str] = asyncio.Queue()
-    config = Config(hotkey="right_shift", double_tap_timeout_ms=400)
+    config = Config(hotkey="right_shift", double_tap_timeout_ms=400, double_tap_cancel=True)
     loop = asyncio.get_running_loop()
     listener = HotkeyListener(config, loop, queue)
 
@@ -110,7 +110,7 @@ async def test_hotkey_double_tap_outside_timeout_emits_two_toggles():
 async def test_hotkey_intervening_key_resets_double_tap():
     clock = ControlledClock()
     queue: asyncio.Queue[str] = asyncio.Queue()
-    config = Config(hotkey="right_shift", double_tap_timeout_ms=400)
+    config = Config(hotkey="right_shift", double_tap_timeout_ms=400, double_tap_cancel=True)
     loop = asyncio.get_running_loop()
     listener = HotkeyListener(config, loop, queue)
 
@@ -144,7 +144,7 @@ async def test_hotkey_intervening_key_resets_double_tap():
 async def test_hotkey_triple_tap_behavior():
     clock = ControlledClock()
     queue: asyncio.Queue[str] = asyncio.Queue()
-    config = Config(hotkey="right_shift", double_tap_timeout_ms=400)
+    config = Config(hotkey="right_shift", double_tap_timeout_ms=400, double_tap_cancel=True)
     loop = asyncio.get_running_loop()
     listener = HotkeyListener(config, loop, queue)
 
@@ -179,7 +179,7 @@ async def test_hotkey_triple_tap_behavior():
 async def test_hotkey_held_with_other_key_ignored():
     clock = ControlledClock()
     queue: asyncio.Queue[str] = asyncio.Queue()
-    config = Config(hotkey="right_shift", double_tap_timeout_ms=400)
+    config = Config(hotkey="right_shift", double_tap_timeout_ms=400, double_tap_cancel=True)
     loop = asyncio.get_running_loop()
     listener = HotkeyListener(config, loop, queue)
 
@@ -203,7 +203,7 @@ async def test_hotkey_held_with_other_key_ignored():
 async def test_hotkey_fallback_combo_double_tap():
     clock = ControlledClock()
     queue: asyncio.Queue[str] = asyncio.Queue()
-    config = Config(hotkey="right_shift", hotkey_fallback="ctrl+space", double_tap_timeout_ms=400)
+    config = Config(hotkey="right_shift", hotkey_fallback="ctrl+space", double_tap_timeout_ms=400, double_tap_cancel=True)
     loop = asyncio.get_running_loop()
     listener = HotkeyListener(config, loop, queue)
 
@@ -233,7 +233,7 @@ async def test_hotkey_quick_tap_responsive():
     """Verify that quick 40ms key tap triggers toggle (no dropped quick taps)."""
     clock = ControlledClock()
     queue: asyncio.Queue[str] = asyncio.Queue()
-    config = Config(hotkey="right_shift", double_tap_timeout_ms=400)
+    config = Config(hotkey="right_shift", double_tap_timeout_ms=400, double_tap_cancel=True)
     loop = asyncio.get_running_loop()
     listener = HotkeyListener(config, loop, queue)
 
@@ -415,7 +415,7 @@ async def _events(queue):
 async def test_fn_tapped_alone_toggles_and_double_tapped_cancels(fn):
     clock = ControlledClock()
     queue: asyncio.Queue[str] = asyncio.Queue()
-    listener = HotkeyListener(Config(hotkey="globe", double_tap_timeout_ms=400), asyncio.get_running_loop(), queue)
+    listener = HotkeyListener(Config(hotkey="globe", double_tap_timeout_ms=400, double_tap_cancel=True), asyncio.get_running_loop(), queue)
 
     with patch("vox.hotkey.monotonic", side_effect=clock.time):
         for _ in range(2):
@@ -486,7 +486,7 @@ async def test_fn_held_for_a_function_key_keeps_a_combination_working(fn):
 
 @macos
 @pytest.mark.anyio
-@pytest.mark.parametrize("config", [Config(hotkey="f5"), Config(hotkey_fallback="ctrl+f5")])
+@pytest.mark.parametrize("config", [Config(hotkey="f5", double_tap_cancel=True), Config(hotkey_fallback="ctrl+f5", double_tap_cancel=True)])
 async def test_fn_let_go_between_two_presses_of_f5_leaves_the_double_tap_cancel(fn, config):
     """A Mac laptop needs fn held for F5. fn, not the hotkey here, must not restart the double-tap."""
     clock = ControlledClock()
@@ -559,3 +559,21 @@ def test_import_problem_takes_the_x_error_out_of_pynputs_message(monkeypatch):
     assert hotkey._import_problem(ImportError(PYNPUT_X_ERROR)) == 'failed to acquire X connection: Bad display name ""'
     assert hotkey._import_problem(ImportError("No module named 'Xlib'")) == "No module named 'Xlib'"
     assert hotkey._import_problem(ImportError()) == "ImportError"
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize('fallback', [False, True])
+async def test_double_tap_is_two_toggles_by_default(fallback):
+    clock = ControlledClock()
+    queue = asyncio.Queue()
+    listener = HotkeyListener(Config(hotkey_fallback='ctrl+space' if fallback else ''), asyncio.get_running_loop(), queue)
+    with patch('vox.hotkey.monotonic', side_effect=clock.time):
+        for _ in range(2):
+            keys = [keyboard.Key.ctrl, keyboard.Key.space] if fallback else [keyboard.Key.shift_r]
+            for key in keys:
+                listener._on_press(key)
+            clock.advance(0.1)
+            for key in reversed(keys):
+                listener._on_release(key)
+            clock.advance(0.1)
+    assert await _events(queue) == ['toggle', 'toggle']

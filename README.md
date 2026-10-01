@@ -30,7 +30,7 @@
 
 1. **Tap right Shift** and start talking.
 2. **Tap it again.** Vox Transfer types what you said into the app you're in.
-3. Changed your mind? **Double-tap** to cancel.
+3. Changed your mind? Click **×** in the recording overlay to cancel. Enable the overlay in General Settings; double-tap cancellation is available as an opt-in setting.
 
 Shift still types capitals: only a tap on its own starts dictation. It works in email, chat,
 documents, code editors and terminals.
@@ -38,6 +38,16 @@ documents, code editors and terminals.
 Vox Transfer runs in the background, with a microphone icon in the menu bar (macOS) or the system
 tray (Linux). Everything else is in its menu and its Settings window, from choosing another hotkey to
 searching what you've dictated.
+
+On macOS or Linux/X11, enable **Settings → General → Show recording overlay** for a small microphone
+waveform and transcription status near the bottom of the target display. It is off by default
+and follows Reduce Motion. [Overlay settings and platform coverage](docs/settings.md#recording-overlay)
+
+<p align="center">
+  <a href="docs/images/recording-overlay.gif">
+    <img src="docs/images/recording-overlay.gif" width="496" alt="Animated recording overlay: microphone-responsive waveform while listening, a glowing bead while transcribing, brass for cloud and silver for local, with a cancel button at the top right">
+  </a>
+</p>
 
 ## Install
 

@@ -80,3 +80,46 @@ This is automated native desktop validation. Buttons are activated programmatica
 synthetic audio bypasses VAD, partial attempts are seeded, and the Clear confirmation
 is accepted by the fixture. It tests desktop recovery behavior; actual microphone
 capture, provider accuracy and human mouse interaction require separate validation.
+
+## Recording overlay validation
+
+The controller and geometry tests run without AppKit. `tests/test_overlay_mac.py` builds and
+draws the real panel when a macOS GUI session is available. To exercise dedicated text targets,
+focus/paste/clipboard restoration, actual guarded screenshots and optional microphone levels:
+
+```sh
+uv run python scripts/integration/overlay_desktop.py --output /tmp/vox-overlay-validation --microphone
+```
+
+This requires existing Accessibility and Screen Recording permissions. It briefly changes
+focus and clipboard contents, restores them afterward, and saves synthetic target screenshots,
+panel previews and a JSON report. The two-second microphone sample is discarded locally.
+Provider responses, human quiet/loud speech, physical hotkeys, editor/terminal applications,
+full-screen Spaces and multiple physical displays need separate checks; the report identifies
+what was unavailable. The overlay uses the tray's main loop and stops drawing while hidden.
+
+The X11 backend has native GTK 3 tests in `tests/test_overlay_x11.py`; keep these in the
+non-`gtk` pytest process because Settings uses GTK 4. Its runtime needs distro packages
+`python3-gi-cairo` and `gir1.2-gtk-3.0`, with both `gi` and `cairo` linked into the venv.
+CI also runs a real Openbox desktop check with Mousepad and XTerm (with Ctrl+Shift+V
+paste configured):
+
+```sh
+docker build -t vox-overlay-desktop -f scripts/integration/Dockerfile .
+mkdir -p /tmp/vox-overlay-validation
+docker run --rm --network none -v "$PWD:/src:ro" \
+  -v /tmp/vox-overlay-validation:/evidence vox-overlay-desktop \
+  dbus-run-session -- xvfb-run -a -s '-screen 0 1280x900x24' \
+  python scripts/integration/overlay_x11.py --output /evidence
+```
+
+This saves actual desktop screenshots using controlled waveform levels, verifies production
+paste and clipboard restoration, clicks through the panel, and compares visible-panel pixels
+with guarded captures and checks OCR while the panel overlaps the target. It checks GTK reduced motion,
+restart/cancel and resource cleanup. No microphone or transcription provider is used.
+Physical mixed-DPI displays and compositor-dependent opacity still need desktop checks.
+
+For equal-scale native visual previews without microphone or paste activity, run
+`python scripts/integration/overlay_preview.py --output /tmp/vox-overlay-previews` with the
+project environment on macOS, or under `dbus-run-session -- xvfb-run -a` on Linux. It renders
+Listening and both transcription states as 448 × 88 PNGs through the production native views.

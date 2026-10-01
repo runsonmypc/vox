@@ -1,0 +1,20 @@
+{
+  "mac": {
+    "row": 43,
+    "microphone_last_pixel": 59,
+    "signal_first_pixel": 100,
+    "signal_last_pixel": 405,
+    "inner_rim_first_pixel": 446,
+    "left_gap": 40,
+    "right_gap": 40
+  },
+  "linux": {
+    "row": 43,
+    "microphone_last_pixel": 59,
+    "signal_first_pixel": 100,
+    "signal_last_pixel": 405,
+    "inner_rim_first_pixel": 446,
+    "left_gap": 40,
+    "right_gap": 40
+  }
+}

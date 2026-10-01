@@ -42,7 +42,7 @@ for tool in xdotool xclip xprop; do
     command -v "$tool" >/dev/null || die "install.sh did not install $tool"
 done
 as_user "$home/.local/bin/vox" --help >/dev/null
-as_user "$venv/bin/python" -c 'import gi, vox.ui.tray'
+as_user "$venv/bin/python" -c 'import gi, cairo, vox.ui.tray; gi.require_foreign("cairo")'
 
 # An update replaces the virtualenv and keeps nothing of the old one
 as_user bash "$home/vox/install.sh" --no-service
