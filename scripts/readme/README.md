@@ -8,8 +8,11 @@ recording/transcribing icons, glowing bead and cancel glyph.
 
 The demo keeps spoken words outside the app, pastes the entire batch result at
 once, hides the overlay 50 ms before paste, and leaves the terminal command
-unexecuted. Screen context is explained in the caption; it does not add controls,
-OCR panels or colored formatting to the target app. There is one cloud sequence
+unexecuted. The Mail scene first outlines the earlier message as it is read, then
+highlights Priya, PostgreSQL and Kubernetes and reveals their spelling-hint chips.
+Matching highlights connect those hints to the complete pasted reply. The hint
+panel is marked "Illustrated": these annotations explain screen context, rather
+than depicting additional controls or formatting inserted by Vox. There is one cloud sequence
 across three examples, without repeating a local transcription animation.
 
 To regenerate on macOS with the repo's Python environment, Chrome, and a local
@@ -22,9 +25,10 @@ node scripts/readme/capture-demo.mjs /path/to/puppeteer-core/lib/puppeteer/puppe
 ```
 
 `CHROME_PATH` can override Chrome's executable. Capturing uses a fixed clock at
-20 fps, then holds each complete result. The 21.2-second APNG loops with native
+20 fps, then holds each complete result. The 22.2-second APNG loops with native
 RGBA transparency, without color-key removal or palette conversion. Capture
-checks enforce text bounds, complete-result pasting and overlay dismissal;
+checks enforce text bounds, complete-result pasting, overlay dismissal, and the
+source → reading → hints → matching reply sequence;
 encoding checks every decoded pixel and frame duration against the originals.
 `app-demo-still.png` is the reduced-motion alternative used by the README.
 

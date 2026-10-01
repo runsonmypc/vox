@@ -31,9 +31,27 @@ try {
       const bounds = await page.evaluate(() => {
         const output = document.querySelector('.surface:not([hidden]) .output').getBoundingClientRect();
         const surface = document.querySelector('.surface:not([hidden])').getBoundingClientRect();
-        return { fits: output.right <= surface.right && output.bottom <= surface.bottom, overflow: document.documentElement.scrollWidth > innerWidth };
+        const tools = document.querySelector('.mail-tools').getBoundingClientRect();
+        return { fits: output.right <= surface.right && output.bottom <= (document.body.dataset.scene === 'context' ? tools.top - 8 : surface.bottom), overflow: document.documentElement.scrollWidth > innerWidth };
       });
       assert.ok(bounds.fits && !bounds.overflow, `${scene.id}: text fits`);
+      if (scene.id === 'context') {
+        const hints = await page.evaluate(() => ({
+          phase: document.body.dataset.capture,
+          visible: getComputedStyle(document.querySelector('.hint-words')).opacity === '1',
+          reading: Number(getComputedStyle(document.querySelector('.thread'), '::after').opacity) > 0,
+          source: [...document.querySelectorAll('.thread mark')].map(el => el.textContent),
+          words: [...document.querySelectorAll('.hint-words span')].map(el => el.textContent),
+          result: [...document.querySelectorAll('.mail-input mark')].map(el => el.textContent),
+        }));
+        assert.equal(hints.phase, t < 500 ? 'waiting' : t < 1600 ? 'reading' : 'hints');
+        assert.equal(hints.reading, t >= 500 && t < 1600);
+        assert.equal(hints.visible, t >= 1600);
+        assert.deepEqual(hints.source, scene.emphasis);
+        assert.deepEqual(hints.words, scene.emphasis);
+        assert.deepEqual(hints.result, t >= scene.pasteAt ? scene.emphasis : []);
+        if (t === 1000 || t === 2200) await page.screenshot({ path: path.join(out, `context-${hints.phase}.png`), omitBackground: true });
+      }
       const file = `frame-${String(frames.length).padStart(4, '0')}.png`;
       await page.screenshot({ path: path.join(out, file), omitBackground: true });
       frames.push({ file, duration: t === scene.pasteAt ? scene.duration - t : 50, scene: scene.id, time: t });

@@ -41,12 +41,23 @@ h3 { font-size: 24px; letter-spacing: -.6px; margin-bottom: 16px; }
 .mail { background: #252a31; }
 .mail-fields { height: 38px; padding: 11px 24px; border-bottom: 1px solid #3b424d; color: #e1e5ea; font-size: 12px; }
 .mail-fields span { margin-right: 16px; color: #97a1ad; }
-.mail-body { padding: 20px 26px; }
-.thread { padding-left: 12px; border-left: 2px solid #626b76; color: #c2c9d2; line-height: 1.7; font-size: 14px; }
+.mail-body { padding: 14px 26px; }
+.thread { position: relative; padding-left: 12px; border-left: 2px solid #626b76; color: #c2c9d2; line-height: 1.7; font-size: 14px; }
+.thread::after { content: ''; position: absolute; inset: -5px -7px; border: 1px solid #c9a24a; border-radius: 4px; opacity: 0; }
+body[data-capture='reading'] .thread::after { opacity: .8; }
 .thread-from { display: flex; justify-content: space-between; margin-bottom: 7px; }
 .thread-from small { color: #97a1ad; font-size: 10px; }
 mark { color: inherit; background: transparent; }
-.reply-label { margin: 26px 0 10px; color: #aeb6c0; font-size: 11px; }
+body[data-capture='hints'] .thread mark { color: #e0c68e; background: #c9a24a20; border-radius: 2px; }
+.hints { margin: 14px 0 12px; padding: 9px 11px; border: 1px dashed #64605a; border-radius: 5px; background: #1b1d2066; }
+.hint-path { display: flex; align-items: center; gap: 7px; color: #aeb6c0; font-size: 10px; }
+.hint-path b { color: #d6bd84; font-weight: 400; }
+.hint-path small { margin-left: auto; color: #8f969f; font-size: 9px; }
+.hint-words { display: flex; gap: 7px; margin-top: 7px; opacity: 0; }
+.hint-words span { padding: 3px 7px; border: 1px solid #74613b; border-radius: 3px; color: #e0c68e; background: #c9a24a0d; font-size: 12px; }
+body[data-capture='hints'] .hint-words { opacity: 1; }
+.reply-label { margin: 0 0 8px; color: #aeb6c0; font-size: 11px; }
+.mail-input mark { color: #e0c68e; text-decoration: underline; text-decoration-color: #c9a24a80; text-underline-offset: 4px; }
 .mail-input { font-size: 17px; line-height: 1.6; }
 .mail-tools { position: absolute; left: 0; right: 0; bottom: 0; padding: 9px 24px; border-top: 1px solid #343b44; color: #8d99a8; font-size: 10px; display: flex; justify-content: space-between; }
 .overlay { position: absolute; width: 224px; height: 44px; left: 272px; top: 450px; }
@@ -68,7 +79,11 @@ mark { color: inherit; background: transparent; }
     </div>
     <div class="surface mail" data-app="mail" hidden>
       <p class="mail-fields"><span>Subject:</span>Ready to ship</p>
-      <div class="mail-body"><div class="thread"><p class="thread-from"><strong>Priya</strong><small>Earlier message</small></p><p>Can we check PostgreSQL before the Kubernetes rollout?</p></div><p class="reply-label">Your reply</p><div class="mail-input"><span class="output"></span><span class="cursor"></span></div></div>
+      <div class="mail-body">
+        <div class="thread"><p class="thread-from"><strong><mark>Priya</mark></strong><small>Earlier message</small></p><p>Can we check <mark>PostgreSQL</mark> before the <mark>Kubernetes</mark> rollout?</p></div>
+        <div class="hints"><p class="hint-path">Screenshot <b>→</b> local OCR <b>→</b> spelling hints <small>Illustrated</small></p><div class="hint-words"><span>Priya</span><span>PostgreSQL</span><span>Kubernetes</span></div></div>
+        <p class="reply-label">Your reply</p><div class="mail-input"><span class="output"></span><span class="cursor"></span></div>
+      </div>
       <div class="mail-tools"><span>Aa　⌁</span><span>Draft</span></div>
     </div>
   </div>
@@ -81,18 +96,33 @@ mark { color: inherit; background: transparent; }
 window.scenes = [
   { id: 'snippets', app: 'Terminal', surface: 'terminal', label: 'Voice snippets', spoken: 'dev server', output: 'npm run dev -- --host 127.0.0.1 --port 4321', recordUntil: 1800, pasteAt: 2700, duration: 6000, caption: 'Your saved command, inserted without running it.' },
   { id: 'dictation', app: 'Notes', surface: 'notes', label: 'Dictation', spoken: 'What if my notes became a map of everything I’m working on, with connections I hadn’t noticed?', output: 'What if my notes became a map of everything I’m working on, with connections I hadn’t noticed?', recordUntil: 3400, pasteAt: 4300, duration: 7800, caption: 'Text at your cursor. Clipboard restored.' },
-  { id: 'context', app: 'Mail', surface: 'mail', label: 'Screen context', spoken: 'Ask Priya to check PostgreSQL before the Kubernetes rollout.', output: 'Ask Priya to check PostgreSQL before the Kubernetes rollout.', recordUntil: 2900, pasteAt: 3800, duration: 7400, caption: 'On-screen names guide spelling through local OCR.' },
+  { id: 'context', app: 'Mail', surface: 'mail', label: 'Spelling hints', spoken: 'Ask Priya to check PostgreSQL before the Kubernetes rollout.', output: 'Ask Priya to check PostgreSQL before the Kubernetes rollout.', recordUntil: 3400, pasteAt: 4300, duration: 8400, caption: 'On-screen spellings carried into your reply.', emphasis: ['Priya', 'PostgreSQL', 'Kubernetes'] },
 ];
 window.renderFrame = async function(index, elapsed, overlayUrl) {
   const scene = scenes[index];
   const phase = elapsed < 250 ? 'waiting' : elapsed < scene.recordUntil ? 'recording' : elapsed < scene.pasteAt ? 'processing' : 'delivered';
   document.body.dataset.phase = phase;
   document.body.dataset.scene = scene.id;
+  const capture = scene.id !== 'context' || elapsed < 500 ? 'waiting' : elapsed < 1600 ? 'reading' : 'hints';
+  document.body.dataset.capture = capture;
   document.querySelector('.app').textContent = scene.app;
   document.querySelector('.chapter').textContent = scene.label;
-  document.querySelector('.detail').textContent = scene.caption;
+  document.querySelector('.detail').textContent = scene.id === 'context' && phase !== 'delivered'
+    ? capture === 'waiting' ? 'Names already in your focused window.'
+      : capture === 'reading' ? 'Reading the focused window with local OCR…'
+        : 'Priya · PostgreSQL · Kubernetes → spelling hints'
+    : scene.caption;
   document.querySelectorAll('.surface').forEach(el => el.hidden = el.dataset.app !== scene.surface);
-  document.querySelectorAll('.output').forEach(el => el.textContent = el.closest('.surface').dataset.app === scene.surface && phase === 'delivered' ? scene.output : '');
+  document.querySelectorAll('.output').forEach(el => {
+    el.replaceChildren();
+    if (el.closest('.surface').dataset.app !== scene.surface || phase !== 'delivered') return;
+    scene.output.split(' ').forEach((text, i) => {
+      if (i) el.append(' ');
+      if (scene.emphasis?.includes(text)) {
+        const mark = document.createElement('mark'); mark.textContent = text; el.append(mark);
+      } else el.append(text);
+    });
+  });
   const words = scene.spoken.split(' ');
   const count = Math.max(0, Math.ceil((elapsed - 250) / (scene.recordUntil - 450) * words.length));
   const speech = document.querySelector('.voice-text');

@@ -18,7 +18,7 @@
 <a href="docs/images/app-demo.png">
   <picture>
     <source media="(prefers-reduced-motion: reduce)" srcset="docs/images/app-demo-still.png">
-    <img src="docs/images/app-demo.png" width="768" alt="Vox Transfer demonstration: say dev server to insert npm run dev -- --host 127.0.0.1 --port 4321 in Terminal; dictate into Notes; use on-screen names as spelling hints in Mail. The native recording overlay disappears before each paste.">
+    <img src="docs/images/app-demo.png" width="768" alt="Vox Transfer demonstration: say dev server to insert npm run dev -- --host 127.0.0.1 --port 4321 in Terminal; dictate into Notes; read Priya, PostgreSQL and Kubernetes from Mail as spelling hints, then preserve those spellings in the reply. The native recording overlay disappears before each paste.">
   </picture>
 </a>
 
