@@ -1,0 +1,21 @@
+{
+  "desktop": "Pop!_OS 24.04, live X11 session",
+  "installed_package": "/home/alex/.local/share/vox/venv/lib/python3.12/site-packages/vox/__init__.py",
+  "passed": [
+    "Installed service: real hotkey starts microphone recording; 224x44 overlay appears; native cancel hides it without stealing focus",
+    "Installed Recorder publishes real microphone RMS to native overlay; recording discarded locally",
+    "Native batch processing: animated bead, cancel callback and immediate hide, keyboard focus retained",
+    "Native whisper_cpp processing: animated bead, cancel callback and immediate hide, keyboard focus retained",
+    "Capture guard acknowledges native hide and restores the eligible overlay",
+    "Actual X11 body click passes through to the dedicated text field",
+    "Overlay hides before native paste; dedicated text field receives text; clipboard restored",
+    "Reduced motion and hidden-animation timer cleanup"
+  ],
+  "scale": 2.0,
+  "microphone": {
+    "level_samples": 39,
+    "nonzero_samples": 39,
+    "max_rms": 0.003674
+  },
+  "provider_scope": "No provider request: real recording was cancelled; processing and delivery were driven locally"
+}

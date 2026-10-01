@@ -399,3 +399,24 @@ Following the empirical measurement, the user selected 40 px for the right gap, 
 ### README animation
 
 Added one `docs/images/recording-overlay.png` (animated PNG/APNG) beneath the README overlay description. The 5-second looping animation uses the production AppKit renderer with controlled sample microphone levels, including silence, and shows one cloud recording/transcription sequence. The local sequence was removed from this README illustration at the user’s request. It preserves the final spacing and cancel control. The asset is 496 × 136 with 96 encoded frames, approximately 306 KB. Every decoded RGBA frame was verified byte-for-byte against the native-rendered source frames, including fractional alpha at the anti-aliased rim. Checked transparent surroundings, light/dark background appearance, recording and transcription states, duration and looping; no microphone or provider was used to generate it. This replaces the earlier GIF, whose binary transparency produced a jagged edge; no color-key background removal or alpha thresholding is used in the PNG.
+
+### Linux installation and 1.2.0 release validation — October 1, 2026
+
+Installed current main on the user's Pop!_OS 24.04 computer through `install.sh`,
+enabled the overlay, and exercised the installed package in its live X11 desktop
+at 2× scale (448 × 88 physical pixels). The installer supplied the missing Cairo
+binding in the existing environment. No application-code fix was required.
+
+The running service passed a real right-Shift recording and native × cancellation,
+retaining focus in a dedicated test window. A separate installed Recorder check
+published 39 nonzero microphone RMS samples; all captured audio was discarded locally.
+Native cloud/local processing animation and cancellation, capture suppression,
+body click-through, hiding before a real paste, clipboard restoration, reduced motion
+and timer cleanup passed. Original focus and pointer position were restored.
+Processing states were driven locally; this check did not contact a transcription
+provider or validate an end-to-end cloud transcription. Results and a crop of the
+actual processing panel are in `validation/linux-release-1.2.0/`.
+
+Release preparation: version 1.2.0, changelog and locks regenerated with uv 0.12.19.
+Lock consistency and all supported-platform wheel checks passed. The complete local
+macOS suite passed (1,297 tests, 68 skips), as did Ruff.
