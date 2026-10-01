@@ -39,6 +39,10 @@ Vox Transfer runs in the background, with a microphone icon in the menu bar (mac
 tray (Linux). Everything else is in its menu and its Settings window, from choosing another hotkey to
 searching what you've dictated.
 
+On macOS or Linux/X11, enable **Settings → General → Show recording overlay** for a small microphone
+waveform and transcription status near the bottom of the target display. It is off by default
+and follows Reduce Motion. [Overlay settings and platform coverage](docs/settings.md#recording-overlay)
+
 ## Install
 
 On macOS or Linux, run:

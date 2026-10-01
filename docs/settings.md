@@ -7,6 +7,7 @@
 - [All settings](#all-settings)
 - [When the file has an error](#when-the-file-has-an-error)
 - [Sounds](#sounds)
+- [Recording overlay](#recording-overlay)
 - [Local transcription with whisper.cpp](#local-transcription-with-whispercpp)
 
 Most people never need the settings file: **Settings…** in the Vox Transfer menu changes almost
@@ -80,6 +81,7 @@ that section.
 | `[transcription] keep_failed_audio` | `true` | Keep failed recordings locally until recovery or deletion. Turning off stops new retention and retries; delete existing audio in History. |
 | `[context] screen` | `true` | Screen hints, see [Privacy](privacy.md#screen-hints-context-screen). |
 | `[sounds] enabled` | `true` | Play sounds for start, stop, cancel and errors. |
+| `[overlay] enabled` | `false` | Show the recording waveform and transcription status on macOS and Linux/X11 desktops. |
 | `[attenuation] enabled` | `true` | Lower the system volume while recording. |
 | `[attenuation] level` | `0.5` | Recording volume as a fraction of the current volume. |
 | `[snippets]` | none | `"trigger phrase" = "expansion"` pairs. |
@@ -100,6 +102,32 @@ seconds. While the file has an error, Settings names the problem (in red on macO
 Linux) and changes nothing but the API key; once the file is fixed, it shows the fixed settings
 within a few seconds. An error in an edit while
 Vox Transfer is running is logged and ignored, and the previous settings stay in effect.
+
+## Recording overlay
+
+On macOS or Linux/X11, choose **General → Show recording overlay**, or add:
+
+```toml
+[overlay]
+enabled = true
+```
+
+It is off by default. Enabling applies to the next recording; disabling dismisses the current
+panel as soon as Settings closes or the file change is picked up. Deleting the settings file
+restores the default. Native Wayland and headless sessions continue without a panel.
+Linux Settings marks the option unavailable outside X11.
+
+The compact panel places its status beneath the waveform. Its microphone grille is red while
+recording and blue while transcribing, matching the menu bar/tray. It shows **Listening** with a stylized drifting waveform whose height follows microphone levels. It then shows **Transcribing…** or
+**Transcribing locally…** in silver for local processing. During transcription, a glowing bead
+loops across a horizontal line to indicate activity, without estimating completion. It stays near the bottom of the display
+where recording started, lets clicks through, and disappears before text is pasted. Empty or
+no-speech results briefly fade away. Cancellation
+and errors dismiss it. History retries do not show it. macOS **Accessibility → Display →
+Reduce motion**, or disabled desktop animations on Linux, uses a static line and immediate
+transitions. On X11, empty-result fades require a compositor; otherwise the panel dismisses
+without a visible fade. The panel is briefly hidden while
+Vox takes a screen-hint image; if hiding cannot be confirmed, that optional image is skipped.
 
 ## Sounds
 

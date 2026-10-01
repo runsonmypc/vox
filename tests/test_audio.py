@@ -634,3 +634,56 @@ def test_read_wav_copies_when_another_chunk_follows_the_data():
     samples, rate, channels = read_wav(wav)
     assert (rate, channels) == (16000, 1)
     np.testing.assert_array_equal(samples, audio)
+
+
+@pytest.mark.parametrize('channels', [1, 2])
+def test_optional_level_uses_latest_block_and_resets(channels):
+    recorder = Recorder(Config(sample_rate=16000, channels=channels))
+    with patch('vox.audio.sd.InputStream', return_value=FakeStream()):
+        recorder.start()
+        recorder._callback(np.full((800, channels), 32767, dtype=np.int16), 800, None, 0)
+        assert recorder.latest_level is None
+        recorder.set_level_generation(7)
+        for value in (0, 100, 2000, -32768, 0):
+            block = np.full((800, channels), value, dtype=np.int16)
+            recorder._callback(block, 800, None, 0)
+            generation, timestamp, level = recorder.latest_level
+            assert generation == 7 and timestamp > 0
+            assert level == pytest.approx(abs(value) / 32768)
+        recorder.stop()
+        assert recorder.latest_level is None
+        recorder.start()
+        assert recorder.latest_level is None and recorder._level_generation is None
+        recorder.set_level_generation(8)
+        recorder.discard()
+        assert recorder.latest_level is None and recorder._level_generation is None
+
+
+@pytest.mark.anyio
+async def test_meter_failure_cannot_drop_recorded_or_streamed_audio(caplog):
+    recorder = Recorder(Config(sample_rate=24000))
+    block = np.full((1200, 1), -32768, dtype=np.int16)
+    with patch('vox.audio.sd.InputStream', return_value=FakeStream()):
+        recorder.start(loop=asyncio.get_running_loop(), stream=True)
+        recorder.set_level_generation(1)
+        with patch('vox.audio._rms', side_effect=RuntimeError('optional measurement')):
+            for _ in range(3):
+                recorder._callback(block, 1200, None, 0)
+        wav = recorder.stop()
+        await asyncio.sleep(0)
+    _, streamed = _drain(recorder.get_chunk_queue())
+    np.testing.assert_array_equal(streamed, np.full(3600, -32768, dtype=np.int16))
+    np.testing.assert_array_equal(read_wav(wav)[0], streamed)
+    assert caplog.text.count('metering unavailable') == 1
+
+
+@pytest.mark.parametrize('level', [float('nan'), float('inf')])
+def test_nonfinite_meter_is_disabled_without_losing_audio(level):
+    recorder = Recorder(Config(sample_rate=16000))
+    with patch('vox.audio.sd.InputStream', return_value=FakeStream()):
+        recorder.start()
+        recorder.set_level_generation(1)
+        with patch('vox.audio._rms', return_value=level):
+            recorder._callback(_block(100), 800, None, 0)
+        assert recorder.latest_level is None and recorder._meter_failed
+        assert len(read_wav(recorder.stop())[0]) == 800

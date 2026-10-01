@@ -1,0 +1,22 @@
+{
+  "platform": "Linux/X11",
+  "desktop": "Ubuntu 24.04, Openbox + Xvfb",
+  "audio": "controlled microphone levels; no audio capture or provider requests",
+  "passed": [
+    "focus, native paste and clipboard restoration: off",
+    "focus, native paste and clipboard restoration: listening",
+    "focus, native paste and clipboard restoration: processing",
+    "app switching preserves target detection and text delivery",
+    "actual X11 mouse click passes through the panel and moves the underlying cursor",
+    "real maim/Tesseract capture excludes overlay in listening and fallback processing",
+    "rapid restart, cancellation, GTK reduced motion and hidden timer cleanup",
+    "real Mousepad editor paste, clipboard restoration and three in-use screenshots",
+    "real XTerm paste with Ctrl+Shift+V translation restores clipboard; no command executed",
+    "disable, re-enable and quit release GTK window, timer and observers"
+  ],
+  "limitations": [
+    "Virtual X11 display; physical mixed-DPI displays and real microphone/speech not exercised",
+    "Openbox without compositor; opacity fade appearance depends on compositor",
+    "Native Wayland is outside the requested X11 scope"
+  ]
+}

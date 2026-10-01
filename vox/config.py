@@ -63,6 +63,9 @@ class Config:
     # Sounds
     sounds_enabled: bool = True
 
+    # Optional native recording feedback (macOS desktop only)
+    overlay_enabled: bool = False
+
     # Attenuation
     attenuation_enabled: bool = True
     attenuation_level: float = 0.5
@@ -195,6 +198,9 @@ def _apply(config: Config, data: dict) -> None:
     })
     _apply_section(config, data, "sounds", {
         "enabled": ("sounds_enabled", _flag),
+    })
+    _apply_section(config, data, "overlay", {
+        "enabled": ("overlay_enabled", _flag),
     })
     _apply_section(config, data, "attenuation", {
         "enabled": ("attenuation_enabled", _flag),
@@ -389,7 +395,10 @@ def update_hotkey(path: Path, key: str, fallback: str) -> None:
 
 
 # The on/off settings the Settings window shows: (section, key)
-FLAGS: tuple[tuple[str, str], ...] = (("sounds", "enabled"), ("attenuation", "enabled"), ("context", "screen"), ("transcription", "keep_failed_audio"))
+FLAGS: tuple[tuple[str, str], ...] = (
+    ("sounds", "enabled"), ("attenuation", "enabled"), ("context", "screen"),
+    ("transcription", "keep_failed_audio"), ("overlay", "enabled"),
+)
 
 
 def update_audio_device(path: Path, name: str | None) -> None:

@@ -51,9 +51,9 @@ def test_idle_icon_has_grille_slots_cut_out():
     assert (capsule > 200).any() and (capsule < 20).any()
 
 
-def test_processing_is_amber_and_not_template():
+def test_processing_is_blue_and_not_template():
     assert not is_template(IconState.PROCESSING)
-    assert _has_color(_pixels(IconState.PROCESSING), (255, 159, 10))
+    assert _has_color(_pixels(IconState.PROCESSING), (80, 190, 255))
 
 
 @pytest.mark.parametrize("state", [IconState.RECORDING, IconState.PROCESSING])
@@ -95,3 +95,12 @@ def test_app_icon_is_cog_microphone_on_gunmetal_rounded_square():
     assert _has_color(flat, (190, 150, 90), tol=12)  # brass cog
     assert _has_color(flat, (230, 221, 198), tol=12)  # bone capsule
     assert _has_color(flat, (255, 96, 76), tol=12)  # lit grille
+
+
+@pytest.mark.parametrize('state,rgb', [(IconState.RECORDING, (255, 59, 48)),
+                                    (IconState.PROCESSING, (80, 190, 255))])
+def test_overlay_icon_has_transparent_plate_and_matches_tray_state(state, rgb):
+    px = np.asarray(make_app_icon(128, with_plate=False, state=state)).astype(int)
+    assert px[20, 20, 3] == 0
+    assert _has_color(px.reshape(-1, 4), rgb, tol=8)
+    assert _has_color(_pixels(state), rgb, tol=8)

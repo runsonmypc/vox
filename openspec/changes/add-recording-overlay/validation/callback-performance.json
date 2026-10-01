@@ -1,0 +1,11 @@
+{
+  "block_ms": 50,
+  "channels": 2,
+  "sample_rate": 48000,
+  "blocks": 2000,
+  "mean_callback_ms": {
+    "unmetered": 0.00106029148446396,
+    "metered": 0.004224041476845741
+  },
+  "synthetic_audio": true
+}

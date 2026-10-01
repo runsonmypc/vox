@@ -242,6 +242,9 @@ class SettingsModel:
     def set_sounds(self, on: bool) -> str | None:
         return self._change(lambda: update_flag(self.path, "sounds", "enabled", on))
 
+    def set_overlay(self, on: bool) -> str | None:
+        return self._change(lambda: update_flag(self.path, "overlay", "enabled", on))
+
     def set_attenuation(self, on: bool) -> str | None:
         return self._change(lambda: update_flag(self.path, "attenuation", "enabled", on))
 

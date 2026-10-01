@@ -1496,3 +1496,24 @@ def test_gtk_breaking_and_fixing_the_file_while_open(gtk, gtk_settings):
     assert window.hotkey.key_field.get_label() == "F13"
     assert window.word_entry.get_sensitive()
     assert window.path.read_text().endswith('key = "f13"\n')  # showing the edit wrote nothing
+
+
+def test_mac_overlay_uses_shared_model_and_restores_on_error(mac_settings, appkit):
+    controller = mac_settings()
+    checkbox = controller.general.overlay
+    assert not on(appkit, checkbox)
+    click(appkit, checkbox, True)
+    assert load_config(controller.path).overlay_enabled
+    with patch('vox.config.os.replace', side_effect=OSError('read only')):
+        click(appkit, checkbox, False)
+    assert on(appkit, checkbox)
+
+
+def test_gtk_overlay_is_available_on_x11_and_persists(gtk_settings):
+    window = gtk_settings()
+    row = window.general.overlay[0]
+    assert row.get_sensitive()
+    row.set_active(True)
+    assert window.settings.config.overlay_enabled
+    row.set_active(False)
+    assert not window.settings.config.overlay_enabled

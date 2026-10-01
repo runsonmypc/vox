@@ -344,6 +344,10 @@ class TrayManager:
     def stop(self) -> None:
         self._dispatch(self._icon.stop)
 
+    def dispatch_ui(self, callback: Callable[[], None]) -> None:
+        """Share the existing GUI loop with optional native feedback."""
+        self._dispatch(callback)
+
     def request_quit(self) -> None:
         """Ask the daemon to shut down; it stops the tray on its way out."""
         if self._main_task is None:

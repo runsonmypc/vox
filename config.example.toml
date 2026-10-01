@@ -85,6 +85,13 @@
 # words and captures nothing either way.
 # screen = true
 
+[overlay]
+# Show the optional recording waveform and transcription status on macOS and Linux/X11 desktops.
+# Also available in General Settings. Native Wayland/headless sessions have no overlay.
+# Enabling waits for the next recording; disabling dismisses it when the change is applied.
+# Follows macOS Reduce Motion or disabled Linux animations with a static line and immediate transitions.
+# enabled = false
+
 [sounds]
 # Play a sound when dictation starts, stops, is cancelled or fails, when the hotkey is ignored
 # because Vox Transfer is busy or paused, and on pause and resume. To replace one, put a WAV file

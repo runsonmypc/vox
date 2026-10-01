@@ -30,6 +30,7 @@ DOCUMENTED = {
     ("whisper_cpp", "binary"), ("whisper_cpp", "model"), ("whisper_cpp", "cpu_fallback"),
     ("context", "screen"),
     ("sounds", "enabled"),
+    ("overlay", "enabled"),
     ("attenuation", "enabled"), ("attenuation", "level"),
 }
 

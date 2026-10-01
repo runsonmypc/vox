@@ -128,7 +128,7 @@ smoke_test() {
     local modules=vox.audio,vox.history,vox.keystore,vox.streaming,vox.transcribe,vox.ui.tray
     case "$(uname -s)" in
     Darwin) modules="$modules,vox.daemon" ;;  # pynput needs an X display on Linux
-    Linux) modules="$modules,gi" ;;
+    Linux) modules="$modules,gi,cairo" ;;
     esac
     # -P and cd /: run from the source tree, python -c would import its vox/ instead of the venv's
     (cd / && "$VENV/bin/python" -P -c "import $modules") || die "the new Vox Transfer environment does not work"
@@ -149,6 +149,8 @@ describe_package() {
     libportaudio2) echo "PortAudio" ;;
     python3-venv) echo "Python's venv module" ;;
     python3-gi) echo "PyGObject" ;;
+    python3-gi-cairo) echo "PyGObject Cairo drawing bridge" ;;
+    gir1.2-gtk-3.0) echo "GTK 3 introspection data (tray and overlay)" ;;
     gir1.2-gtk-4.0) echo "GTK 4 introspection data" ;;
     gir1.2-adw-1) echo "libadwaita 1.5+ introspection data" ;;
     gir1.2-ayatanaappindicator3-0.1) echo "Ayatana AppIndicator introspection data" ;;
@@ -167,6 +169,8 @@ linux_deps() {
     "$py" -c 'import ctypes.util, sys; sys.exit(not ctypes.util.find_library("portaudio"))' || missing+=(libportaudio2)
     "$py" -c 'import ensurepip' 2>/dev/null || missing+=(python3-venv)
     "$py" -c 'import gi' 2>/dev/null || missing+=(python3-gi)
+    "$py" -c 'import gi, cairo; gi.require_foreign("cairo")' 2>/dev/null || missing+=(python3-gi-cairo)
+    "$py" -c 'import gi; gi.require_version("Gtk", "3.0")' 2>/dev/null || missing+=(gir1.2-gtk-3.0)
     # The history and vocabulary windows need GTK 4 and libadwaita 1.5+ (Ubuntu 24.04 ships 1.5)
     "$py" -c '
 import gi
@@ -195,9 +199,11 @@ except ValueError:
 linux_venv() {
     local repo=$1 py=$2 pip
     "$py" -m venv "$VENV"
-    # Share only python3-gi with the venv; pip can't build it without a compiler and dev headers
+    # Share the distro's GTK/Cairo bindings; pip would need a compiler and dev headers
     ln -s "$("$py" -c 'import gi, os; print(os.path.dirname(gi.__file__))')" \
         "$("$VENV/bin/python" -c 'import sysconfig; print(sysconfig.get_path("purelib"))')/gi"
+    ln -s "$("$py" -c 'import cairo, os; print(os.path.dirname(cairo.__file__))')" \
+        "$("$VENV/bin/python" -c 'import sysconfig; print(sysconfig.get_path("purelib"))')/cairo"
     pip=("$VENV/bin/python" -m pip --quiet --disable-pip-version-check)
     # Exactly the locked, hash-checked packages, then Vox itself, built by the locked setuptools
     "${pip[@]}" install --require-hashes --no-deps -r "$repo/requirements.lock"

@@ -283,17 +283,19 @@ def detect_active_window(config: Config) -> AppContext:
     return _detect_active_window_linux(config)
 
 
-def start_screen_capture(ctx: AppContext) -> asyncio.Future:
+def start_screen_capture(ctx: AppContext, *, capture_guard=None) -> asyncio.Future:
     """Start screen text capture in background. Returns a future with the result.
 
     Call this when recording starts. By the time recording stops,
     the screen text will be ready.
     """
     loop = asyncio.get_running_loop()
-    return loop.run_in_executor(_ocr_pool, _capture_screen_text, ctx.win_id, ctx.pid, ctx.app_type)
+    if capture_guard is None:
+        return loop.run_in_executor(_ocr_pool, _capture_screen_text, ctx.win_id, ctx.pid, ctx.app_type)
+    return loop.run_in_executor(_ocr_pool, _capture_screen_text, ctx.win_id, ctx.pid, ctx.app_type, capture_guard)
 
 
-def _read_vision_ocr(win_id: str) -> str:
+def _read_vision_ocr(win_id: str, capture_guard=None) -> str:
     """Capture the focused window (never the whole screen) and recognize its text with Apple Vision."""
     if not _is_number(win_id):
         return ""
@@ -303,11 +305,16 @@ def _read_vision_ocr(win_id: str) -> str:
         tmp_path = tmp.name
 
     try:
-        res = subprocess.run(
-            ["screencapture", "-x", "-o", "-l", win_id, tmp_path],
-            capture_output=True,
-            timeout=5,
-        )
+        from contextlib import nullcontext
+
+        with capture_guard() if capture_guard is not None else nullcontext(True) as hidden:
+            if not hidden:
+                return ""  # optional context is skipped when hiding cannot be acknowledged
+            res = subprocess.run(
+                ["screencapture", "-x", "-o", "-l", win_id, tmp_path],
+                capture_output=True,
+                timeout=5,
+            )
         if res.returncode != 0 or not os.path.getsize(tmp_path):
             return ""
 
@@ -343,7 +350,7 @@ def _read_vision_ocr(win_id: str) -> str:
             pass
 
 
-def _capture_screen_text(win_id: str, pid: str, app_type: AppType) -> str:
+def _capture_screen_text(win_id: str, pid: str, app_type: AppType, capture_guard=None) -> str:
     """Capture the focused window's text, platform-aware."""
     if sys.platform == "darwin":
         # Check tmux first if in terminal
@@ -354,7 +361,7 @@ def _capture_screen_text(win_id: str, pid: str, app_type: AppType) -> str:
                 return tmux_text
 
         # Try Vision OCR
-        vision_text = _read_vision_ocr(win_id)
+        vision_text = _read_vision_ocr(win_id, capture_guard) if capture_guard is not None else _read_vision_ocr(win_id)
         if vision_text:
             log.debug("Screen text from Vision OCR: %d chars", len(vision_text))
             return vision_text
@@ -370,7 +377,7 @@ def _capture_screen_text(win_id: str, pid: str, app_type: AppType) -> str:
 
     # Try OCR (slower, ~1-2s, but works for everything)
     if win_id and _has_ocr():
-        ocr_text = _read_ocr(win_id)
+        ocr_text = _read_ocr(win_id, capture_guard) if capture_guard is not None else _read_ocr(win_id)
         if ocr_text:
             log.debug("Screen text from OCR: %d chars", len(ocr_text))
             return ocr_text
@@ -415,12 +422,17 @@ def _read_atspi_text(pid: str) -> str:
     return ""
 
 
-def _read_ocr(win_id: str) -> str:
+def _read_ocr(win_id: str, capture_guard=None) -> str:
     """Screenshot the window and OCR it with tesseract."""
     if not _is_number(win_id):
         return ""
     try:
-        shot = subprocess.run(["maim", "-i", win_id, "--format=png"], capture_output=True, check=True, timeout=5)
+        from contextlib import nullcontext
+
+        with capture_guard() if capture_guard is not None else nullcontext(True) as hidden:
+            if not hidden:
+                return ""
+            shot = subprocess.run(["maim", "-i", win_id, "--format=png"], capture_output=True, check=True, timeout=5)
         result = subprocess.run(["tesseract", "stdin", "stdout"], input=shot.stdout, capture_output=True, check=True, timeout=10)
     except (subprocess.SubprocessError, OSError) as e:
         log.debug("OCR failed: %s", e)

@@ -1,8 +1,8 @@
 FROM ubuntu:24.04
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3 python3-venv python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 libportaudio2 \
-    xdotool xclip x11-utils xvfb xauth dbus-x11 openbox ca-certificates \
+    python3 python3-venv python3-gi python3-gi-cairo gir1.2-gtk-3.0 gir1.2-gtk-4.0 gir1.2-adw-1 libportaudio2 \
+    xdotool xclip x11-utils xvfb xauth dbus-x11 openbox ca-certificates maim tesseract-ocr xterm mousepad \
     && rm -rf /var/lib/apt/lists/*
 RUN python3 -m venv --system-site-packages /opt/venv
 COPY requirements.lock /tmp/requirements.lock

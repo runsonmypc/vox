@@ -50,7 +50,8 @@ Click the Vox Transfer icon in the menu bar (macOS) or the tray (Linux):
 Choose **Settings…** from the menu while Vox Transfer is idle. It has five pages:
 
 - **General**: the microphone (the refresh button next to it looks for one you just connected), the
-  recording limit (5, 10, 15, 30 or 60 minutes), sounds, how far to lower other audio while
+  recording limit (5, 10, 15, 30 or 60 minutes), sounds, the optional
+  [recording overlay](settings.md#recording-overlay) (macOS and Linux/X11, off by default), how far to lower other audio while
   recording, screen hints, and whether to keep failed recordings for retry.
 - **Hotkey**: see [Choosing another hotkey](#choosing-another-hotkey).
 - **Transcription**: OpenAI (batch), OpenAI (streaming) or Local (whisper.cpp), your OpenAI API key,
