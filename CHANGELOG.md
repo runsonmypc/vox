@@ -5,6 +5,8 @@ All notable changes to Vox Transfer are listed here. Vox Transfer follows
 
 ## [Unreleased]
 
+## [1.2.2] - 2026-10-01
+
 ### Changed
 
 - Show the recording overlay by default on macOS and Linux X11. Existing
@@ -183,6 +185,7 @@ The first public release. The command is `vox`, and its settings live in `~/.con
 - `install.sh` refuses to run as root, retries `apt-get` after refreshing package lists, and tells
   users of other distributions which packages to install.
 
+[1.2.2]: https://github.com/runsonmypc/vox/releases/tag/v1.2.2
 [1.2.1]: https://github.com/runsonmypc/vox/releases/tag/v1.2.1
 [1.2.0]: https://github.com/runsonmypc/vox/releases/tag/v1.2.0
 [1.1.0]: https://github.com/runsonmypc/vox/releases/tag/v1.1.0
