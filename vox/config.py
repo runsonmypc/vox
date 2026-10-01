@@ -26,6 +26,7 @@ class Config:
     # Hotkey
     hotkey: str = "right_shift"
     hotkey_fallback: str = ""
+    double_tap_cancel: bool = False
     double_tap_timeout_ms: int = 400
 
     # Audio
@@ -140,6 +141,7 @@ def _apply(config: Config, data: dict) -> None:
     _apply_section(config, data, "hotkey", {
         "key": ("hotkey", _text),
         "fallback": ("hotkey_fallback", _text),
+        "double_tap_cancel": ("double_tap_cancel", _flag),
         "double_tap_timeout_ms": ("double_tap_timeout_ms", _positive_int),
     })
     _apply_section(config, data, "audio", {

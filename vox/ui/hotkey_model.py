@@ -20,7 +20,7 @@ DEFAULT_KEY = Config.hotkey  # "right_shift"; the dataclass default, not a new o
 
 # What both windows say, so macOS and Linux never drift apart
 TITLE = "Hotkey"
-INTRO = "Tap the hotkey on its own to start dictation, and tap it again to stop and paste. Double-tap it to cancel."
+INTRO = "Tap the hotkey on its own to start dictation, and tap it again to stop and paste. Cancel with × in the recording overlay."
 KEY_ROW = "Hotkey"
 COMBINATION_ROW = "Key combination"
 COMBINATION_NOTE = (

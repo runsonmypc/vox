@@ -478,3 +478,37 @@ def test_listening_drift_keeps_height_driven_by_microphone(rig):
     rig.now[0] = 7.5
     backend.callback()
     assert backend.frames[-1][1] == 0.5  # the explicit waiting indicator still moves
+
+
+def test_cancel_callback_dismisses_once_and_rejects_old_clicks(rig):
+    cancelled = Mock()
+    rig.overlay.on_cancel = cancelled
+    rig.start()
+    rig.flush()
+    rig.made[0].on_cancel(1)
+    assert rig.overlay.snapshot.phase == 'hidden'
+    rig.flush()
+    assert not rig.made[0].visible
+    rig.made[0].on_cancel(1)
+    cancelled.assert_called_once_with(1)
+    rig.start(2)
+    rig.flush()
+    rig.made[0].on_cancel(1)
+    assert rig.overlay.snapshot.phase == 'listening'
+    rig.overlay.processing(2)
+    rig.flush()
+    rig.made[0].on_cancel(2)
+    assert cancelled.call_count == 2
+    assert rig.overlay.snapshot.phase == 'hidden'
+
+
+def test_cancel_ignored_during_capture_and_fade(rig):
+    rig.overlay.on_cancel = Mock()
+    rig.start()
+    rig.flush()
+    with rig.overlay.capture_guard(timeout=0):
+        rig.overlay.request_cancel(1)
+    assert rig.overlay.snapshot.phase == 'listening'
+    rig.overlay.complete(1)
+    rig.overlay.request_cancel(1)
+    rig.overlay.on_cancel.assert_not_called()

@@ -273,3 +273,16 @@ def test_dictionary_comes_from_the_first_section_that_has_one(tmp_path):
     assert load(tmp_path, text).dictionary == ["A"]
     assert load(tmp_path, 'dictionary = ["Top"]\n' + text).dictionary == ["Top"]
     assert load(tmp_path, '[transcription]\ndictionary = ["T"]\n' + text).dictionary == ["T"]
+
+
+@pytest.mark.parametrize('value, expected', [('true', True), ('false', False)])
+def test_double_tap_cancel_opt_in(tmp_path, value, expected):
+    path = tmp_path / 'config.toml'
+    assert not load_config(path).double_tap_cancel
+    path.write_text('[hotkey]\ndouble_tap_timeout_ms = 300\n')
+    assert not load_config(path).double_tap_cancel
+    path.write_text(f'[hotkey]\ndouble_tap_cancel = {value}\n')
+    assert load_config(path).double_tap_cancel is expected
+    path.write_text('[hotkey]\ndouble_tap_cancel = "true"\n')
+    with pytest.raises(ConfigError, match='double_tap_cancel'):
+        load_config(path)

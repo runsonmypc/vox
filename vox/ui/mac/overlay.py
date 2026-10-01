@@ -9,7 +9,18 @@ import objc
 from Foundation import NSData, NSNotificationCenter, NSOperationQueue, NSRunLoop, NSRunLoopCommonModes, NSTimer
 
 from ..icons import IconState, make_app_icon
-from ..overlay import PANEL_SIZE, SIGNAL_HEIGHT, SIGNAL_WIDTH, SIGNAL_X, SIGNAL_Y, bead_circles, panel_frame, quartz_to_appkit, wave_paths
+from ..overlay import (
+    CANCEL_RECT,
+    PANEL_SIZE,
+    SIGNAL_HEIGHT,
+    SIGNAL_WIDTH,
+    SIGNAL_X,
+    SIGNAL_Y,
+    bead_circles,
+    panel_frame,
+    quartz_to_appkit,
+    wave_paths,
+)
 
 
 def _main_thread():
@@ -59,6 +70,19 @@ class RecordingPanel(AppKit.NSPanel):
         return False
 
 
+class CancelButton(AppKit.NSButton):
+    def acceptsFirstMouse_(self, event):
+        return True
+
+    def mouseDown_(self, event):
+        self.generation = self.owner.snapshot.generation
+        objc.super(CancelButton, self).mouseDown_(event)
+
+    def cancel_(self, sender):
+        generation, self.generation = self.generation, None
+        self.owner.on_cancel(self.owner.snapshot.generation if generation is None else generation)
+
+
 class SignalView(AppKit.NSView):
     def drawRect_(self, rect):
         if self.owner is None:
@@ -85,6 +109,14 @@ class SignalView(AppKit.NSView):
         AppKit.NSGraphicsContext.saveGraphicsState()
         try:
             transform.concat()
+            cross = AppKit.NSBezierPath.bezierPath()
+            cx, cy = CANCEL_RECT[0] + 9, PANEL_SIZE[1] - CANCEL_RECT[1] - 9
+            for dy in (-3, 3):
+                cross.moveToPoint_((cx - 3, cy + dy))
+                cross.lineToPoint_((cx + 3, cy - dy))
+            _color('bfc3ca').setStroke()
+            cross.setLineWidth_(1.25)
+            cross.stroke()
             icon_state = IconState.RECORDING if self.owner.snapshot.phase == 'listening' else IconState.PROCESSING
             self.owner.icons[icon_state].drawInRect_fromRect_operation_fraction_(
                 AppKit.NSMakeRect(6, (PANEL_SIZE[1] - 40) / 2, 40, 40), AppKit.NSZeroRect, AppKit.NSCompositingOperationSourceOver, 1)
@@ -135,6 +167,8 @@ class NativeOverlay:
     def __init__(self):
         _main_thread()
         self.panel = None
+        self.cancel_panel = None
+        self.on_cancel = lambda generation: None
         self._timer = None
         self._observers = []
         self._closed = False
@@ -166,6 +200,31 @@ class NativeOverlay:
             self.view = SignalView.alloc().initWithFrame_(AppKit.NSMakeRect(0, 0, *PANEL_SIZE))
             self.view.owner = self
             self.panel.setContentView_(self.view)
+            self.cancel_panel = RecordingPanel.alloc().initWithContentRect_styleMask_backing_defer_(
+                AppKit.NSMakeRect(0, 0, 18, 18),
+                self.panel.styleMask(), AppKit.NSBackingStoreBuffered, False)
+            self.cancel_panel.setReleasedWhenClosed_(False)
+            self.cancel_panel.setOpaque_(False)
+            # WindowServer passes clicks through entirely transparent windows.
+            # A barely visible backing makes the whole button target clickable.
+            self.cancel_panel.setBackgroundColor_(_color("1b1d20", 0.01))
+            self.cancel_panel.setHasShadow_(False)
+            self.cancel_panel.setHidesOnDeactivate_(False)
+            self.cancel_panel.setLevel_(self.panel.level())
+            self.cancel_panel.setCollectionBehavior_(behavior)
+            self.cancel_panel.setSharingType_(AppKit.NSWindowSharingNone)
+            self.cancel_panel.setAnimationBehavior_(AppKit.NSWindowAnimationBehaviorNone)
+            self.cancel_button = CancelButton.alloc().initWithFrame_(AppKit.NSMakeRect(0, 0, 18, 18))
+            self.cancel_button.owner = self
+            self.cancel_button.generation = None
+            self.cancel_button.setTitle_('')
+            self.cancel_button.setBordered_(False)
+            self.cancel_button.setFocusRingType_(AppKit.NSFocusRingTypeNone)
+            self.cancel_button.setTarget_(self.cancel_button)
+            self.cancel_button.setAction_('cancel:')
+            self.cancel_button.setAccessibilityLabel_('Cancel recording or transcription')
+            self.cancel_button.setToolTip_('Cancel')
+            self.cancel_panel.setContentView_(self.cancel_button)
             self.icons = {}
             for state in (IconState.RECORDING, IconState.PROCESSING):
                 png = io.BytesIO()
@@ -214,6 +273,11 @@ class NativeOverlay:
             screens = [s for s in screens if s[0] == self.screen_id] or screens[:1]
         self.screen_id, frame = panel_frame(screens, target)
         self.panel.setFrame_display_(_nsrect(frame), True)
+        x, y, width, height = frame
+        scale = min(1, width / PANEL_SIZE[0], height / PANEL_SIZE[1])
+        cx, cy, cw, ch = CANCEL_RECT
+        self.cancel_panel.setFrame_display_(
+            _nsrect((x + cx * scale, y + (PANEL_SIZE[1] - cy - ch) * scale, cw * scale, ch * scale)), True)
 
     def _display_changed(self):
         _main_thread()
@@ -227,6 +291,10 @@ class NativeOverlay:
         self._place(new)
         self.panel.setAlphaValue_(1)
         self.panel.orderFrontRegardless()
+        if snapshot.phase in ("listening", "processing"):
+            self.cancel_panel.orderFrontRegardless()
+        else:
+            self.cancel_panel.orderOut_(None)
 
     def draw(self, amplitude, phase, opacity):
         _main_thread()
@@ -245,6 +313,8 @@ class NativeOverlay:
 
     def hide(self):
         _main_thread()
+        if self.cancel_panel is not None:
+            self.cancel_panel.orderOut_(None)
         if self.panel is not None:
             self.panel.orderOut_(None)
 
@@ -272,6 +342,16 @@ class NativeOverlay:
                 center.removeObserver_(token)
             except Exception as exc:
                 errors.append(exc)
+        cancel_panel, self.cancel_panel = getattr(self, 'cancel_panel', None), None
+        if cancel_panel is not None:
+            for action in (lambda: cancel_panel.orderOut_(None), cancel_panel.close):
+                try:
+                    action()
+                except Exception as exc:
+                    errors.append(exc)
+            if hasattr(self, "cancel_button"):
+                self.cancel_button.owner = None
+        self.on_cancel = lambda generation: None
         panel, self.panel = self.panel, None
         if panel is not None:
             for action in (lambda: panel.orderOut_(None), panel.close):

@@ -26,6 +26,9 @@
 # An optional key combination that also toggles dictation, for example "ctrl+space", where "ctrl"
 # is the left Control key and "right_ctrl" the right one.
 # fallback = ""
+# Enable double-tap cancellation (off by default; use the overlay × to cancel).
+# double_tap_cancel = false
+
 # How quickly the second tap of a double-tap must follow the first, in milliseconds.
 # double_tap_timeout_ms = 400
 

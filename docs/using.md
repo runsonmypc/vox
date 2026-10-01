@@ -14,7 +14,9 @@
 | --- | --- |
 | Tap **right Shift** on its own | Start recording (Vox Transfer lowers the volume and plays a sound). |
 | Tap it again | Stop, transcribe, and paste the text into the focused app. |
-| Double-tap it | Cancel: discard the recording, or stop a transcription in progress. Nothing is pasted. |
+| Click × in the overlay | Cancel: discard the recording, or stop a transcription in progress. Nothing is pasted. |
+
+Enable the overlay in General Settings. Double-tap cancellation is off by default; opt in with `[hotkey] double_tap_cancel = true` in the configuration file.
 
 Pressing the hotkey together with another key, as when typing a capital letter with Shift, does
 nothing. To use another key, see [Choosing another hotkey](#choosing-another-hotkey).

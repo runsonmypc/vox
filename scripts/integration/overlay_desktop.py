@@ -52,6 +52,12 @@ def main():
         raise SystemExit('Existing Accessibility and Screen Recording permissions are required')
     app = AppKit.NSApplication.sharedApplication()
     app.setActivationPolicy_(AppKit.NSApplicationActivationPolicyAccessory)
+    def stop_native_loop():
+        app.stop_(None)
+        event = AppKit.NSEvent.otherEventWithType_location_modifierFlags_timestamp_windowNumber_context_subtype_data1_data2_(
+            AppKit.NSEventTypeApplicationDefined, (0, 0), 0, 0, 0, None, 0, 0, 0)
+        app.postEvent_atStart_(event, False)
+
     original_focus = AppKit.NSWorkspace.sharedWorkspace().frontmostApplication()
     original_clipboard = _snapshot_pasteboard(_general_pasteboard())
     config = Config(context_screen=True, overlay_enabled=True)
@@ -136,6 +142,7 @@ def main():
             def shot(command, **kwargs):
                 if command[0] == 'screencapture':
                     assert not overlay.backend.panel.isVisible()
+                    assert not overlay.backend.cancel_panel.isVisible()
                     captured.append(True)
                 result = original_run(command, **kwargs)
                 if command[0] == 'screencapture' and result.returncode == 0:
@@ -199,6 +206,42 @@ def main():
             wait(lambda: not overlay.backend.panel.isVisible(), 'reduced motion completion dismisses immediately')
             report['passed'].append('native static reduced-motion presentation and immediate completion')
             overlay._motion_changed(False)
+
+            cancelled = []
+            overlay.on_cancel = cancelled.append
+            old_pointer = CGEventGetLocation(CGEventCreate(None))
+            try:
+                for generation, phase in ((40, 'listening'), (41, 'processing')):
+                    overlay.begin(generation)
+                    overlay.listening(generation, context, 'batch', recorder)
+                    if phase == 'processing':
+                        overlay.processing(generation)
+                    wait(lambda: overlay.backend.cancel_panel.isVisible(), 'cancel button visible')
+                    frame = overlay.backend.cancel_panel.frame()
+                    point = (frame.origin.x + frame.size.width / 2,
+                             primary_height - frame.origin.y - frame.size.height / 2)
+                    def cancelled_click(value):
+                        cancelled.append(value)
+                        stop_native_loop()
+                    overlay.on_cancel = cancelled_click
+                    def post_click(point=point):
+                        for kind in (kCGEventLeftMouseDown, kCGEventLeftMouseUp):
+                            CGEventPost(kCGHIDEventTap, CGEventCreateMouseEvent(None, kind, point, kCGMouseButtonLeft))
+                    from Foundation import NSTimer
+                    deadline = NSTimer.scheduledTimerWithTimeInterval_repeats_block_(
+                        5, False, lambda _: stop_native_loop())
+                    AppHelper.callLater(0.1, post_click)
+                    try:
+                        app.run()  # use the real application loop for native button tracking
+                    finally:
+                        deadline.invalidate()
+                    assert generation in cancelled, 'native cancel click not delivered'
+                    wait(lambda: not overlay.backend.panel.isVisible() and not overlay.backend.cancel_panel.isVisible(),
+                         'both overlay windows hidden after cancel')
+                    assert detect_active_window(config).pid == context.pid
+                    report['passed'].append(f'actual cancel click while {phase}: callback, both windows hidden, target retains focus')
+            finally:
+                CGWarpMouseCursorPosition(old_pointer)
 
             if args.microphone:
                 mic = Recorder(Config())

@@ -1,0 +1,7 @@
+{
+  "passed": [
+    "Actual listening cancel click: correct generation, both windows hidden, original app retains focus",
+    "Actual processing cancel click: correct generation, both windows hidden, original app retains focus",
+    "Both native windows released"
+  ]
+}

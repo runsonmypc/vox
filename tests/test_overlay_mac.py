@@ -108,3 +108,43 @@ def test_native_close_attempts_remaining_cleanup_after_exceptions(appkit):
     second.removeObserver_.assert_called_once_with(2)
     panel.close.assert_called_once()
     assert native.panel is None and native.view.owner is None and not native._observers
+
+
+def test_cancel_button_is_nonactivating_and_hides_with_panel(appkit):
+    from vox.ui.mac.overlay import NativeOverlay
+    native = NativeOverlay()
+    native.on_cancel = Mock()
+    try:
+        native.show(Snapshot(7, 1, 'listening'))
+        assert native.cancel_panel.isVisible()
+        assert not native.cancel_panel.canBecomeKeyWindow()
+        assert not native.cancel_panel.ignoresMouseEvents()
+        assert native.cancel_panel.sharingType() == appkit.NSWindowSharingNone
+        native.cancel_button.performClick_(None)
+        native.on_cancel.assert_called_once_with(7)
+        native.cancel_button.generation = 7  # pressed before a new recording appeared
+        native.show(Snapshot(8, 1, 'processing'))
+        native.cancel_button.cancel_(None)
+        assert native.on_cancel.call_args.args == (7,)
+        native.hide()
+        assert not native.cancel_panel.isVisible() and not native.panel.isVisible()
+        native.show(Snapshot(8, 2, 'fading'))
+        assert not native.cancel_panel.isVisible()
+    finally:
+        native.close()
+    assert native.cancel_panel is None
+
+
+def test_partial_cancel_panel_construction_still_closes_body(appkit):
+    from vox.ui.mac.overlay import NativeOverlay
+    native = NativeOverlay.__new__(NativeOverlay)
+    native._closed = False
+    native.timer = Mock()
+    native._observers = []
+    body, button_panel = Mock(), Mock()
+    native.panel, native.cancel_panel = body, button_panel
+    native.view = SimpleNamespace(owner=native)
+    native.close()
+    body.close.assert_called_once()
+    button_panel.close.assert_called_once()
+    assert native.view.owner is None

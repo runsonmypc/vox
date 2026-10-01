@@ -141,3 +141,19 @@ def test_hide_synchronizes_x_before_capture_ack(x11):
             display.sync.assert_called_once()
     finally:
         native.close()
+
+
+def test_cancel_button_captures_generation_and_accessible_action(x11):
+    native = x11.NativeOverlay()
+    native.on_cancel = Mock()
+    try:
+        native.show(Snapshot(7, 1, 'listening'))
+        assert not native.cancel_button.get_can_focus()
+        native.cancel_button.emit('pressed')
+        native.show(Snapshot(8, 1, 'processing'))
+        native.cancel_button.emit('clicked')
+        native.on_cancel.assert_called_once_with(7)
+        native.cancel_button.emit('clicked')
+        assert native.on_cancel.call_args.args == (8,)
+    finally:
+        native.close()

@@ -179,3 +179,91 @@ async def test_history_processing_state_cannot_show_overlay(rig):
             h.daemon.set_state(State.PROCESSING)
             rig.flush()
             assert not rig.made and rig.overlay.snapshot.phase == 'hidden'
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize('processing', [False, True])
+async def test_overlay_button_cancels_operation_without_paste(rig, processing):
+    with patch('vox.daemon.create_overlay', return_value=rig.overlay), patch('vox.daemon._POST_ROLL_SECONDS', 0):
+        async with running(openai_config(attenuation_enabled=False)) as h:
+            h.recorder.latest_level = None
+            gate = asyncio.Event()
+            async def transcribe(*_):
+                await gate.wait()
+                return 'should not paste'
+            h.batch.transcribe.side_effect = transcribe
+            await h.daemon._start_recording()
+            if processing:
+                await h.daemon._stop_recording()
+            rig.flush()
+            rig.made[0].on_cancel(h.daemon._generation)
+            assert rig.overlay.snapshot.phase == 'hidden'
+            rig.flush()
+            assert not rig.made[0].visible
+            await until(lambda: h.state is State.IDLE)
+            assert h.played('cancel')
+            h.paste.assert_not_called()
+            await h.daemon._start_recording()
+            await h.daemon._handle(f'overlay:cancel:{h.daemon._generation - 1}')
+            assert h.state is State.RECORDING
+            await h.daemon._cancel()
+            h.daemon._cancel = AsyncMock()
+            await h.daemon._handle(f'overlay:cancel:{h.daemon._generation}')
+            h.daemon._cancel.assert_not_called()
+
+
+@pytest.mark.anyio
+async def test_double_tap_preference_reloads_without_other_hotkey_changes():
+    async with running(openai_config(attenuation_enabled=False)) as h:
+        with patch('vox.daemon.HotkeyListener') as listener:
+            new = openai_config(attenuation_enabled=False, double_tap_cancel=True)
+            h.daemon._apply_hotkey(new)
+            assert h.daemon.config.double_tap_cancel
+            listener.assert_called_once()
+            h.daemon._apply_hotkey(new)
+            listener.assert_called_once()
+            new.double_tap_cancel = False
+            h.daemon._apply_hotkey(new)
+            assert listener.call_count == 2
+            assert not h.daemon.config.double_tap_cancel
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize('result', ['text', 'partial', 'error'])
+async def test_cancel_prevents_paste_while_daemon_is_busy_reloading_settings(rig, result):
+    with patch('vox.daemon.create_overlay', return_value=rig.overlay), patch('vox.daemon._POST_ROLL_SECONDS', 0):
+        async with running(openai_config(attenuation_enabled=False)) as h:
+            h.recorder.latest_level = None
+            result_ready, reload_entered, release_reload = asyncio.Event(), asyncio.Event(), asyncio.Event()
+            async def transcribe(*_):
+                await result_ready.wait()
+                if result == 'partial':
+                    from vox.transcribe import PartialTranscriptionError
+                    raise PartialTranscriptionError('provider failed', 'partial text')
+                if result == 'error':
+                    raise RuntimeError('provider failed')
+                return 'cancelled text must never paste'
+            async def reload_key(*_):
+                reload_entered.set()
+                await release_reload.wait()
+            h.batch.transcribe.side_effect = transcribe
+            h.daemon._reload_api_key = reload_key
+            await h.daemon._start_recording()
+            await h.daemon._stop_recording()
+            rig.flush()
+            process = h.daemon.process_task
+            h.send('settings:closed')
+            await reload_entered.wait()
+            try:
+                rig.made[0].on_cancel(h.daemon._generation)
+                rig.flush()
+                result_ready.set()
+                # Let delivery's hide acknowledgment drain without unblocking daemon events.
+                await until(lambda: rig.overlay._pending or process.done())
+                rig.flush()
+                await until(process.done)
+                assert process.cancelled()
+                h.paste.assert_not_called()
+            finally:
+                release_reload.set()
+            await until(lambda: h.state is State.IDLE)

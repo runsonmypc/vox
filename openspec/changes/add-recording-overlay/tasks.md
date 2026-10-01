@@ -67,3 +67,13 @@ Validation evidence and explicitly unavailable desktop checks: [validation.md](v
 - [x] 7.12 Distinguish recording with a red microphone grille and transcription with blue in both overlay and menu bar, and trim the panel to 224 × 44; render, verify and install the refined build. After comparing alternatives, the user chose to keep sky blue (#50BEFF).
 
 - [x] 7.13 Use silver for local waveform/processing feedback and show a silver microphone-grille preview beside the selected sky blue.
+
+## 8. Explicit cancellation (user-requested extension)
+
+- [x] 8.1 Add the top-right cancel button on macOS and X11 with equal visible-icon-to-signal and signal-to-right-edge spacing, preserve focus/body click-through and capture hiding, and guard cancellation against stale operations.
+- [x] 8.2 Default double-tap cancellation off with strict opt-in configuration and live reload for both hotkeys; verify default and enabled behavior.
+- [x] 8.3 Verify native interaction and lifecycle tests, update documentation, render a Mac/Linux comparison, and install locally for testing after independent implementation review.
+
+- [x] 8.4 Correct optical spacing using the rendered opaque glyph rather than faint alpha bounds; compare native Mac/Linux renders and update the local build.
+
+- [x] 8.5 Match the right gap to the 40-pixel microphone-body gap, verify native pixels on both platforms, refresh Preview and install locally.

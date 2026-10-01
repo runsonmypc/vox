@@ -372,3 +372,30 @@ highlights are preview-only; the selected sky blue processing grille remains ins
 
 The local silver palette is installed, its renderer/icon files match the checkout, and the
 service restarted ready without new startup errors.
+
+
+## Cancel button and balanced spacing — September 30, 2026
+
+Added a top-right × with an 18 × 18 native hit target on macOS and X11. The rest of the panel remains click-through. Accepted cancellation dismisses immediately and interrupts transcription on the asyncio loop even while the event consumer awaits settings work. Generation checks reject stale clicks; a lock-free cancellation marker guards delivery and failure retention. Both macOS windows hide for capture and close on teardown, including partial construction failures. Double-tap cancellation now defaults off for both hotkeys; strict `[hotkey] double_tap_cancel = true` opts in and reloads live.
+
+The initial spacing calculation used the alpha bounds of the glyph, including faint fringe pixels, and the user correctly rejected its visible imbalance. Re-measuring the rendered high-contrast glyph gives its right edge at approximately x=34.5. The corrected signal begins at x=50 and ends at x=208; status center is x=129. Native 2× previews show approximately 31 px of visible left gap and 30 px of right gap. Height stays 44 px. Independent visual review of `cancel-button/mac-linux-visible-spacing.png` found the corrected gaps balanced on both platforms; opened this fresh path in Preview and reinstalled locally.
+
+Validation:
+- macOS focused regression suite: 282 passed, 5 skipped (config, hotkeys/model, overlay/controller/daemon, native AppKit, existing pipeline, release documentation).
+- Linux/X11 focused regression suite in the local desktop container: 138 passed, 7 macOS-only skips.
+- Actual X11 desktop harness passed cancellation clicks while listening and processing, focus, body click-through, editor/terminal paste, clipboard restoration, capture exclusion and teardown. See `cancel-button/desktop-linux/linux.json`.
+- Actual macOS native application-loop clicks passed for listening and processing, preserving the original foreground application and hiding/releasing both windows. See `cancel-button/mac-clicks.json`; `scripts/integration/overlay_cancel_mac.py` performs this without audio or clipboard changes.
+- The broader macOS desktop harness attempts were not complete passes: initial runs exposed test event-loop dispatch issues at the new click check; later attempts stopped on target focus/text-delivery assertions. The short native-loop check above and daemon regression tests provide the completed new-feature evidence. No new claim is made for real editor/terminal or full-screen Spaces behavior.
+- Independent implementation review identified and verified fixes for cancellation during settings reload, a potentially blocking marker read, partial native construction cleanup, and spec consistency. Final review: no blocking findings; 12 targeted tests passed, 2 native tests skipped in the review sandbox.
+- Ruff, strict OpenSpec validation and whitespace checks passed.
+- Native Mac/Linux renders with balanced spacing are in `cancel-button/mac-linux-side-by-side.png`, opened in Preview. Local build installed and service startup checked; microphone/cloud transcription not exercised by these automated checks.
+
+
+### Final spacing: 40 rendered pixels on both sides
+
+Following the empirical measurement, the user selected 40 px for the right gap, matching the microphone capsule rather than the lower cog. Signal geometry is now x=50, width=153, endpoint x=203; status center follows at x=126.5. Waveform sampling includes the exact endpoint for odd widths. Native Mac and Linux local-listening rasters both measure capsule last pixel x=59, signal x=100 through 405, inner rim first pixel x=446 on row 43: exactly 40 clear pixels on each side at 2× (20 logical pixels). Evidence: `cancel-button/pixel-measurements-40px.json` and `cancel-button/mac-linux-40px-gaps.png`. Opened the fresh comparison in Preview and installed locally. Shared overlay tests: 31 passed. Ruff, strict OpenSpec validation and whitespace checks passed. Independent review found no defects in geometry, rendered appearance, endpoint sampling or spec consistency. Earlier pixel reports and previews document superseded spacing choices.
+
+
+### README animation
+
+Added one `docs/images/recording-overlay.gif` beneath the README overlay description. The 10-second looping animation uses the production AppKit renderer with controlled sample microphone levels, including silence, cloud brass and local silver recording, and both processing states. It preserves the final spacing and cancel control. The asset is 496 × 136, 192 encoded frames, and approximately 355 KB. Inspected decoded frames for all four states and checked duration/loop metadata; no microphone or provider was used to generate it.

@@ -1,0 +1,110 @@
+{
+  "mac": {
+    "source_size": [
+      448,
+      88
+    ],
+    "scale": 2,
+    "background_rgb": [
+      36,
+      39,
+      43
+    ],
+    "foreground_threshold": 50,
+    "rim_threshold": 20,
+    "widest_glyph_last_pixel": 69,
+    "widest_glyph_clear_gap": 30,
+    "baseline_rows": [
+      {
+        "y": 42,
+        "icon_last_pixel": 59,
+        "signal_first_pixel": 100,
+        "signal_last_pixel": 415,
+        "rim_first_pixel": 446,
+        "left_clear_pixels": 40,
+        "right_clear_pixels": 30
+      },
+      {
+        "y": 43,
+        "icon_last_pixel": 59,
+        "signal_first_pixel": 100,
+        "signal_last_pixel": 415,
+        "rim_first_pixel": 446,
+        "left_clear_pixels": 40,
+        "right_clear_pixels": 30
+      },
+      {
+        "y": 44,
+        "icon_last_pixel": 66,
+        "signal_first_pixel": 100,
+        "signal_last_pixel": 415,
+        "rim_first_pixel": 446,
+        "left_clear_pixels": 33,
+        "right_clear_pixels": 30
+      },
+      {
+        "y": 45,
+        "icon_last_pixel": 68,
+        "signal_first_pixel": 100,
+        "signal_last_pixel": 415,
+        "rim_first_pixel": 446,
+        "left_clear_pixels": 31,
+        "right_clear_pixels": 30
+      }
+    ]
+  },
+  "linux": {
+    "source_size": [
+      448,
+      88
+    ],
+    "scale": 2,
+    "background_rgb": [
+      27,
+      29,
+      32
+    ],
+    "foreground_threshold": 50,
+    "rim_threshold": 20,
+    "widest_glyph_last_pixel": 69,
+    "widest_glyph_clear_gap": 30,
+    "baseline_rows": [
+      {
+        "y": 42,
+        "icon_last_pixel": 59,
+        "signal_first_pixel": 100,
+        "signal_last_pixel": 415,
+        "rim_first_pixel": 446,
+        "left_clear_pixels": 40,
+        "right_clear_pixels": 30
+      },
+      {
+        "y": 43,
+        "icon_last_pixel": 59,
+        "signal_first_pixel": 100,
+        "signal_last_pixel": 415,
+        "rim_first_pixel": 446,
+        "left_clear_pixels": 40,
+        "right_clear_pixels": 30
+      },
+      {
+        "y": 44,
+        "icon_last_pixel": 66,
+        "signal_first_pixel": 100,
+        "signal_last_pixel": 415,
+        "rim_first_pixel": 446,
+        "left_clear_pixels": 33,
+        "right_clear_pixels": 30
+      },
+      {
+        "y": 45,
+        "icon_last_pixel": 68,
+        "signal_first_pixel": 100,
+        "signal_last_pixel": 415,
+        "rim_first_pixel": 446,
+        "left_clear_pixels": 31,
+        "right_clear_pixels": 30
+      }
+    ]
+  }
+}

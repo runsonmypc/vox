@@ -15,7 +15,17 @@ gi.require_foreign('cairo')
 from gi.repository import Gdk, GdkPixbuf, GdkX11, GLib, Gtk  # noqa: E402
 
 from ..icons import IconState, make_app_icon  # noqa: E402
-from ..overlay import PANEL_SIZE, SIGNAL_HEIGHT, SIGNAL_WIDTH, SIGNAL_X, SIGNAL_Y, bead_circles, panel_frame, wave_paths  # noqa: E402
+from ..overlay import (  # noqa: E402
+    CANCEL_RECT,
+    PANEL_SIZE,
+    SIGNAL_HEIGHT,
+    SIGNAL_WIDTH,
+    SIGNAL_X,
+    SIGNAL_Y,
+    bead_circles,
+    panel_frame,
+    wave_paths,
+)
 
 
 def _main_thread():
@@ -49,6 +59,7 @@ class NativeOverlay:
         self._monitor_signals = []
         self._closed = False
         self.on_error = lambda: None
+        self.on_cancel = lambda generation: None
         self.snapshot = None
         self.monitor = None
         self.amplitude = self.phase = 0.0
@@ -73,8 +84,23 @@ class NativeOverlay:
                 self.panel.set_visual(visual)
             self.panel.set_default_size(*PANEL_SIZE)
             self.panel.connect('draw', self._draw)
+            self.fixed = Gtk.Fixed()
+            self.panel.add(self.fixed)
+            self.cancel_button = Gtk.Button()
+            self.cancel_button.set_can_focus(False)
+            self.cancel_button.set_focus_on_click(False)
+            self.cancel_button.set_tooltip_text('Cancel')
+            self.cancel_button.get_accessible().set_name('Cancel recording or transcription')
+            css = Gtk.CssProvider()
+            css.load_from_data(b'button { min-width: 0; min-height: 0; padding: 0; margin: 0; border: 0; background: transparent; box-shadow: none; }')
+            self.cancel_button.get_style_context().add_provider(css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+            self.cancel_button.connect('pressed', self._cancel_pressed)
+            self.cancel_button.connect('clicked', self._cancel_clicked)
+            self._cancel_generation = None
+            self.fixed.put(self.cancel_button, CANCEL_RECT[0], CANCEL_RECT[1])
+            self.cancel_button.set_size_request(CANCEL_RECT[2], CANCEL_RECT[3])
             self.panel.realize()
-            # An empty input region passes every pointer event to the window underneath.
+            # Start with no input until show() positions the cancel target.
             self.panel.get_window().input_shape_combine_region(cairo.Region(), 0, 0)
             self.icons = {}
             for state in (IconState.RECORDING, IconState.PROCESSING):
@@ -172,7 +198,19 @@ class NativeOverlay:
             inset = math.ceil(radius - math.sqrt(max(0, radius * radius - dy * dy))) if dy else 0
             region.union(cairo.RectangleInt(inset, row, max(1, round(width) - 2 * inset), 1))
         self.panel.get_window().shape_combine_region(region, 0, 0)
-        self.panel.get_window().input_shape_combine_region(cairo.Region(), 0, 0)
+        scale = min(1, width / PANEL_SIZE[0], height / PANEL_SIZE[1])
+        cx, cy, cw, ch = [round(v * scale) for v in CANCEL_RECT]
+        self.fixed.move(self.cancel_button, cx, cy)
+        self.cancel_button.set_size_request(cw, ch)
+        input_region = cairo.Region(cairo.RectangleInt(cx, cy, cw, ch)) if self.snapshot.phase in ('listening', 'processing') else cairo.Region()
+        self.panel.get_window().input_shape_combine_region(input_region, 0, 0)
+
+    def _cancel_pressed(self, button):
+        self._cancel_generation = self.snapshot.generation
+
+    def _cancel_clicked(self, button):
+        generation, self._cancel_generation = self._cancel_generation, None
+        self.on_cancel(self.snapshot.generation if generation is None else generation)
 
     def _display_changed(self, *_):
         if self._closed:
@@ -224,6 +262,13 @@ class NativeOverlay:
         try:
             scale = min(1, width / PANEL_SIZE[0], height / PANEL_SIZE[1])
             ctx.scale(scale, scale)
+            _color(ctx, 'bfc3ca')
+            ctx.set_line_width(1.25)
+            cx, cy = CANCEL_RECT[0] + 9, CANCEL_RECT[1] + 9
+            for dy in (-3, 3):
+                ctx.move_to(cx - 3, cy + dy)
+                ctx.line_to(cx + 3, cy - dy)
+            ctx.stroke()
             ctx.save()
             ctx.translate(6, (PANEL_SIZE[1] - 40) / 2)
             icon_state = IconState.RECORDING if self.snapshot.phase == 'listening' else IconState.PROCESSING

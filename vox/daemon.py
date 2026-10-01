@@ -240,6 +240,7 @@ class _Daemon:
             raise SystemExit(1) from e
         self.recorder = Recorder(config)
         self.overlay = create_overlay(config.overlay_enabled, tray.dispatch_ui if tray is not None else None)
+        self.overlay.on_cancel = lambda generation: self.loop.call_soon_threadsafe(self._overlay_cancel, generation)
         self._generation = 0
         self.recorder.warmup()
         self.sounds = SoundPlayer(config)
@@ -326,6 +327,14 @@ class _Daemon:
                 await asyncio.gather(self.process_task, return_exceptions=True)
             self._shutdown(reload_task)
 
+    def _overlay_cancel(self, generation: int) -> None:
+        """Interrupt processing even while the event consumer awaits settings or device work."""
+        if generation != self._generation or (self.session is None and self.inflight is None):
+            return
+        if self.process_task is not None and not self.process_task.done():
+            self.process_task.cancel()
+        self.queue.put_nowait(f"overlay:cancel:{generation}")
+
     async def _handle(self, event: str) -> None:
         if event.startswith("mode:"):
             await self._switch_mode(event.partition(":")[2])
@@ -335,6 +344,12 @@ class _Daemon:
             return
         if event == "settings:closed":
             await self._settings_closed()
+            return
+
+        if event.startswith("overlay:cancel:"):
+            if event != f"overlay:cancel:{self._generation}" or (self.session is None and self.inflight is None):
+                return
+            await self._cancel()
             return
 
         if event in ("pause", "resume"):
@@ -738,10 +753,10 @@ class _Daemon:
         """Listen for the [hotkey] settings in ``new`` if they changed. A pynput listener can't restart,
         so a fresh one replaces it; it applies at once, also during a recording, which the new key then stops."""
         config = self.config
-        settings = (new.hotkey, new.hotkey_fallback, new.double_tap_timeout_ms)
-        if settings == (config.hotkey, config.hotkey_fallback, config.double_tap_timeout_ms):
+        settings = (new.hotkey, new.hotkey_fallback, new.double_tap_timeout_ms, new.double_tap_cancel)
+        if settings == (config.hotkey, config.hotkey_fallback, config.double_tap_timeout_ms, config.double_tap_cancel):
             return
-        config.hotkey, config.hotkey_fallback, config.double_tap_timeout_ms = settings
+        config.hotkey, config.hotkey_fallback, config.double_tap_timeout_ms, config.double_tap_cancel = settings
         self.hotkey.stop()
         self.hotkey = HotkeyListener(config, self.loop, self.queue)
         self.hotkey.start()  # logs "Hotkey listener started (key=…, fallback=…)"
@@ -913,6 +928,8 @@ async def _process(
         text = _expand_snippet(text, config)
         if overlay is not None:
             await asyncio.to_thread(overlay.hide_before_paste, overlay_generation)
+            if overlay.is_cancelled(overlay_generation):
+                raise asyncio.CancelledError from None
         pasted = await _paste(text, context, config)
         if not pasted:
             sounds.play("error")  # the text is still in history
@@ -939,6 +956,8 @@ async def _process(
             await streaming_transcriber.close()
         raise
     except PartialTranscriptionError as e:
+        if overlay is not None and overlay.is_cancelled(overlay_generation):
+            raise asyncio.CancelledError from None
         if overlay is not None:
             overlay.complete(overlay_generation, False)
         sounds.play("error")
@@ -951,8 +970,12 @@ async def _process(
             return Outcome.PARTIAL
         if overlay is not None:
             await asyncio.to_thread(overlay.hide_before_paste, overlay_generation)
+            if overlay.is_cancelled(overlay_generation):
+                raise asyncio.CancelledError from None
         await _paste(e.text, context, config)
     except Exception as e:
+        if overlay is not None and overlay.is_cancelled(overlay_generation):
+            raise asyncio.CancelledError from None
         if overlay is not None:
             overlay.complete(overlay_generation, False)
         log.error("Processing failed (phase=%s, error_type=%s)", "transcription" if transcribing else "delivery", type(e).__name__)

@@ -23,7 +23,7 @@ FREE_RUNNERS = {"ubuntu-24.04", "ubuntu-24.04-arm", "macos-latest"}
 # Every setting config.example.toml must document at its default, as (table, key)
 DOCUMENTED = {
     (None, "dictionary"),
-    ("hotkey", "key"), ("hotkey", "fallback"), ("hotkey", "double_tap_timeout_ms"),
+    ("hotkey", "key"), ("hotkey", "fallback"), ("hotkey", "double_tap_timeout_ms"), ("hotkey", "double_tap_cancel"),
     ("audio", "sample_rate"), ("audio", "channels"), ("audio", "max_recording_seconds"),
     ("transcription", "keep_failed_audio"), ("transcription", "mode"), ("transcription", "streaming_model"), ("transcription", "prompt"),
     ("whisper", "model"),

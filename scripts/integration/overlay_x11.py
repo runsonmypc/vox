@@ -130,6 +130,22 @@ def main():
             assert detect_active_window(config).win_id == target.win_id
             native._place()
             report['passed'].append('actual X11 mouse click passes through the panel and moves the underlying cursor')
+            cancelled = []
+            overlay.on_cancel = cancelled.append
+            for generation, phase in ((40, 'listening'), (41, 'processing')):
+                overlay.begin(generation)
+                overlay.listening(generation, target, 'batch', recorder)
+                if phase == 'processing':
+                    overlay.processing(generation)
+                wait(lambda generation=generation: native.snapshot.generation == generation, 'cancel phase applied')
+                settle()
+                px, py = native.panel.get_position()
+                command('xdotool', 'mousemove', str(px + 213), str(py + 11), 'click', '1')
+                wait(lambda generation=generation: generation in cancelled, 'native cancel click delivered')
+                wait(lambda: not native.panel.get_visible(), 'panel hidden after cancel')
+                assert detect_active_window(config).win_id == target.win_id
+                report['passed'].append(f'actual X11 cancel click while {phase}: callback, hide, target retains focus')
+
             desktop.reset_target()
             worker(lambda: paste('Overlay target context marker.', target.app_type))
             wait(lambda: desktop.state('targeta')['text'] == 'Overlay target context marker.', 'capture marker ready')

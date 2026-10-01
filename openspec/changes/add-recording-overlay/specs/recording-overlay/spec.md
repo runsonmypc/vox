@@ -5,7 +5,7 @@ Provide optional desktop feedback for real microphone activity and transcription
 ## ADDED Requirements
 
 ### Requirement: Compact native panel and display placement
-On a supported macOS or Linux/X11 desktop with the preference enabled, the system SHALL show a compact floating panel after microphone recording successfully starts. It SHALL use the website reference's charcoal background, subtle border, rounded corners, Vox microphone glyph directly on the panel without a separate square background, and layered waveform in brass for cloud or silver for local. Approximately 224 × 44 logical pixels SHALL be the starting layout, with the icon on the left, the waveform or processing line centered vertically in the panel, and an 8 px status label below the signal row, horizontally centered with the waveform or processing line. The microphone grille SHALL be red while recording and blue while transcribing, matching the menu bar/tray state colors. Placement SHALL be near the bottom center of the display containing the focused application window, within usable display bounds.
+On a supported macOS or Linux/X11 desktop with the preference enabled, the system SHALL show a compact floating panel after microphone recording successfully starts. It SHALL use the website reference's charcoal background, subtle border, rounded corners, Vox microphone glyph directly on the panel without a separate square background, and layered waveform in brass for cloud or silver for local. Approximately 224 × 44 logical pixels SHALL be the starting layout, with the icon on the left, the waveform or processing line centered vertically in the panel, and an 8 px status label below the signal row, horizontally centered with the waveform or processing line. The gap from the visible microphone body at waveform height to the signal SHALL equal the gap from the signal to the panel’s inner rim: 40 clear pixels in the 2× native render (20 logical pixels). The microphone grille SHALL be red while recording and blue while transcribing, matching the menu bar/tray state colors. Placement SHALL be near the bottom center of the display containing the focused application window, within usable display bounds.
 
 #### Scenario: Recording starts on a secondary display
 - **WHEN** recording starts with the target window on a secondary display
@@ -54,10 +54,10 @@ After the stop request the panel SHALL leave listening and show “Transcribing�
 - **THEN** earlier callbacks cannot hide or update the new panel
 
 ### Requirement: Focus and context isolation
-The panel SHALL be non-activating and click-through. Showing, updating, and dismissing it SHALL preserve application focus, insertion cursor, hotkeys, clipboard restoration, and paste destination. Vox screenshot/OCR context SHALL exclude overlay pixels and status text. The panel SHALL NOT become the detected focused window.
+The panel SHALL be non-activating and click-through outside its top-right cancel button. Showing, updating, and dismissing it SHALL preserve application focus, insertion cursor, hotkeys, clipboard restoration, and paste destination. Vox screenshot/OCR context SHALL exclude overlay pixels and status text. The panel SHALL NOT become the detected focused window.
 
 #### Scenario: Focus and text delivery
-- **WHEN** the user dictates into an editor or terminal and clicks through the panel
+- **WHEN** the user dictates into an editor or terminal and clicks through the panel outside the cancel button
 - **THEN** the underlying app receives the click and existing text delivery, cursor, shortcuts, and clipboard restoration behavior is preserved
 
 #### Scenario: Context capture
@@ -88,8 +88,27 @@ Linux dictation SHALL operate without initializing macOS GUI components. Linux/X
 
 #### Scenario: Linux X11 overlay
 - **WHEN** a Linux/X11 user enables the overlay and records
-- **THEN** the native GTK panel shows the same statuses and actual microphone feedback, remains click-through without changing focus, stays within the target monitor work area, and uses the shared lifecycle and screenshot guard
+- **THEN** the native GTK panel shows the same statuses and actual microphone feedback, remains click-through outside the cancel button without changing focus, stays within the target monitor work area, and uses the shared lifecycle and screenshot guard
 
 #### Scenario: Linux reduced motion
 - **WHEN** the desktop disables GTK animations before or during dictation
 - **THEN** the panel uses static presentation and immediate completion, with no hidden timer work
+
+### Requirement: Explicit cancellation
+The overlay SHALL provide a small top-right × button while recording and transcribing on macOS and Linux/X11, with an accessible Cancel label. Clicking it SHALL dismiss the overlay and cancel the associated operation without pasting or taking focus. The rest of the panel SHALL remain click-through. The button SHALL follow capture hiding, placement and teardown of the panel. Double-tap cancellation SHALL default off for both hotkeys; strict boolean `[hotkey] double_tap_cancel = true` SHALL opt in using the existing timeout and apply on config reload.
+
+#### Scenario: Cancel using the overlay
+- **WHEN** the user clicks × while recording or transcribing
+- **THEN** that operation is cancelled, the overlay disappears, no text is pasted, and the target app retains focus
+
+#### Scenario: Stale click
+- **WHEN** a click belongs to an earlier operation or a dismissed overlay
+- **THEN** it cannot cancel a newer operation or history retry
+
+#### Scenario: Default double tap
+- **WHEN** no double-tap preference is configured and either hotkey is tapped twice quickly
+- **THEN** both taps use normal toggle behavior and no cancel event is emitted
+
+#### Scenario: Explicit double-tap opt in
+- **WHEN** double_tap_cancel is set to true and reloaded
+- **THEN** the primary and fallback hotkeys use the configured double-tap timeout to cancel

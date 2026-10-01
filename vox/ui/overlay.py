@@ -18,7 +18,8 @@ log = logging.getLogger(__name__)
 FADE_SECONDS = 0.19
 CAPTURE_TIMEOUT = 0.3
 PANEL_SIZE = (224, 44)
-SIGNAL_X, SIGNAL_WIDTH, SIGNAL_HEIGHT = 56, 152, 20
+SIGNAL_X, SIGNAL_WIDTH, SIGNAL_HEIGHT = 50, 153, 20  # 40 rendered pixels beside mic body and inside rim at 2×
+CANCEL_RECT = (204, 2, 18, 18)  # top-left origin; only this corner accepts clicks
 SIGNAL_Y = PANEL_SIZE[1] / 2  # centered vertically; status sits below
 
 
@@ -76,6 +77,21 @@ class Overlay:
         self._fade_at = 0.0
         self._processing_at = 0.0
         self._eligible = None
+        self.on_cancel = lambda generation: None
+        self._cancelled_generation = None
+
+    def request_cancel(self, generation):
+        with self._lock:
+            if (generation != self.snapshot.generation or self.snapshot.phase not in ("listening", "processing")
+                    or self.closed or self.failed or not self.enabled or self._captures):
+                return
+            self._cancelled_generation = generation
+            self.dismiss()
+        self.on_cancel(generation)
+
+    def is_cancelled(self, generation):
+        # A published scalar: never wait for native drawing/hiding on the daemon loop.
+        return self._cancelled_generation == generation
 
     def _detach(self):
         if self.recorder is not None:
@@ -217,6 +233,7 @@ class Overlay:
                         self._reduced = self.backend.reduced_motion
                         self.backend.observe_motion(self._motion_changed)
                         self.backend.on_error = self._fail
+                        self.backend.on_cancel = self.request_cancel
                     self.backend.show(self.snapshot)
                     self._tick(self.snapshot)
                     if self.snapshot.phase != 'hidden':
@@ -341,7 +358,8 @@ def wave_paths(amplitude, phase, width=142, height=42):
     """Reference-style carrier geometry shared by the native renderers, back to front."""
     for layer in (2, 1, 0):
         points = []
-        for x in range(0, width + 1, 2):
+        for x in range(0, width + 2, 2):
+            x = min(x, width)  # include the exact endpoint for odd signal widths too
             u = x / width
             envelope = math.sin(u * math.pi) ** 1.8
             syllable = 0.5 + 0.5 * math.sin(u * 19 - phase * 4.5)
