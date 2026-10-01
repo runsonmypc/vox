@@ -44,8 +44,8 @@ waveform and transcription status near the bottom of the target display. It is o
 and follows Reduce Motion. [Overlay settings and platform coverage](docs/settings.md#recording-overlay)
 
 <p align="center">
-  <a href="docs/images/recording-overlay.gif">
-    <img src="docs/images/recording-overlay.gif" width="496" alt="Animated recording overlay: microphone-responsive waveform while listening, a glowing bead while transcribing, brass for cloud and silver for local, with a cancel button at the top right">
+  <a href="docs/images/recording-overlay.png">
+    <img src="docs/images/recording-overlay.png" width="496" alt="Animated recording overlay: microphone-responsive waveform while listening, a glowing bead while transcribing, brass for cloud and silver for local, with a cancel button at the top right">
   </a>
 </p>
 
