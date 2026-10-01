@@ -27,9 +27,9 @@ The General page of Settings SHALL let the user choose the microphone, the recor
 - **WHEN** the user enables “Show recording overlay” on macOS or Linux/X11
 - **THEN** `[overlay] enabled = true` is persisted through the shared settings path and applied without restarting
 
-#### Scenario: Default off
+#### Scenario: Default on
 - **WHEN** the configuration has no overlay preference
-- **THEN** the setting is off and no overlay appears
+- **THEN** the setting is on and the overlay appears on supported desktops during recording
 
 #### Scenario: Save failure
 - **WHEN** saving the preference fails or the settings file is invalid

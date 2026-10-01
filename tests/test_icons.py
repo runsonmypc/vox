@@ -97,10 +97,17 @@ def test_app_icon_is_cog_microphone_on_gunmetal_rounded_square():
     assert _has_color(flat, (255, 96, 76), tol=12)  # lit grille
 
 
-@pytest.mark.parametrize('state,rgb', [(IconState.RECORDING, (255, 59, 48)),
-                                    (IconState.PROCESSING, (80, 190, 255))])
-def test_overlay_icon_has_transparent_plate_and_matches_tray_state(state, rgb):
+def test_recording_overlay_icon_has_transparent_plate_and_red_grille():
+    state, rgb = IconState.RECORDING, (255, 59, 48)
     px = np.asarray(make_app_icon(128, with_plate=False, state=state)).astype(int)
     assert px[20, 20, 3] == 0
     assert _has_color(px.reshape(-1, 4), rgb, tol=8)
     assert _has_color(_pixels(state), rgb, tol=8)
+
+
+def test_transcribing_overlay_grille_is_transparent_without_blue_glow():
+    px = np.asarray(make_app_icon(128, with_plate=False, state=IconState.PROCESSING, grille_lit=False)).astype(int)
+    assert px[20, 20, 3] == 0
+    assert px[41, 64, 3] < 5  # transparent center of the top grille slot
+    assert not _has_color(px.reshape(-1, 4), (80, 190, 255), tol=8)
+    assert _has_color(px.reshape(-1, 4), (230, 221, 198), tol=8)

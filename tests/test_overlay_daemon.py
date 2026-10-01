@@ -176,31 +176,36 @@ async def test_cancel_dismisses_before_waiting_for_cleanup_and_settings_cancel(r
 
 
 @pytest.mark.anyio
-async def test_config_poll_deletion_and_settings_close_live_disable(rig, tmp_path):
+async def test_config_deletion_enables_next_recording_and_settings_close_disables(rig, tmp_path):
     path = tmp_path / 'config.toml'
-    path.write_text('[overlay]\nenabled = true\n')
+    path.write_text('[overlay]\nenabled = false\n')
     config = load_config(path)
     config.openai_api_key = 'test'
+    rig.overlay.set_enabled(False)
     with patch('vox.daemon.create_overlay', return_value=rig.overlay), patch('vox.daemon._CONFIG_POLL_SECONDS', 0.005):
         async with running(config) as h:
             h.recorder.latest_level = None
             await h.daemon._start_recording()
             rig.flush()
+            assert not rig.made
             poll = asyncio.create_task(_config_reloader(config, h.recorder, apply_config=h.daemon._apply_config))
             await asyncio.sleep(0.01)
             path.unlink()
-            await until(lambda: not config.overlay_enabled)
+            await until(lambda: config.overlay_enabled)
             rig.flush()
-            assert rig.made[0].closed and h.state is State.RECORDING
+            assert not rig.made and h.state is State.RECORDING
             poll.cancel()
             await asyncio.gather(poll, return_exceptions=True)
-            path.write_text('[overlay]\nenabled = true\n')
+            await h.daemon._cancel()
+            await h.daemon._start_recording()
+            rig.flush()
+            assert rig.made[0].visible
             h.daemon._reload_api_key = AsyncMock()
-            await h.daemon._settings_closed()
-            assert config.overlay_enabled and rig.overlay.snapshot.phase == 'hidden'
             path.write_text('[overlay]\nenabled = false\n')
             await h.daemon._settings_closed()
             assert not config.overlay_enabled
+            rig.flush()
+            assert rig.made[0].closed and h.state is State.RECORDING
 
 
 @pytest.mark.anyio

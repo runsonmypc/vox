@@ -3,6 +3,15 @@
 All notable changes to Vox Transfer are listed here. Vox Transfer follows
 [semantic versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- Show the recording overlay by default on macOS and Linux X11. Existing
+  `[overlay] enabled = false` preferences remain respected.
+- Use transparent microphone grille slots during transcription and 8-point
+  overlay corners matching the website demo. The overlay stays dark in every system appearance.
+
 ## [1.2.1] - 2026-10-01
 
 ### Fixed

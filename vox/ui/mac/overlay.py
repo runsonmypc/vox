@@ -11,6 +11,7 @@ from Foundation import NSData, NSNotificationCenter, NSOperationQueue, NSRunLoop
 from ..icons import IconState, make_app_icon
 from ..overlay import (
     CANCEL_RECT,
+    PANEL_RADIUS,
     PANEL_SIZE,
     SIGNAL_HEIGHT,
     SIGNAL_WIDTH,
@@ -97,7 +98,7 @@ class SignalView(AppKit.NSView):
         _main_thread()
         width, height = self.bounds().size
         rim = AppKit.NSBezierPath.bezierPathWithRoundedRect_xRadius_yRadius_(
-            AppKit.NSInsetRect(self.bounds(), 0.5, 0.5), 12, 12)
+            AppKit.NSInsetRect(self.bounds(), 0.5, 0.5), PANEL_RADIUS, PANEL_RADIUS)
         _color('1b1d20', 0.95).setFill()
         rim.fill()
         _color('51504b', 0.65).setStroke()
@@ -228,7 +229,7 @@ class NativeOverlay:
             self.icons = {}
             for state in (IconState.RECORDING, IconState.PROCESSING):
                 png = io.BytesIO()
-                make_app_icon(128, with_plate=False, state=state).save(png, format='PNG')
+                make_app_icon(128, with_plate=False, state=state, grille_lit=state is IconState.RECORDING).save(png, format='PNG')
                 data = png.getvalue()
                 self.icons[state] = AppKit.NSImage.alloc().initWithData_(NSData.dataWithBytes_length_(data, len(data)))
             center = NSNotificationCenter.defaultCenter()

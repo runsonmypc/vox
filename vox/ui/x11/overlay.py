@@ -17,6 +17,7 @@ from gi.repository import Gdk, GdkPixbuf, GdkX11, GLib, Gtk  # noqa: E402
 from ..icons import IconState, make_app_icon  # noqa: E402
 from ..overlay import (  # noqa: E402
     CANCEL_RECT,
+    PANEL_RADIUS,
     PANEL_SIZE,
     SIGNAL_HEIGHT,
     SIGNAL_WIDTH,
@@ -41,7 +42,7 @@ def _color(ctx, value, alpha=1):
     ctx.set_source_rgba(*[int(value[i:i + 2], 16) / 255 for i in (0, 2, 4)], alpha)
 
 
-def _rounded(ctx, x, y, width, height, radius=12):
+def _rounded(ctx, x, y, width, height, radius=PANEL_RADIUS):
     for cx, cy, start in ((x + width - radius, y + radius, -math.pi / 2),
                           (x + width - radius, y + height - radius, 0),
                           (x + radius, y + height - radius, math.pi / 2),
@@ -105,7 +106,7 @@ class NativeOverlay:
             self.icons = {}
             for state in (IconState.RECORDING, IconState.PROCESSING):
                 png = io.BytesIO()
-                make_app_icon(128, with_plate=False, state=state).save(png, format='PNG')
+                make_app_icon(128, with_plate=False, state=state, grille_lit=state is IconState.RECORDING).save(png, format='PNG')
                 loader = GdkPixbuf.PixbufLoader.new_with_type('png')
                 loader.write(png.getvalue())
                 loader.close()
@@ -192,7 +193,7 @@ class NativeOverlay:
         self.panel.resize(round(width), round(height))
         # A rounded bounding shape keeps the corners clean even without a compositor.
         region = cairo.Region()
-        radius = min(12, height / 2, width / 2)
+        radius = min(PANEL_RADIUS, height / 2, width / 2)
         for row in range(round(height)):
             dy = max(radius - row - 0.5, row + 0.5 - (height - radius), 0)
             inset = math.ceil(radius - math.sqrt(max(0, radius * radius - dy * dy))) if dy else 0
@@ -252,7 +253,7 @@ class NativeOverlay:
         ctx.set_source_rgba(0, 0, 0, 0)
         ctx.paint()
         ctx.set_operator(cairo.OPERATOR_OVER)
-        _rounded(ctx, 0.5, 0.5, width - 1, height - 1, min(12, (height - 1) / 2, (width - 1) / 2))
+        _rounded(ctx, 0.5, 0.5, width - 1, height - 1, min(PANEL_RADIUS, (height - 1) / 2, (width - 1) / 2))
         _color(ctx, '1b1d20', 0.95 if self.panel.get_screen().is_composited() else 1)
         ctx.fill_preserve()
         _color(ctx, '51504b', 0.65)

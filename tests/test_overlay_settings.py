@@ -9,14 +9,21 @@ from vox.ui.settings_model import SettingsModel
 
 def test_overlay_default_and_round_trips(tmp_path):
     path = tmp_path / 'config.toml'
-    assert not Config().overlay_enabled
-    assert not load_config(path).overlay_enabled
+    assert Config().overlay_enabled
+    assert load_config(path).overlay_enabled
     original = '# preserved\n[audio]\nsample_rate = 16000 # custom\n[future]\nvalue = "keep"\n'
     path.write_text(original)
+    assert load_config(path).overlay_enabled  # existing files without the preference inherit the default
     for enabled in (True, False):
         update_flag(path, 'overlay', 'enabled', enabled)
         assert load_config(path).overlay_enabled is enabled
         assert original in path.read_text()
+
+
+def test_empty_overlay_section_uses_enabled_default(tmp_path):
+    path = tmp_path / 'config.toml'
+    path.write_text('[overlay]\n')
+    assert load_config(path).overlay_enabled
 
 
 @pytest.mark.parametrize('value', ['1', '0', '"true"', '[]', '{}'])
