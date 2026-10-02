@@ -99,6 +99,19 @@ def test_enabling_sounds_after_start_plays(caplog):
     assert not caplog.records
 
 
+def test_failed_audio_driver_cannot_be_reentered_by_feedback():
+    config = Config(sounds_enabled=True)
+    with patch("sys.platform", "linux"), patch("vox.sounds.sd.play") as play:
+        player = SoundPlayer(config)
+        player.disable()
+        # Settings changes cannot make the stalled driver safe; only a fresh process can.
+        config.sounds_enabled = False
+        config.sounds_enabled = True
+        for name in _SYSTEM_SOUNDS:
+            player.play(name)
+        play.assert_not_called()
+
+
 def test_disabling_sounds_after_start_silences():
     config = Config(sounds_enabled=True)
     with patch("sys.platform", "linux"), patch("vox.sounds.sd") as sd:

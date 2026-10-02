@@ -19,6 +19,7 @@ import websockets
 from vox import daemon as daemon_module
 from vox import keystore
 from vox import sounds as sounds_module
+from vox.audio import AUDIO_RESTART_NOTICE, Recorder, read_wav
 from vox.config import (
     Config,
     fallback_config,
@@ -171,6 +172,65 @@ async def running(config, tray=None, *, history=None, cpp=None, streaming=None):
 
 def openai_config(**kwargs):
     return Config(openai_api_key=KEY, **kwargs)
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("quit_while_stopping", [False, True])
+async def test_native_microphone_deadlock_preserves_audio_and_allows_quit(quit_while_stopping):
+    entered, release = threading.Event(), threading.Event()
+    stream = MagicMock(active=True)
+
+    def stuck_stop():
+        entered.set()
+        release.wait()
+
+    stream.stop.side_effect = stuck_stop
+    config = openai_config(attenuation_enabled=False, context_screen=False)
+    recorder = Recorder(config)
+    tray = MagicMock()
+    with patch("sys.platform", "linux"):
+        feedback = sounds_module.SoundPlayer(config)
+    feedback.play = MagicMock(wraps=feedback.play)
+    with patch("vox.audio.sd.InputStream", return_value=stream) as open_stream, \
+         patch("vox.audio.resolve_input_device", return_value=0), \
+         patch("vox.audio._STREAM_CLOSE_TIMEOUT", 0.1), \
+         patch("vox.audio.atexit.unregister"), \
+         patch.object(recorder, "refresh_input_devices", return_value=None), \
+         patch("vox.daemon._POST_ROLL_SECONDS", 0), \
+         patch("vox.sounds.sd.play") as play_sound:
+        try:
+            async with running(config, tray) as h:
+                h.daemon.recorder = recorder
+                h.daemon.sounds = h.sounds = feedback
+                h.send("toggle")
+                await until(lambda: recorder._is_recording)
+                samples, _, _ = read_wav(SPEECH)
+                recorder._callback(samples[:, None], len(samples), None, 0)
+                h.send("toggle")
+                await until(entered.is_set)
+                sound_calls = play_sound.call_count
+                heartbeat = asyncio.Event()
+                h.daemon.loop.call_soon(heartbeat.set)
+                await asyncio.wait_for(heartbeat.wait(), 0.05)
+                if quit_while_stopping:
+                    await asyncio.wait_for(h.stop(), 1)
+                    assert h.task.done()
+                    assert recorder.failure == AUDIO_RESTART_NOTICE
+                    tray.stop.assert_called()
+                else:
+                    await until(lambda: h.state is State.IDLE)
+                    h.batch.transcribe.assert_awaited_once()
+                    captured, _, _ = read_wav(h.batch.transcribe.call_args.args[0])
+                    np.testing.assert_array_equal(captured, samples)
+                    h.paste.assert_called_once()
+                    assert tray.set_notice.call_args.args[0] == AUDIO_RESTART_NOTICE
+                    h.send("toggle")
+                    await until(lambda: h.played("error"))
+                    assert open_stream.call_count == 1
+                    await asyncio.wait_for(h.stop(), 1)
+                assert play_sound.call_count == sound_calls  # no completion/error cue re-enters PortAudio
+        finally:
+            release.set()
 
 
 # -- Event-loop resilience ---------------------------------------------------------

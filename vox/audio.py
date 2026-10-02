@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import atexit
 import io
 import logging
 import math
@@ -26,6 +27,10 @@ from .config import Config
 from .errors import AudioError
 
 log = logging.getLogger(__name__)
+
+# Native drivers can deadlock during stop/close. Never wait indefinitely, including on Quit.
+_STREAM_CLOSE_TIMEOUT = 2.0
+AUDIO_RESTART_NOTICE = "Microphone did not close: quit and reopen Vox Transfer"
 
 # Minimum total speech duration to consider audio as containing speech (prevents dropping short words)
 _MIN_SPEECH_MS = 80
@@ -422,10 +427,13 @@ class Recorder:
         self._level_generation: int | None = None
         self.latest_level: tuple[int, float, float] | None = None
         self._meter_failed = False
+        self.failure: str | None = None
         # Re-initialising PortAudio must never overlap opening or closing a stream
         self._lock = threading.Lock()
 
     def _get_resolved_device(self) -> int | None:
+        if self.failure is not None:
+            raise AudioError(self.failure)
         target_device = self._config.audio_device
         if target_device != self._last_resolved_spec or self._resolved_device is None:
             self._resolved_device = resolve_input_device(target_device, channels=self._channels)
@@ -439,6 +447,8 @@ class Recorder:
             return
 
         self._close_stream()
+        if self.failure is not None:
+            raise AudioError(self.failure)
         try:
             self._stream = sd.InputStream(
                 samplerate=self._sample_rate,
@@ -454,18 +464,37 @@ class Recorder:
             raise AudioError(f"Failed to start audio stream: {e}") from e
 
     def _close_stream(self) -> None:
-        """Stop and close the stream; stop() returns once the last callback has run. Call with the lock held."""
+        """Bound native cleanup without putting a stuck driver in asyncio's executor. Call with the lock held."""
         if self._stream is None:
             return
-        try:
-            self._stream.stop()
-            self._stream.close()
-        except Exception as e:
-            log.debug("Error closing audio stream: %s", e)
-        self._stream = None
+        stream, self._stream = self._stream, None
+        finished = threading.Event()
+
+        def close() -> None:
+            try:
+                try:
+                    stream.stop()
+                finally:
+                    stream.close()
+            except Exception as e:
+                log.warning("Error closing audio stream: %s", e)
+            finally:
+                finished.set()
+
+        threading.Thread(target=close, name="vox-audio-close", daemon=True).start()
+        if not finished.wait(_STREAM_CLOSE_TIMEOUT):
+            self.failure = AUDIO_RESTART_NOTICE
+            self._is_recording = False
+            # PortAudio termination would re-enter the same deadlocked driver at interpreter exit.
+            # The OS releases its resources when the process exits. No further PortAudio calls are safe.
+            atexit.unregister(sd._exit_handler)
+            log.error("Microphone shutdown timed out after %.1fs; captured audio retained. %s",
+                      _STREAM_CLOSE_TIMEOUT, self.failure)
 
     def warmup(self) -> None:
         """Pre-warm device resolution and PortAudio bindings without keeping microphone open."""
+        if self.failure is not None:
+            return
         try:
             with self._lock:
                 dev = self._get_resolved_device()
@@ -504,6 +533,8 @@ class Recorder:
         one is open.
         """
         with self._lock:
+            if self.failure is not None:
+                return None
             if self._stream is not None or self._is_recording:
                 return None
             sd.stop()  # close sounddevice's play() stream properly; the restart would leave it dangling
@@ -577,6 +608,8 @@ class Recorder:
 
     def stop(self) -> bytes:
         """Stop active recording turn, close microphone stream, and return WAV bytes."""
+        # Settings can reload while the worker encodes audio: keep this recording's format.
+        sample_rate, channels = self._sample_rate, self._channels
         self.set_level_generation(None)
         with self._lock:
             self._close_stream()
@@ -589,8 +622,8 @@ class Recorder:
                 raise AudioError("No audio data recorded")
             audio = np.concatenate(chunks)
             del chunks
-            log.debug("Recorded %d frames (%.1fs)", len(audio), len(audio) / self._sample_rate)
-            return self._to_wav(audio)
+            log.debug("Recorded %d frames (%.1fs)", len(audio), len(audio) / sample_rate)
+            return pcm16_wav(audio, sample_rate, channels)
         finally:
             self._apply_pending_config()
 
@@ -687,7 +720,3 @@ class Recorder:
         """Opt in for one recording, or detach. A failed meter stays off for this recorder."""
         self._level_generation = generation
         self.latest_level = None
-
-    def _to_wav(self, audio: np.ndarray) -> bytes:
-        """Convert int16 numpy array to WAV bytes."""
-        return pcm16_wav(audio, self._sample_rate, self._channels)

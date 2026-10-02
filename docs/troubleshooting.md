@@ -18,6 +18,7 @@ affects dictation, in this order:
 | A whisper.cpp problem, such as a missing model | Fix `[whisper_cpp]`, or choose an OpenAI mode. |
 | Accessibility access needed | macOS: allow python3.12 under Accessibility, then quit and reopen Vox Transfer. |
 | Microphone is silent: check its permission | Allow the microphone (macOS: Microphone for python3.12) and check the microphone on the General page of Settings. |
+| Microphone did not close: quit and reopen Vox Transfer | The audio driver stalled during microphone cleanup. Vox keeps the captured dictation for transcription, but cannot record again until you quit from its menu and reopen it. |
 | Wayland: hotkey and paste only work in X11 apps | See [Wayland](install.md#wayland). |
 | Last dictation only partly transcribed: see History | A long recording failed partway. The parts that were transcribed are in **Search History…**. |
 

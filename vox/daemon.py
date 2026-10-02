@@ -18,7 +18,7 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any
 
 from .attenuation import get_volume, set_volume
-from .audio import Recorder, has_speech, is_digital_silence
+from .audio import AUDIO_RESTART_NOTICE, Recorder, has_speech, is_digital_silence
 from .config import DEFAULT_CONFIG_PATH, Config, file_stamp, load_config, snippet_key, update_transcription_mode
 from .errors import ConfigError, DependencyError, InjectionError, VoxError
 from .history import HistoryDB
@@ -478,7 +478,8 @@ class _Daemon:
         await asyncio.sleep(_POST_ROLL_SECONDS)
 
         try:
-            wav_data = self.recorder.stop()
+            wav_data = await asyncio.to_thread(self.recorder.stop)
+            self._update_notice()
         except Exception as e:
             log.error("Failed to stop recording: %s", e, exc_info=not isinstance(e, VoxError))
             self._abandon_recording()
@@ -531,7 +532,8 @@ class _Daemon:
             log.info("Cancelling active recording...")
             await self._restore_volume()
             try:
-                self.recorder.discard()
+                await asyncio.to_thread(self.recorder.discard)
+                self._update_notice()
             except Exception:
                 log.warning("Error discarding recording", exc_info=True)
             self._end_session()
@@ -584,7 +586,8 @@ class _Daemon:
         self.overlay.dismiss()
         try:
             await self._restore_volume()
-            self.recorder.discard()
+            await asyncio.to_thread(self.recorder.discard)
+            self._update_notice()
             self._end_session()
             self.sounds.play("error")  # before set_state, so the IDLE-return rescan waits for it
             # A transcription already under way finishes on its own and reports process_done
@@ -778,15 +781,20 @@ class _Daemon:
         self.recovery_notice = notice
         retention_error = notice is not None and notice.startswith(("Recording could not", "Audio was saved"))
         if not self.mic_silent and (not self.partly_transcribed or retention_error) and self.tray is not None:
-            self.tray.set_notice(notice or _platform_notice())
+            self.tray.set_notice(self._audio_notice() or notice or _platform_notice())
+
+    def _audio_notice(self) -> str | None:
+        return AUDIO_RESTART_NOTICE if self.recorder.failure == AUDIO_RESTART_NOTICE else None
 
     def _update_notice(self, *, mic_silent: bool | None = None, partly_transcribed: bool | None = None) -> None:
         """Note what the last recording showed, and give the tray the most pressing notice if that changed it."""
+        if self._audio_notice() is not None:
+            self.sounds.disable()  # Linux feedback uses the same PortAudio driver that just stalled
         state = (
             self.mic_silent if mic_silent is None else mic_silent,
             self.partly_transcribed if partly_transcribed is None else partly_transcribed,
         )
-        if state == (self.mic_silent, self.partly_transcribed):
+        if state == (self.mic_silent, self.partly_transcribed) and self._audio_notice() is None:
             return
         self.mic_silent, self.partly_transcribed = state
         if self.tray is not None:
@@ -794,7 +802,7 @@ class _Daemon:
                                and self.recovery_notice.startswith(("Recording could not", "Audio was saved")) else None)
             notice = (SILENT_MIC_NOTICE if self.mic_silent else retention_error or
                       (PARTIAL_NOTICE if self.partly_transcribed else None))
-            self.tray.set_notice(notice or self.recovery_notice or _platform_notice())
+            self.tray.set_notice(self._audio_notice() or notice or self.recovery_notice or _platform_notice())
 
     def _scan_devices_while_idle(self) -> None:
         """Where a re-scan is cheap, keep one scheduled while idle, so a new microphone shows up without a recording."""

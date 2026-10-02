@@ -258,6 +258,7 @@ class SoundPlayer:
 
     def __init__(self, config: Config) -> None:
         self._config = config
+        self._driver_failed = False
         self._is_darwin = sys.platform == "darwin"
         custom = _custom_files(sounds_dir(config))
         self._sounds = {}
@@ -273,7 +274,7 @@ class SoundPlayer:
     def play(self, name: str) -> None:
         """Start playing a named sound; it plays on while the caller carries on."""
         global _sd_playing_until
-        if not self._config.sounds_enabled:
+        if self._driver_failed or not self._config.sounds_enabled:
             return
         sound = self._sounds.get(name)
         if sound is None:
@@ -289,3 +290,7 @@ class SoundPlayer:
                 _sd_playing_until = time.monotonic() + len(samples) / rate
         except Exception as e:
             log.warning("Failed to play sound %r: %s", name, e)
+
+    def disable(self) -> None:
+        """Stop using audio after the microphone driver stalls; restarting Vox restores feedback."""
+        self._driver_failed = True

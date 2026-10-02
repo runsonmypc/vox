@@ -2,13 +2,20 @@
 
 import asyncio
 import io
+import os
+import subprocess
+import sys
+import threading
+import time
 import wave
+from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
 
 from vox.audio import (
+    AUDIO_RESTART_NOTICE,
     STREAM_RATE,
     Recorder,
     Resampler,
@@ -264,6 +271,69 @@ def _block(value, frames=800):
     return np.full((frames, 1), value, dtype=np.int16)
 
 
+@pytest.mark.parametrize("operation", ["stop", "discard", "close"])
+@pytest.mark.parametrize("blocked_call", ["stop", "close"])
+def test_stuck_native_cleanup_is_bounded_and_quarantines_driver(operation, blocked_call):
+    entered, release, finished = threading.Event(), threading.Event(), threading.Event()
+    stream = MagicMock(active=True)
+
+    def blocked():
+        entered.set()
+        release.wait()
+        finished.set()
+
+    getattr(stream, blocked_call).side_effect = blocked
+    recorder = Recorder(Config(sample_rate=16000))
+    with patch("vox.audio.sd.InputStream", return_value=stream) as open_stream, \
+         patch("vox.audio._STREAM_CLOSE_TIMEOUT", 0.05), \
+         patch("vox.audio.atexit.unregister") as unregister, \
+         patch("vox.audio.sd._terminate") as terminate:
+        recorder.start()
+        recorder._callback(_block(5), 800, None, 0)
+        try:
+            started = time.monotonic()
+            result = getattr(recorder, operation)()
+            assert time.monotonic() - started < 1
+            assert entered.is_set()
+            assert recorder.failure == AUDIO_RESTART_NOTICE
+            assert not recorder.is_recording
+            assert recorder._chunks == []
+            if operation == "stop":
+                samples, rate = _wav_samples(result)
+                assert rate == 16000
+                np.testing.assert_array_equal(samples, np.full(800, 5))
+            unregister.assert_called_once()
+            recorder.close()  # repeated shutdown cannot re-enter the blocked native call
+            recorder.warmup()
+            assert recorder.refresh_input_devices() is None
+            with pytest.raises(AudioError, match="quit and reopen"):
+                recorder.start()
+            assert open_stream.call_count == 1
+            terminate.assert_not_called()
+        finally:
+            release.set()
+            assert finished.wait(1)
+
+
+def test_stuck_native_cleanup_does_not_block_interpreter_exit():
+    # Use a real subprocess: daemon threads and PortAudio's atexit cleanup must both permit exit.
+    script = """
+import threading
+from unittest.mock import Mock
+import vox.audio as audio
+audio._STREAM_CLOSE_TIMEOUT = 0.01
+audio.sd._terminate = lambda: threading.Event().wait()
+recorder = audio.Recorder(audio.Config())
+recorder._stream = Mock()
+recorder._stream.stop.side_effect = lambda: threading.Event().wait()
+recorder.close()
+assert recorder.failure == audio.AUDIO_RESTART_NOTICE
+"""
+    result = subprocess.run([sys.executable, "-c", script], capture_output=True, timeout=5,
+                            env={**os.environ, "PYTHONPATH": os.getcwd()})
+    assert result.returncode == 0, result.stderr.decode()
+
+
 def _wav(samples, rate, channels=1):
     buf = io.BytesIO()
     with wave.open(buf, "wb") as wf:
@@ -461,6 +531,32 @@ def test_reconfigure_during_a_recording_waits_for_it_to_end():
         recorder.start()
         assert recorder._max_frames == 30 * 16000  # the limit follows the new rate
         recorder.discard()
+
+
+def test_settings_reload_during_worker_encoding_preserves_recording_format():
+    recorder = Recorder(Config(sample_rate=48000, channels=1))
+    entered, release = threading.Event(), threading.Event()
+    concatenate = np.concatenate
+
+    def encoding(chunks):
+        entered.set()
+        assert release.wait(2)
+        return concatenate(chunks)
+
+    with patch("vox.audio.sd.InputStream", return_value=FakeStream()), \
+         patch.object(recorder, "warmup"), patch("vox.audio.np.concatenate", side_effect=encoding), \
+         ThreadPoolExecutor(max_workers=1) as worker:
+        recorder.start()
+        recorder._callback(_block(7, 2400), 2400, None, 0)
+        result = worker.submit(recorder.stop)
+        try:
+            assert entered.wait(1)
+            recorder.reconfigure(Config(sample_rate=16000, channels=2))
+        finally:
+            release.set()
+        samples, rate, channels = read_wav(result.result(timeout=2))
+        assert (rate, channels) == (48000, 1)
+        np.testing.assert_array_equal(samples, np.full(2400, 7))
 
 
 def test_refresh_input_devices_restarts_portaudio_only_when_idle():
