@@ -19,6 +19,10 @@ if TYPE_CHECKING:
 
 log = logging.getLogger(__name__)
 
+# gpt-transcribe returns no text when it can't tell which language a clip is in, even for clear
+# speech. Only then is the clip sent again with this hint; a chosen language is never overridden.
+FALLBACK_LANGUAGE = "en"
+
 
 _COMMON_WORDS = frozenset(
     "the a an and or but in on at to for of is it that this with from by as are was were be"
@@ -259,12 +263,19 @@ class Transcriber:
                 result = await self._openai().audio.transcriptions.create(
                     file=("audio.wav", part, "audio/wav"), **request,
                 )
+                text = (result if isinstance(result, str) else result.text).strip()
+                if not text and "languages" not in request and getattr(result, "languages", None) == []:
+                    log.warning("OpenAI detected no language and returned no text; sending it again as %s",
+                                FALLBACK_LANGUAGE)
+                    result = await self._openai().audio.transcriptions.create(
+                        file=("audio.wav", part, "audio/wav"), **request, languages=[FALLBACK_LANGUAGE],
+                    )
+                    text = result.text.strip()
             except OpenAIError as e:
                 done = " ".join(texts)
                 if done:
                     raise PartialTranscriptionError(f"part {number} of {len(parts)} failed: {e}", done) from e
                 raise TranscriptionError(f"Transcription API failed: {e}") from e
-            text = (result if isinstance(result, str) else result.text).strip()
             if not text:
                 log.warning("OpenAI returned no text (model=%s, detected languages=%s)", request["model"],
                             getattr(result, "languages", None))
