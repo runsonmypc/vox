@@ -233,6 +233,74 @@ async def test_native_microphone_deadlock_preserves_audio_and_allows_quit(quit_w
             release.set()
 
 
+@pytest.mark.anyio
+async def test_daemon_recovers_when_delayed_microphone_cleanup_completes():
+    entered, release, finished = threading.Event(), threading.Event(), threading.Event()
+    first_stream = MagicMock(active=True)
+
+    def delayed_stop():
+        entered.set()
+        release.wait()
+        finished.set()
+
+    first_stream.stop.side_effect = delayed_stop
+    second_stream = MagicMock(active=True)
+
+    config = openai_config(attenuation_enabled=False, context_screen=False)
+    recorder = Recorder(config)
+    tray = MagicMock()
+    with patch("sys.platform", "linux"):
+        feedback = sounds_module.SoundPlayer(config)
+    feedback.play = MagicMock(wraps=feedback.play)
+
+    with patch("vox.audio.sd.InputStream", side_effect=[first_stream, second_stream]) as open_stream, \
+         patch("vox.audio.resolve_input_device", return_value=0), \
+         patch("vox.audio._STREAM_CLOSE_TIMEOUT", 0.05), \
+         patch("vox.audio.atexit.unregister"), \
+         patch.object(recorder, "refresh_input_devices", return_value=None), \
+         patch("vox.daemon._POST_ROLL_SECONDS", 0):
+        try:
+            async with running(config, tray) as h:
+                h.daemon.recorder = recorder
+                h.recorder = recorder
+                recorder.set_on_recovered(h.daemon._on_audio_recovered)
+                h.daemon.sounds = h.sounds = feedback
+
+                # 1. Start recording
+                h.send("toggle")
+                await until(lambda: recorder._is_recording)
+                samples, _, _ = read_wav(SPEECH)
+                recorder._callback(samples[:, None], len(samples), None, 0)
+
+                # 2. Stop recording; cleanup takes longer than 0.05s timeout
+                h.send("toggle")
+                await until(entered.is_set)
+
+                # 3. Processing still finishes and pastes transcript
+                await until(lambda: h.state is State.IDLE)
+                h.batch.transcribe.assert_awaited_once()
+                h.paste.assert_called_once()
+
+                # Notice is initially AUDIO_RESTART_NOTICE while stream is still closing
+                assert tray.set_notice.call_args.args[0] == AUDIO_RESTART_NOTICE
+
+                # 4. Now the delayed cleanup completes
+                release.set()
+                assert finished.wait(1)
+                await until(lambda: recorder.failure is None)
+                await until(lambda: tray.set_notice.call_args.args[0] is None)
+
+                # 5. User presses hotkey again: second recording starts and works
+                h.send("toggle")
+                await until(lambda: recorder._is_recording)
+                assert open_stream.call_count == 2
+                h.send("toggle")
+                await until(lambda: h.state is State.IDLE)
+                await asyncio.wait_for(h.stop(), 1)
+        finally:
+            release.set()
+
+
 # -- Event-loop resilience ---------------------------------------------------------
 
 

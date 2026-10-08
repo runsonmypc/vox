@@ -294,3 +294,7 @@ class SoundPlayer:
     def disable(self) -> None:
         """Stop using audio after the microphone driver stalls; restarting Vox restores feedback."""
         self._driver_failed = True
+
+    def enable(self) -> None:
+        """Re-enable audio feedback after the driver recovers."""
+        self._driver_failed = False

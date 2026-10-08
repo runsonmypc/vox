@@ -334,6 +334,99 @@ assert recorder.failure == audio.AUDIO_RESTART_NOTICE
     assert result.returncode == 0, result.stderr.decode()
 
 
+def test_delayed_native_cleanup_recovers_without_restart():
+    entered, release, finished = threading.Event(), threading.Event(), threading.Event()
+    first_stream = MagicMock(active=True)
+
+    def delayed_stop():
+        entered.set()
+        release.wait()
+        finished.set()
+
+    first_stream.stop.side_effect = delayed_stop
+    second_stream = MagicMock(active=True)
+    recorder = Recorder(Config(sample_rate=16000))
+    recovered_called = False
+
+    def on_recovered():
+        nonlocal recovered_called
+        recovered_called = True
+
+    recorder.set_on_recovered(on_recovered)
+
+    with patch("vox.audio.sd.InputStream", side_effect=[first_stream, second_stream]) as open_stream, \
+         patch("vox.audio._STREAM_CLOSE_TIMEOUT", 0.05), \
+         patch("vox.audio.atexit.unregister") as unregister:
+        recorder.start()
+        recorder._callback(_block(5), 800, None, 0)
+        # 1. Stop recording; cleanup is delayed beyond 0.05s timeout
+        result = recorder.stop()
+        assert entered.is_set()
+        # Audio from first turn is preserved
+        samples, rate = _wav_samples(result)
+        assert rate == 16000
+        np.testing.assert_array_equal(samples, np.full(800, 5))
+        # While still delayed/unfinished, failure is set
+        assert recorder.failure == AUDIO_RESTART_NOTICE
+        unregister.assert_called_once()
+
+        # 2. Native cleanup finishes (delayed, not deadlocked)
+        release.set()
+        assert finished.wait(1)
+        time.sleep(0.01)
+
+        # 3. Recorder automatically recovers without restart
+        assert recorder.failure is None
+        assert recovered_called is True
+        with patch("vox.audio.sd.query_devices", return_value=[{"name": "Mic", "max_input_channels": 1}]), \
+             patch("vox.audio.sd.stop"), patch("vox.audio.sd._terminate"), patch("vox.audio.sd._initialize"):
+            assert recorder.refresh_input_devices() == [(0, "Mic")]
+
+        # 4. Next recording starts and stops cleanly with no restart required
+        recorder.start()
+        recorder._callback(_block(9), 800, None, 0)
+        result2 = recorder.stop()
+        samples2, _ = _wav_samples(result2)
+        np.testing.assert_array_equal(samples2, np.full(800, 9))
+        assert open_stream.call_count == 2
+
+
+def test_start_waits_for_delayed_cleanup_and_succeeds():
+    entered, release, finished = threading.Event(), threading.Event(), threading.Event()
+    first_stream = MagicMock(active=True)
+
+    def delayed_stop():
+        entered.set()
+        release.wait()
+        finished.set()
+
+    first_stream.stop.side_effect = delayed_stop
+    second_stream = MagicMock(active=True)
+    recorder = Recorder(Config(sample_rate=16000))
+
+    with patch("vox.audio.sd.InputStream", side_effect=[first_stream, second_stream]) as open_stream, \
+         patch("vox.audio._STREAM_CLOSE_TIMEOUT", 0.2):
+        recorder.start()
+        recorder._callback(_block(5), 800, None, 0)
+        with patch("vox.audio._STREAM_CLOSE_TIMEOUT", 0.02):
+            recorder.stop()
+        assert entered.is_set()
+        # Delayed cleanup still running
+        assert recorder.failure == AUDIO_RESTART_NOTICE
+
+        # Unblock delayed cleanup after a brief moment
+        timer = threading.Timer(0.02, release.set)
+        timer.start()
+        try:
+            # start() should wait for delayed cleanup to complete and then succeed
+            recorder.start()
+            assert recorder.failure is None
+            assert open_stream.call_count == 2
+            recorder.discard()
+        finally:
+            timer.cancel()
+
+
 def _wav(samples, rate, channels=1):
     buf = io.BytesIO()
     with wave.open(buf, "wb") as wf:

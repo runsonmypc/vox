@@ -240,6 +240,7 @@ class _Daemon:
             log.error("%s", e)
             raise SystemExit(1) from e
         self.recorder = Recorder(config)
+        self.recorder.set_on_recovered(self._on_audio_recovered)
         self.overlay = create_overlay(config.overlay_enabled, tray.dispatch_ui if tray is not None else None)
         self.overlay.on_cancel = lambda generation: self.loop.call_soon_threadsafe(self._overlay_cancel, generation)
         self._generation = 0
@@ -261,6 +262,7 @@ class _Daemon:
         self.mic_silent = False
         self.partly_transcribed = False
         self.recovery_notice: str | None = None
+        self._last_audio_notice: str | None = None
 
         self.batch_transcriber: Transcriber | WhisperCppTranscriber | None = None
         self.transcriber_local = False
@@ -784,26 +786,35 @@ class _Daemon:
         if not self.mic_silent and (not self.partly_transcribed or retention_error) and self.tray is not None:
             self.tray.set_notice(self._audio_notice() or notice or _platform_notice())
 
+    def _on_audio_recovered(self) -> None:
+        """Called on event loop when microphone finishes closing after a transient delay."""
+        log.info("Audio system recovered from delayed microphone shutdown")
+        self._update_notice()
+
     def _audio_notice(self) -> str | None:
         return AUDIO_RESTART_NOTICE if self.recorder.failure == AUDIO_RESTART_NOTICE else None
 
     def _update_notice(self, *, mic_silent: bool | None = None, partly_transcribed: bool | None = None) -> None:
         """Note what the last recording showed, and give the tray the most pressing notice if that changed it."""
-        if self._audio_notice() is not None:
+        audio_notice = self._audio_notice()
+        if audio_notice is not None:
             self.sounds.disable()  # Linux feedback uses the same PortAudio driver that just stalled
+        else:
+            self.sounds.enable()
         state = (
             self.mic_silent if mic_silent is None else mic_silent,
             self.partly_transcribed if partly_transcribed is None else partly_transcribed,
+            audio_notice,
         )
-        if state == (self.mic_silent, self.partly_transcribed) and self._audio_notice() is None:
+        if state == (self.mic_silent, self.partly_transcribed, self._last_audio_notice):
             return
-        self.mic_silent, self.partly_transcribed = state
+        self.mic_silent, self.partly_transcribed, self._last_audio_notice = state
         if self.tray is not None:
             retention_error = (self.recovery_notice if self.recovery_notice is not None
                                and self.recovery_notice.startswith(("Recording could not", "Audio was saved")) else None)
             notice = (SILENT_MIC_NOTICE if self.mic_silent else retention_error or
                       (PARTIAL_NOTICE if self.partly_transcribed else None))
-            self.tray.set_notice(self._audio_notice() or notice or self.recovery_notice or _platform_notice())
+            self.tray.set_notice(audio_notice or notice or self.recovery_notice or _platform_notice())
 
     def _scan_devices_while_idle(self) -> None:
         """Where a re-scan is cheap, keep one scheduled while idle, so a new microphone shows up without a recording."""

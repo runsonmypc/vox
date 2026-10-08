@@ -427,9 +427,36 @@ class Recorder:
         self._level_generation: int | None = None
         self.latest_level: tuple[int, float, float] | None = None
         self._meter_failed = False
-        self.failure: str | None = None
+        self._failure: str | None = None
+        self._close_event: threading.Event | None = None
+        self._on_recovered: Callable[[], None] | None = None
         # Re-initialising PortAudio must never overlap opening or closing a stream
         self._lock = threading.Lock()
+
+    @property
+    def failure(self) -> str | None:
+        if self._failure == AUDIO_RESTART_NOTICE:
+            if self._close_event is not None and self._close_event.is_set():
+                self._failure = None
+        return self._failure
+
+    @failure.setter
+    def failure(self, value: str | None) -> None:
+        self._failure = value
+
+    def set_on_recovered(self, fn: Callable[[], None] | None) -> None:
+        """Set a callback invoked on the event loop when a delayed microphone shutdown completes."""
+        self._on_recovered = fn
+
+    def _post_recovery(self) -> None:
+        if self._on_recovered is not None:
+            if self._loop is not None and not self._loop.is_closed():
+                try:
+                    self._loop.call_soon_threadsafe(self._on_recovered)
+                except RuntimeError:
+                    self._on_recovered()
+            else:
+                self._on_recovered()
 
     def _get_resolved_device(self) -> int | None:
         if self.failure is not None:
@@ -442,6 +469,12 @@ class Recorder:
 
     def _ensure_stream(self) -> None:
         """Ensure audio input stream is active, creating it if necessary. Call with the lock held."""
+        # If a previous close operation is still finishing, wait briefly for it
+        if self._close_event is not None and not self._close_event.is_set():
+            if not self._close_event.wait(_STREAM_CLOSE_TIMEOUT):
+                self.failure = AUDIO_RESTART_NOTICE
+                raise AudioError(self.failure)
+
         resolved_device = self._get_resolved_device()
         if self._stream is not None and getattr(self._stream, "active", False):
             return
@@ -469,6 +502,7 @@ class Recorder:
             return
         stream, self._stream = self._stream, None
         finished = threading.Event()
+        self._close_event = finished
 
         def close() -> None:
             try:
@@ -480,6 +514,12 @@ class Recorder:
                 log.warning("Error closing audio stream: %s", e)
             finally:
                 finished.set()
+                if self._failure == AUDIO_RESTART_NOTICE:
+                    log.info("Microphone stream closed after initial delay; audio system recovered")
+                    self._failure = None
+                    if hasattr(sd, "_exit_handler"):
+                        atexit.register(sd._exit_handler)
+                    self._post_recovery()
 
         threading.Thread(target=close, name="vox-audio-close", daemon=True).start()
         if not finished.wait(_STREAM_CLOSE_TIMEOUT):
@@ -488,12 +528,14 @@ class Recorder:
             # PortAudio termination would re-enter the same deadlocked driver at interpreter exit.
             # The OS releases its resources when the process exits. No further PortAudio calls are safe.
             atexit.unregister(sd._exit_handler)
-            log.error("Microphone shutdown timed out after %.1fs; captured audio retained. %s",
-                      _STREAM_CLOSE_TIMEOUT, self.failure)
+            log.warning("Microphone shutdown timed out after %.1fs; captured audio retained. %s",
+                        _STREAM_CLOSE_TIMEOUT, AUDIO_RESTART_NOTICE)
 
     def warmup(self) -> None:
         """Pre-warm device resolution and PortAudio bindings without keeping microphone open."""
         if self.failure is not None:
+            return
+        if self._close_event is not None and not self._close_event.is_set():
             return
         try:
             with self._lock:
@@ -536,6 +578,8 @@ class Recorder:
             if self.failure is not None:
                 return None
             if self._stream is not None or self._is_recording:
+                return None
+            if self._close_event is not None and not self._close_event.is_set():
                 return None
             sd.stop()  # close sounddevice's play() stream properly; the restart would leave it dangling
             if sd._initialized:
