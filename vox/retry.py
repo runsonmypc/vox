@@ -183,6 +183,7 @@ class RetryController:
         outcome = 'failed'
         committed = False
         copy_only = self.ready is None
+        problem = None  # why the retry failed, for the sound and notice: History may be hidden or unwatched
         try:
             if not copy_only:
                 await asyncio.wait_for(self.ready.wait(), ACK_TIMEOUT)
@@ -192,7 +193,8 @@ class RetryController:
             if self.cancelled or not self.daemon.config.keep_failed_audio:
                 return
             if not text or not text.strip():
-                self.db.fail_retry(entry_id, revision, snapshot.mode, 'Retry returned no text. Try another method.')
+                problem = 'Retry returned no text. Try another method.'
+                self.db.fail_retry(entry_id, revision, snapshot.mode, problem)
                 revision += 1
                 return
             text = _expand_snippet(text, snapshot)
@@ -236,18 +238,21 @@ class RetryController:
             try:
                 if self.db.fail_retry(entry_id, revision, snapshot.mode, 'Retry failed partway. Try again.', e.text):
                     revision += 1
+                problem = 'Retry failed partway. Try again.'
             except Exception:
                 if not self.cancelled:
                     await self.paste(e.text, snapshot)
                 if self.daemon.tray is not None:
                     self.daemon.tray.set_notice('Partial text could not be saved. Earlier text and audio are retained.')
         except TimeoutError:
-            self.db.fail_retry(entry_id, revision, snapshot.mode, 'History did not yield focus. Try again.')
+            problem = 'History did not yield focus. Try again.'
+            self.db.fail_retry(entry_id, revision, snapshot.mode, problem)
             revision += 1
         except Exception:
-            self.db.fail_retry(entry_id, revision, snapshot.mode, 'Retry failed. Check the selected provider and try again.')
+            log.warning('Retry failed (entry_id=%s, mode=%s)', entry_id, snapshot.mode, exc_info=True)
+            problem = 'Retry failed. Check the selected provider and try again.'
+            self.db.fail_retry(entry_id, revision, snapshot.mode, problem)
             revision += 1
-            self.daemon.sounds.play('error')
         finally:
             try:
                 rec = self.db.get(entry_id)
@@ -257,8 +262,10 @@ class RetryController:
                 if self.daemon.tray is not None:
                     self.daemon.tray.set_notice('Retry state could not be saved. Audio and earlier text are retained.')
             finally:
-                if copy_only and outcome == 'failed' and self.daemon.tray is not None:
-                    self.daemon.tray.set_notice('Retry failed. The earlier text is unchanged.')
+                if problem is not None:
+                    self.daemon.sounds.play('error')
+                    if self.daemon.tray is not None:
+                        self.daemon.tray.set_notice(f'{problem} The earlier text is unchanged.' if copy_only else problem)
                 if self.daemon.tray is not None:
                     self.daemon.tray.history_changed()
                 self.active_id = self.token = self.ready = None

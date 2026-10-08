@@ -507,4 +507,21 @@ async def test_a_failed_retry_of_a_completed_dictation_keeps_the_old_text(comple
     copy.assert_not_called()
     rec = controller.db.get(entry_id)
     assert rec.status == 'completed' and rec.text == 'first try'
-    daemon.tray.set_notice.assert_called_with('Retry failed. The earlier text is unchanged.')
+    daemon.tray.set_notice.assert_called_with(
+        'Retry failed. Check the selected provider and try again. The earlier text is unchanged.')
+    daemon.sounds.play.assert_called_once_with('error')
+
+
+@pytest.mark.anyio
+async def test_a_retry_that_returns_no_text_is_announced(recovery):
+    controller, daemon, entry_id, _ = recovery
+    daemon.tray = MagicMock()
+    token, provider = await begin(controller, entry_id)
+    provider.transcribe.return_value = ''
+    with patch('vox.retry.detect_paste_target', return_value=EXTERNAL), patch('vox.injector.paste') as paste:
+        await ready(controller, token)
+        await daemon.process_task
+    paste.assert_not_called()
+    assert controller.db.get(entry_id).error_summary == 'Retry returned no text. Try another method.'
+    daemon.sounds.play.assert_called_once_with('error')
+    daemon.tray.set_notice.assert_called_with('Retry returned no text. Try another method.')

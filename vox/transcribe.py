@@ -265,6 +265,9 @@ class Transcriber:
                     raise PartialTranscriptionError(f"part {number} of {len(parts)} failed: {e}", done) from e
                 raise TranscriptionError(f"Transcription API failed: {e}") from e
             text = (result if isinstance(result, str) else result.text).strip()
+            if not text:
+                log.warning("OpenAI returned no text (model=%s, detected languages=%s)", request["model"],
+                            getattr(result, "languages", None))
             # Guard against the model echoing context on empty/silent audio
             if echo and is_prompt_hallucination(text, echo):
                 log.warning("Dropped a transcript that only echoed the prompt")
