@@ -17,6 +17,7 @@ from dataclasses import dataclass
 log = logging.getLogger(__name__)
 FADE_SECONDS = 0.19
 CAPTURE_TIMEOUT = 0.3
+LEVEL_TIMEOUT = 0.6  # allow for audio driver / GC jitter up to 600ms without dropping the meter
 PANEL_SIZE = (224, 44)
 PANEL_RADIUS = 8  # match the personal-site overlay demo
 SIGNAL_X, SIGNAL_WIDTH, SIGNAL_HEIGHT = 50, 153, 20  # 40 rendered pixels beside mic body and inside rim at 2×
@@ -46,7 +47,7 @@ class Envelope:
 
     def sample(self, now, level, generation):
         target = 0.0
-        if level is not None and level[0] == generation and 0 <= now - level[1] <= 0.2:
+        if level is not None and level[0] == generation and -0.05 <= now - level[1] <= LEVEL_TIMEOUT:
             # Map -60 to -26 dBFS into visible height: ordinary low-level microphone
             # speech barely moved a linear meter. Keep quieter background noise flat.
             if level[2] > 0.001:
@@ -262,6 +263,7 @@ class Overlay:
             if snapshot != self.snapshot or self._captures or self.closed or self.backend is None:
                 return
             try:
+                level = self.recorder.latest_level if self.recorder is not None else None
                 now = self.clock()
                 opacity = 1.0
                 if snapshot.phase == 'fading':
@@ -271,7 +273,6 @@ class Overlay:
                         self.backend.hide()
                         self.snapshot = Snapshot(snapshot.generation, snapshot.revision + 1)
                         return
-                level = self.recorder.latest_level if self.recorder is not None else None
                 amplitude = self._envelope.sample(now, level, snapshot.generation) if snapshot.phase == 'listening' else 0.0
                 # The carrier drifts decoratively; its height comes only from microphone levels.
                 phase = now if snapshot.phase == 'listening' else now - self._processing_at

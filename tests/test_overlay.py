@@ -202,6 +202,18 @@ def test_smoothing_attack_release_staleness_and_identity():
     assert envelope.sample(3, (2, 3, 1), 1) < 0.001
 
 
+def test_meter_staleness_tolerates_jitter_and_clock_race():
+    envelope = Envelope()
+    # Cross-thread race where audio callback updates timestamp slightly ahead of GUI sample
+    assert envelope.sample(1.0, (1, 1.02, 0.05), 1) > 0
+    # Jitter of 250ms (common CoreAudio buffer / scheduling delay) does not flatline
+    assert envelope.sample(1.25, (1, 1.00, 0.05), 1) > 0
+    # Jitter of 500ms still does not flatline
+    assert envelope.sample(1.50, (1, 1.00, 0.05), 1) > 0
+    # Stale updates older than LEVEL_TIMEOUT (0.6s) decay to flat
+    assert envelope.sample(2.2, (1, 1.00, 0.05), 1) < 0.01
+
+
 def test_reduced_motion_static_status_no_timer_or_fade(rig):
     rig.start()
     rig.flush()
