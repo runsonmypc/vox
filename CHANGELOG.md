@@ -5,6 +5,29 @@ All notable changes to Vox Transfer are listed here. Vox Transfer follows
 
 ## [Unreleased]
 
+## [1.2.4] - 2026-10-08
+
+### Added
+
+- Keep the audio of the last 3 dictations, completed or failed, so History can retry them.
+  Each new recording deletes older audio. Retrying a completed dictation replaces its text in
+  History and copies the new text to the clipboard. The setting is now called **Keep recent
+  recordings for retry** and stays on by default.
+
+### Changed
+
+- Rename the **Search History…** menu item to **History…**.
+- Show no retry controls in History for entries without saved audio.
+
+### Fixed
+
+- Report an empty transcript instead of dropping it silently. Speech that comes back with no
+  text plays the error sound and is kept in History for retry.
+- Fall back to English when OpenAI cannot detect the language of a clip and returns no text.
+  A language chosen in Settings is never replaced.
+- Announce a failed retry with the error sound and a menu notice, since History is hidden
+  while a retry runs.
+
 ## [1.2.3] - 2026-10-02
 
 ### Fixed
@@ -194,6 +217,7 @@ The first public release. The command is `vox`, and its settings live in `~/.con
 - `install.sh` refuses to run as root, retries `apt-get` after refreshing package lists, and tells
   users of other distributions which packages to install.
 
+[1.2.4]: https://github.com/runsonmypc/vox/releases/tag/v1.2.4
 [1.2.3]: https://github.com/runsonmypc/vox/releases/tag/v1.2.3
 [1.2.2]: https://github.com/runsonmypc/vox/releases/tag/v1.2.2
 [1.2.1]: https://github.com/runsonmypc/vox/releases/tag/v1.2.1
