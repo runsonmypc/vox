@@ -7,6 +7,7 @@ import sys
 import threading
 import time
 import wave
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import numpy as np
@@ -460,3 +461,41 @@ def test_vocabulary_is_deduplicated_and_capped():
     vocab = build_vocabulary(config, None)
     assert len(vocab) == 40
     assert vocab.count("Word1") == 1 and "word1" not in vocab
+
+
+def _result(text, languages):
+    return SimpleNamespace(text=text, languages=languages)
+
+
+@pytest.mark.anyio
+async def test_no_detected_language_falls_back_to_english_once(fake_openai):
+    transcriber = Transcriber(Config(openai_api_key=KEY))
+    await transcriber.transcribe(WAV)  # builds the client
+    create = create_mock(fake_openai)
+    create.reset_mock()
+    create.side_effect = [_result("", []), _result("we can host it", [SimpleNamespace(code="en")])]
+
+    assert await transcriber.transcribe(WAV) == "we can host it"
+    first, second = create.call_args_list
+    assert "languages" not in first.kwargs
+    assert second.kwargs["languages"] == ["en"]
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    ("language", "result"),
+    [
+        ("", _result("", None)),  # no detection reported: nothing says a hint would help
+        ("", _result("", [SimpleNamespace(code="fr")])),  # a language was found and there is no speech
+        ("fr", _result("", [])),  # the user's chosen language is never replaced
+    ],
+)
+async def test_english_fallback_only_when_detection_failed(fake_openai, language, result):
+    transcriber = Transcriber(Config(openai_api_key=KEY, whisper_language=language))
+    await transcriber.transcribe(WAV)
+    create = create_mock(fake_openai)
+    create.reset_mock()
+    create.return_value = result
+
+    assert await transcriber.transcribe(WAV) == ""
+    create.assert_called_once()

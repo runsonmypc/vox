@@ -668,7 +668,7 @@ async def test_process_records_injected_text_in_history(tmp_path):
 
 @pytest.mark.anyio
 @pytest.mark.parametrize("transcript", ["", "   "])
-async def test_process_skips_history_for_empty_transcript(tmp_path, transcript):
+async def test_process_keeps_an_empty_transcript_in_history_for_retry(tmp_path, transcript):
     from vox.history import HistoryDB
 
     history = HistoryDB(tmp_path / "history.db")
@@ -691,7 +691,9 @@ async def test_process_skips_history_for_empty_transcript(tmp_path, transcript):
         )
 
     mock_paste.assert_not_called()
-    assert history.search() == []
+    [rec] = history.search()
+    assert rec.text == ""
+    assert rec.audio_id is not None
     history.close()
 
 
@@ -740,7 +742,7 @@ async def test_history_write_failure_does_not_play_error(tmp_path):
     with patch("vox.daemon.has_speech", return_value=True), patch("vox.daemon.paste") as mock_paste:
         await _process(
             wav_data=_make_dummy_wav(0.5),
-            config=Config(mode="batch"),
+            config=Config(mode="batch", keep_failed_audio=False),  # plain History, without its audio
             batch_transcriber=mock_batch,
             streaming_transcriber=None,
             stream_task=None,

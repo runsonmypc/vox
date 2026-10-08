@@ -146,9 +146,9 @@ async def test_unsuccessful_recordings_clear_feedback(rig, case):
             if case != 'start':
                 await h.daemon._stop_recording()
                 await until(lambda: h.state is State.IDLE)
-            assert rig.overlay.snapshot.phase == ('fading' if case in ('empty', 'no_speech') else 'hidden')
+            assert rig.overlay.snapshot.phase == ('fading' if case == 'no_speech' else 'hidden')
             h.paste.assert_not_called()
-            if case not in ('empty', 'no_speech'):
+            if case != 'no_speech':
                 assert h.played('error')
 
 

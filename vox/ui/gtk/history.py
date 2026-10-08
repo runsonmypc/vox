@@ -244,13 +244,14 @@ class HistoryWindow(Adw.ApplicationWindow):
         self.title.set_title(entry.stamp)
         self.title.set_subtitle(entry.details)
         self.copy_button.set_sensitive(bool(entry.text.strip()))
+        has_audio = bool(entry.record.audio_id)
         for mode, button in (("whisper_cpp", self.retry_local), ("batch", self.retry_batch)):
             problem = self.model.retry_problem(entry, mode)
-            button.set_visible(entry.record.status != "completed")
+            button.set_visible(has_audio)
             button.set_sensitive(problem is None)
             button.set_tooltip_text(problem or ("Uploads the entire recording; another charge may apply." if mode == "batch" else "Transcribe locally."))
         self.cancel_retry.set_visible(entry.record.status == "retrying")
-        self.recovery_note.set_label(self.model.retry_problem(entry, "whisper_cpp") or "")
+        self.recovery_note.set_label((self.model.retry_problem(entry, "whisper_cpp") or "") if has_audio else "")
         while child := self.attempts.get_first_child():
             self.attempts.remove(child)
         for stamp, text, mode in self.model.attempts(entry):
@@ -386,6 +387,8 @@ class HistoryWindow(Adw.ApplicationWindow):
         token, error = self.model.retry(entry, mode)
         if error:
             error_dialog(self, "Couldn’t Retry", error)
+            return
+        if token is None:  # the retried text is copied, not pasted
             return
         self.minimize()
 

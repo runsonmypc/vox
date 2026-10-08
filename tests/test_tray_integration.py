@@ -178,7 +178,7 @@ async def test_a_screen_capture_that_never_finishes_still_pastes():
 
 
 @pytest.mark.anyio
-async def test_empty_transcript_is_not_persisted_or_announced():
+async def test_empty_transcript_is_kept_for_retry_and_announced():
     tray = RecordingTray()
     with daemon_env("   ") as env:
         task = await start_daemon(tray)
@@ -187,8 +187,9 @@ async def test_empty_transcript_is_not_persisted_or_announced():
         await queue.put("toggle")
         await wait_for(lambda: tray.states[-1:] == ["IDLE"] and len(tray.states) == 3)
         env["paste"].assert_not_called()
-        assert history.search() == []
-        assert tray.history_changes == 0
+        [rec] = history.search()
+        assert rec.audio_id is not None
+        await wait_for(lambda: tray.history_changes == 1)
         await stop_daemon(task)
 
 

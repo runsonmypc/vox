@@ -26,7 +26,7 @@ from .hotkey import HotkeyListener
 from .injector import check_accessibility_permission, paste
 from .keystore import KeystoreError, get_api_key
 from .modes import mode_problem
-from .recovery import RETENTION_LOCK, RecoveryStore
+from .recovery import FAILURE_SUMMARY, RETENTION_LOCK, RecoveryStore
 from .sounds import SoundPlayer, sound_playing_until
 from .streaming import StreamingTranscriber
 from .transcribe import PartialTranscriptionError, Transcriber
@@ -41,6 +41,7 @@ log = logging.getLogger(__name__)
 
 WAYLAND_NOTICE = "Wayland: hotkey and paste only work in X11 apps"
 SILENT_MIC_NOTICE = "Microphone is silent: check its permission"
+EMPTY_NOTICE = "Last dictation came back empty: retry in History"
 ACCESSIBILITY_NOTICE = "Accessibility access needed"
 PARTIAL_NOTICE = "Last dictation only partly transcribed: see History"
 
@@ -936,8 +937,11 @@ async def _process(
         transcribing = False
 
         if not text or not text.strip():
-            completed = True
-            log.info("Empty transcription result, skipping injection")
+            # The audio passed the speech check, so an empty transcript loses words: say so and keep it
+            log.warning("Empty transcription result, skipping injection")
+            sounds.play("error")
+            await _retain_recording(wav_data, config, history, context, mode, provider, "", tray, created_at,
+                                  recovery_notice, failure_notice=EMPTY_NOTICE)
             return
 
         text = _expand_snippet(text, config)
@@ -950,9 +954,13 @@ async def _process(
             sounds.play("error")  # the text is still in history
 
         if history is not None:
-            saved = await _record_history(history, text, context, wav_data, provider)
-            if saved and tray is not None:
-                tray.history_changed()
+            # Kept with its audio, so a wrong transcript can be retried; plain History when that's off or fails
+            saved = await _retain_recording(wav_data, config, history, context, mode, provider, text, tray,
+                                            created_at, error_summary=None)
+            if saved is False:
+                saved = await _record_history(history, text, context, wav_data, provider)
+                if saved and tray is not None:
+                    tray.history_changed()
 
         if pasted:
             log.info("Done in %.3fs (%s)", time.monotonic() - t0, provider)
@@ -976,7 +984,7 @@ async def _process(
         if overlay is not None:
             overlay.complete(overlay_generation, False)
         sounds.play("error")
-        saved = await _retain_failure(wav_data, config, history, context, mode, provider, e.text, tray, created_at, recovery_notice) if transcribing else False
+        saved = await _retain_recording(wav_data, config, history, context, mode, provider, e.text, tray, created_at, recovery_notice) if transcribing else False
         if saved is False and history is not None:
             saved = await _record_history(history, e.text, context, wav_data, provider)
         if saved:
@@ -996,7 +1004,7 @@ async def _process(
         log.error("Processing failed (phase=%s, error_type=%s)", "transcription" if transcribing else "delivery", type(e).__name__)
         sounds.play("error")
         if transcribing:
-            await _retain_failure(wav_data, config, history, context, mode, provider, "", tray, created_at, recovery_notice)
+            await _retain_recording(wav_data, config, history, context, mode, provider, "", tray, created_at, recovery_notice)
     finally:
         if overlay is not None:
             overlay.complete(overlay_generation, completed)
@@ -1004,15 +1012,20 @@ async def _process(
     return None
 
 
-async def _retain_failure(
+async def _retain_recording(
     wav_data: bytes, config: Config, history: HistoryDB | None, context: AppContext,
     original_mode: str, provider: str, text: str, tray: TrayManager | None, created_at: str | None = None, recovery_notice: Callable[[str | None], None] | None = None,
+    failure_notice: str = "Last dictation failed: retry in History", error_summary: str | None = FAILURE_SUMMARY,
 ) -> bool | None:
-    """Stage off the loop, publish only under the current live privacy choice."""
+    """Stage off the loop, publish only under the current live privacy choice.
+
+    No error_summary keeps a completed dictation, which was already pasted: it sets no notice.
+    Only the newest few recordings keep their audio.
+    """
     if not config.keep_failed_audio:
         return False
     metadata = dict(text=text, original_mode=original_mode, attempted_mode=provider,
-                    error_summary="Transcription failed. Check the selected provider and retry.",
+                    error_summary=error_summary,
                     created_at=created_at or datetime.now(UTC).strftime("%Y-%m-%d %H:%M:%S"),
                     duration_seconds=_wav_duration(wav_data), app_type=context.app_type.value)
     store = None
@@ -1054,7 +1067,13 @@ async def _retain_failure(
             else:
                 await asyncio.to_thread(history.delete, entry_id)
             raise
-        notice = PARTIAL_NOTICE if text.strip() else "Last dictation failed: retry in History"
+        notice = PARTIAL_NOTICE if text.strip() else failure_notice
+        try:
+            errors = await asyncio.to_thread(store.prune)
+        except Exception as e:  # the recording is saved; older audio goes after the next one
+            errors = [str(e)]
+        if errors:
+            log.warning("Older recordings could not be removed: %s", errors[0])
         if tray is not None:
             tray.history_changed()
         return True
@@ -1083,7 +1102,9 @@ async def _retain_failure(
                 pass
         return None if published else False
     finally:
-        if recovery_notice is not None:
+        if error_summary is None:
+            pass  # the text was pasted; History holds it even when its audio could not be kept
+        elif recovery_notice is not None:
             recovery_notice(notice)
         elif tray is not None and notice != PARTIAL_NOTICE:
             tray.set_notice(notice)

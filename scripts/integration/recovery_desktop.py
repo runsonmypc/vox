@@ -272,7 +272,7 @@ def run(desktop):
         wait(lambda: db.get(rec.id).status == 'completed', 'original row completed')
         wait(lambda: desktop.state('targeta')['text'] == TEXT, 'real paste reaches target text view')
         assert db.get(rec.id).created_at == rec.created_at and len(db.search()) == 1
-        assert not (directory / 'audio' / rec.audio_id).exists()
+        assert (directory / 'audio' / rec.audio_id).exists()  # kept for another retry until newer ones push it out
         wait(lambda: clipboard() == SENTINEL, 'clipboard restoration after native keystroke')
         desktop.passed('instant Local retry yields History focus, updates one row, pastes once and restores clipboard')
 
