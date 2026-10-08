@@ -75,7 +75,7 @@ async def test_retry_full_recording_selected_mode_after_restart(recovery, mode):
     assert rec.status == 'completed' and rec.text == 'expanded' and rec.transcription_mode == mode
     assert rec.created_at == metadata()['created_at'] and rec.duration_seconds == 0.1
     assert controller.db.attempts(entry_id) == [] and len(controller.db.search()) == 1
-    assert not (controller.store.root / audio_id).exists()
+    assert (controller.store.root / audio_id).exists()  # kept for another retry until newer ones push it out
     assert daemon.config.mode == 'streaming'
 
 
@@ -156,7 +156,7 @@ async def test_reopened_history_and_paste_error_preserve_completed_text(recovery
         await daemon.process_task
     paste.assert_not_called()
     assert controller.db.get(entry_id).text == 'complete'
-    assert not (controller.store.root / audio_id).exists()
+    assert (controller.store.root / audio_id).exists()  # kept for another retry until newer ones push it out
 
 
 @pytest.mark.anyio
@@ -284,7 +284,7 @@ async def test_paste_error_preserves_completed_text(recovery):
         await ready(controller, token)
         await daemon.process_task
     assert controller.db.get(entry_id).status == 'completed'
-    assert not (controller.store.root / audio_id).exists()
+    assert (controller.store.root / audio_id).exists()  # kept for another retry until newer ones push it out
     daemon.sounds.play.assert_called_with('error')
 
 
@@ -293,7 +293,7 @@ async def test_paste_error_preserves_completed_text(recovery):
 async def test_disabling_during_retention_prevents_new_audio(tmp_path, phase):
     import threading
 
-    from vox.daemon import _retain_failure
+    from vox.daemon import _retain_recording
 
     db = HistoryDB(tmp_path / 'history.db')
     config = Config()
@@ -306,7 +306,7 @@ async def test_disabling_during_retention_prevents_new_audio(tmp_path, phase):
         return original(self, *args, **kwargs)
 
     with patch.object(RecoveryStore, phase, slow):
-        task = asyncio.create_task(_retain_failure(wav_bytes(), config, db, EXTERNAL, 'batch', 'batch', '', None))
+        task = asyncio.create_task(_retain_recording(wav_bytes(), config, db, EXTERNAL, 'batch', 'batch', '', None))
         await asyncio.to_thread(start.wait, 5)
         _ConfigApplier(config, MagicMock())(Config(keep_failed_audio=False))
         release.set()
@@ -317,11 +317,11 @@ async def test_disabling_during_retention_prevents_new_audio(tmp_path, phase):
 
 @pytest.mark.anyio
 async def test_initial_retention_index_fault_has_one_entry_after_reconcile(tmp_path):
-    from vox.daemon import _retain_failure
+    from vox.daemon import _retain_recording
 
     db = HistoryDB(tmp_path / 'history.db')
     with patch.object(db, 'insert_failure', side_effect=OSError('readonly')):
-        assert await _retain_failure(wav_bytes(), Config(), db, EXTERNAL, 'batch', 'batch', 'part', None) is None
+        assert await _retain_recording(wav_bytes(), Config(), db, EXTERNAL, 'batch', 'batch', 'part', None) is None
     assert db.search() == []
     assert RecoveryStore(db).reconcile() == []
     assert len(db.search()) == 1 and db.search()[0].text == 'part'
@@ -363,7 +363,7 @@ async def test_cancel_after_commit_before_paste_keeps_completed_text(recovery):
         await cancelled
     paste.assert_not_called()
     assert controller.db.get(entry_id).status == 'completed'
-    assert not (controller.store.root / audio_id).exists()
+    assert (controller.store.root / audio_id).exists()  # kept for another retry until newer ones push it out
 
 
 @pytest.mark.anyio
@@ -425,7 +425,7 @@ def test_offline_deletion_requires_daemon_lock(tmp_path):
 async def test_cancelled_storage_worker_failure_does_not_retain_or_index(tmp_path, phase):
     import threading
 
-    from vox.daemon import _retain_failure
+    from vox.daemon import _retain_recording
 
     db = HistoryDB(tmp_path / 'history.db')
     started, released = threading.Event(), threading.Event()
@@ -436,7 +436,7 @@ async def test_cancelled_storage_worker_failure_does_not_retain_or_index(tmp_pat
         raise OSError('disk full')
 
     with patch.object(RecoveryStore, phase, failing):
-        task = asyncio.create_task(_retain_failure(wav_bytes(), Config(), db, EXTERNAL, 'batch', 'batch', '', None))
+        task = asyncio.create_task(_retain_recording(wav_bytes(), Config(), db, EXTERNAL, 'batch', 'batch', '', None))
         await asyncio.to_thread(started.wait, 5)
         task.cancel()
         released.set()
@@ -451,7 +451,7 @@ async def test_cancelled_storage_worker_failure_does_not_retain_or_index(tmp_pat
 async def test_disabled_publication_sync_failure_discards_uncommitted_directory(tmp_path):
     import threading
 
-    from vox.daemon import _retain_failure
+    from vox.daemon import _retain_recording
 
     db = HistoryDB(tmp_path / 'history.db')
     config = Config()
@@ -465,10 +465,46 @@ async def test_disabled_publication_sync_failure_discards_uncommitted_directory(
             return original(self, audio_id, allowed)
 
     with patch.object(RecoveryStore, 'publish', failing_publish):
-        task = asyncio.create_task(_retain_failure(wav_bytes(), config, db, EXTERNAL, 'batch', 'batch', '', None))
+        task = asyncio.create_task(_retain_recording(wav_bytes(), config, db, EXTERNAL, 'batch', 'batch', '', None))
         await asyncio.to_thread(started.wait, 5)
         _ConfigApplier(config, MagicMock())(Config(keep_failed_audio=False))
         released.set()
         assert await task is False
     assert db.search() == [] and list((tmp_path / 'audio').iterdir()) == []
     db.close()
+
+
+@pytest.fixture
+def completed(recovery):
+    controller, daemon, entry_id, audio_id = recovery
+    rec = controller.db.get(entry_id)
+    assert controller.db.finish_recovery(entry_id, rec.revision, 'first try', 'batch')
+    daemon.tray = MagicMock()
+    return controller, daemon, entry_id, audio_id
+
+
+@pytest.mark.anyio
+async def test_retrying_a_completed_dictation_replaces_its_text_and_copies_it(completed):
+    controller, daemon, entry_id, audio_id = completed
+    with patch('vox.injector.set_clipboard') as copy, patch('vox.injector.paste') as paste:
+        token, _ = await begin(controller, entry_id)
+        assert token is None  # nothing to paste into, so History keeps focus
+        await daemon.process_task
+    paste.assert_not_called()
+    copy.assert_called_once_with('complete')
+    rec = controller.db.get(entry_id)
+    assert rec.status == 'completed' and rec.text == 'complete' and rec.audio_id == audio_id
+    daemon.tray.set_notice.assert_called_with('Retried text copied to the clipboard.')
+
+
+@pytest.mark.anyio
+async def test_a_failed_retry_of_a_completed_dictation_keeps_the_old_text(completed):
+    controller, daemon, entry_id, _ = completed
+    with patch('vox.injector.set_clipboard') as copy:
+        _, provider = await begin(controller, entry_id)
+        provider.transcribe.side_effect = RuntimeError('provider down')
+        await daemon.process_task
+    copy.assert_not_called()
+    rec = controller.db.get(entry_id)
+    assert rec.status == 'completed' and rec.text == 'first try'
+    daemon.tray.set_notice.assert_called_with('Retry failed. The earlier text is unchanged.')

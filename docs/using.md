@@ -35,7 +35,7 @@ Click the Vox Transfer icon in the menu bar (macOS) or the tray (Linux):
   Transcription page.
 - **Pause Dictation**: ignore the hotkey until you resume.
 - **Recent dictations**: the last three. Click one to copy it.
-- **Search History…**: find past dictations, copy or delete one, or clear them all.
+- **History…**: find past dictations, copy or delete one, or clear them all.
 - **Transcription** (while idle, with Settings closed): switch between OpenAI (batch), OpenAI
   (streaming) and Local (whisper.cpp). Another mode that can't run yet, for want of an API key or
   a whisper.cpp model, is greyed out; set it up on the Transcription page of Settings. The current
@@ -54,7 +54,7 @@ Choose **Settings…** from the menu while Vox Transfer is idle. It has five pag
 - **General**: the microphone (the refresh button next to it looks for one you just connected), the
   recording limit (5, 10, 15, 30 or 60 minutes), sounds, the optional
   [recording overlay](settings.md#recording-overlay) (macOS and Linux/X11, on by default), how far to lower other audio while
-  recording, screen hints, and whether to keep failed recordings for retry.
+  recording, screen hints, and whether to keep recent recordings for retry.
 - **Hotkey**: see [Choosing another hotkey](#choosing-another-hotkey).
 - **Transcription**: OpenAI (batch), OpenAI (streaming) or Local (whisper.cpp), your OpenAI API key,
   the spoken language, a prompt, and the whisper.cpp program and model. A mode that is not set up
@@ -96,7 +96,7 @@ fails, the text of the parts before it is kept in history (or pasted, if history
 
 ## Recover a failed recording
 
-Open **Search History…** and select a failed recording or partial transcript. Choose
+Open **History…** and select a failed recording or partial transcript. Choose
 **Retry with Local** to use whisper.cpp, or **Retry with OpenAI Batch** to upload the complete
 saved recording to OpenAI. Batch may charge again for the whole recording, including parts
 already transcribed. Both methods use current transcription settings without changing the
@@ -116,6 +116,8 @@ the clipboard. **Delete** and **Clear History** cancel affected retries and remo
 audio, including recordings not yet indexed. Vox must be running to retry; offline copying
 and deletion remain available.
 
-Recovery is enabled by default. Turn **Keep failed recordings for retry** off in General
+Recovery is enabled by default. Vox keeps the audio of your last 3 dictations, so you can
+retry a failed one, or a completed one whose text came out wrong: the new text replaces the
+old in History and is copied to the clipboard. Turn **Keep recent recordings for retry** off in General
 Settings to stop new saves and retries. Existing recordings stay until you delete them;
 re-enabling restores their eligibility. Audio normally lives in `~/.local/share/vox/audio/`.

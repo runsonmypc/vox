@@ -20,7 +20,7 @@ affects dictation, in this order:
 | Microphone is silent: check its permission | Allow the microphone (macOS: Microphone for python3.12) and check the microphone on the General page of Settings. |
 | Microphone did not close: quit and reopen Vox Transfer | The audio driver stalled during microphone cleanup. Vox keeps the captured dictation for transcription, but cannot record again until you quit from its menu and reopen it. |
 | Wayland: hotkey and paste only work in X11 apps | See [Wayland](install.md#wayland). |
-| Last dictation only partly transcribed: see History | A long recording failed partway. The parts that were transcribed are in **Search History…**. |
+| Last dictation only partly transcribed: see History | A long recording failed partway. The parts that were transcribed are in **History…**. |
 
 ## Common problems
 
@@ -34,7 +34,7 @@ The commands below use `~/.local/bin/vox`, where the installer puts Vox Transfer
   python3.12), check the microphone on the General page of Settings, and try
   `~/.local/bin/vox --list-devices`.
 - **A paste did not arrive.** Vox Transfer plays the error sound and still saves the text in
-  history: open **Search History…** to copy it.
+  history: open **History…** to copy it.
 - **Nothing pastes into a terminal (Linux).** Install `xprop` (x11-utils on Debian and Ubuntu).
   Without it Vox Transfer cannot tell a terminal from other windows and presses Ctrl+V instead of
   Ctrl+Shift+V; the log warns about it when Vox Transfer starts.
@@ -63,12 +63,12 @@ Still stuck? An AI coding assistant can read the log and your settings with you:
 
 ## Failed recording recovery
 
-Open **Search History…** after a terminal transcription error. Local retry needs a working
+Open **History…** after a transcription error or an empty result. Local retry needs a working
 whisper.cpp executable and model; OpenAI Batch needs a key and uploads the entire saved
 recording, potentially incurring another charge. The selected method is checked independently
 of the default method. Close Settings and wait for the current dictation before retrying.
 
-If recovery is disabled, enable **Keep failed recordings for retry** in General Settings.
+If recovery is disabled, enable **Keep recent recordings for retry** in General Settings.
 If Vox is not running, start it and reopen History. A failed control connection while Vox is
 running blocks deletion until it reconnects, so deletion cannot race an active retry.
 

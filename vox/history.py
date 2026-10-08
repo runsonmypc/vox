@@ -155,9 +155,14 @@ class HistoryDB:
 
     def insert_failure(
         self, *, text: str = "", audio_id: str | None = None, original_mode: str,
-        attempted_mode: str, error_summary: str, created_at: str,
+        attempted_mode: str, error_summary: str | None, created_at: str,
         duration_seconds: float | None = None, app_type: str | None = None,
     ) -> int:
+        """Add a dictation whose audio is kept for retry. No error_summary means it completed."""
+        if error_summary is None:
+            status = "completed"
+        else:
+            status = "partial" if text.strip() else "failed"
         with self._lock, self._conn:
             self._conn.execute("BEGIN IMMEDIATE")
             if audio_id is not None:
@@ -170,9 +175,9 @@ class HistoryDB:
                 "INSERT INTO history (text, audio_id, original_mode, attempted_mode, error_summary, "
                 "created_at, duration_seconds, app_type, status, transcription_mode) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (text, audio_id, original_mode, attempted_mode, error_summary, created_at,
-                 duration_seconds, app_type, "partial" if text.strip() else "failed", attempted_mode if text.strip() else None),
+                 duration_seconds, app_type, status, attempted_mode if text.strip() else None),
             )
-            if text.strip():
+            if status == "partial":
                 self._conn.execute("INSERT INTO partial_attempts (entry_id, text, transcription_mode) VALUES (?, ?, ?)",
                                    (cur.lastrowid, text, attempted_mode))
             return cur.lastrowid
@@ -197,27 +202,28 @@ class HistoryDB:
             raise ValueError("Full recovery requires non-empty text")
         with self._lock, self._conn:
             self._conn.execute("BEGIN IMMEDIATE")
-            row = self._conn.execute("SELECT audio_id FROM history WHERE id = ? AND revision = ?",
-                                     (entry_id, revision)).fetchone()
-            if row is None:
-                return False
-            if row[0]:
-                self._conn.execute("INSERT OR IGNORE INTO pending_audio_cleanup VALUES (?)", (row[0],))
-            self._conn.execute(
+            # The audio stays for another retry until newer recordings push it out (see prune_audio)
+            cur = self._conn.execute(
                 "UPDATE history SET text = ?, transcription_mode = ?, attempted_mode = ?, status = 'completed', "
-                "error_summary = NULL, audio_id = NULL, revision = revision + 1 WHERE id = ? AND revision = ?",
+                "error_summary = NULL, revision = revision + 1 WHERE id = ? AND revision = ?",
                 (text, mode, mode, entry_id, revision),
             )
+            if cur.rowcount != 1:
+                return False
             self._conn.execute("DELETE FROM partial_attempts WHERE entry_id = ?", (entry_id,))
             return True
 
     def fail_retry(self, entry_id: int, revision: int, mode: str, error: str, text: str = "") -> bool:
         with self._lock, self._conn:
             self._conn.execute("BEGIN IMMEDIATE")
-            row = self._conn.execute("SELECT text FROM history WHERE id = ? AND revision = ?",
+            row = self._conn.execute("SELECT text, error_summary FROM history WHERE id = ? AND revision = ?",
                                      (entry_id, revision)).fetchone()
             if row is None:
                 return False
+            if row[1] is None:  # a completed dictation keeps its text when a retry of it fails
+                self._conn.execute("UPDATE history SET status = 'completed', revision = revision + 1 WHERE id = ?",
+                                   (entry_id,))
+                return True
             preview = text if text.strip() else row[0]
             if text.strip():
                 self._conn.execute("INSERT OR IGNORE INTO partial_attempts (entry_id, text, transcription_mode) VALUES (?, ?, ?)",
@@ -233,8 +239,11 @@ class HistoryDB:
     def reset_interrupted_retries(self) -> None:
         with self._lock, self._conn:
             self._conn.execute(
-                "UPDATE history SET status = CASE WHEN trim(text) = '' THEN 'failed' ELSE 'partial' END, "
-                "error_summary = 'Retry interrupted. Choose a method to try again.', revision = revision + 1 WHERE status = 'retrying'"
+                "UPDATE history SET status = CASE WHEN error_summary IS NULL THEN 'completed' "
+                "WHEN trim(text) = '' THEN 'failed' ELSE 'partial' END, "
+                "error_summary = CASE WHEN error_summary IS NULL THEN NULL "
+                "ELSE 'Retry interrupted. Choose a method to try again.' END, "
+                "revision = revision + 1 WHERE status = 'retrying'"
             )
 
     def attempts(self, entry_id: int) -> list[tuple[str, str, str]]:

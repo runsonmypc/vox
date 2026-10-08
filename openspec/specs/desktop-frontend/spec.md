@@ -139,7 +139,7 @@ The system SHALL provide one Settings window, native to each platform (AppKit on
 
 #### Scenario: Tray menu
 - **WHEN** the user opens the tray menu
-- **THEN** it shows, in order: the status line; "Set API Key…" only while the key is missing or unreadable; Pause Dictation; the recent dictations; Search History…, the Transcription submenu and Settings…; and Quit Vox Transfer
+- **THEN** it shows, in order: the status line; "Set API Key…" only while the key is missing or unreadable; Pause Dictation; the recent dictations; History…, the Transcription submenu and Settings…; and Quit Vox Transfer
 - **AND** it has no Input Device or Recording Limit submenu, and no Vocabulary & Snippets…, Set Hotkey… or separate Set API Key… item
 
 #### Scenario: Missing key shortcut

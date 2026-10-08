@@ -349,6 +349,8 @@ class HistoryController(NSObject):
         if error:
             kit.alert(self.window, "Couldn’t Retry", error)
             return
+        if token is None:  # the retried text is copied, not pasted
+            return
         AppKit.NSApp().hide_(None)
 
         def acknowledged():
@@ -456,14 +458,16 @@ class HistoryController(NSObject):
         self.stamp.setStringValue_(entry.stamp)
         self.details.setStringValue_(entry.details or "Dictation")
         self.copy_button.setEnabled_(bool(entry.text.strip()))
+        has_audio = bool(entry.record.audio_id)
         for mode, button in (("whisper_cpp", self.retry_local), ("batch", self.retry_batch)):
             problem = self.model.retry_problem(entry, mode)
-            button.setHidden_(entry.record.status == "completed")
+            button.setHidden_(not has_audio)
             button.setEnabled_(problem is None)
             button.setToolTip_(problem or ("Uploads the entire saved recording; another charge may apply." if mode == "batch" else "Transcribe locally."))
         self.cancel_retry.setHidden_(entry.record.status != "retrying")
-        self.recovery_note.setStringValue_(self.model.retry_problem(entry, "whisper_cpp") or
-                                          ("OpenAI Batch uploads the full recording and may charge again." if entry.record.status != "completed" else ""))
+        self.recovery_note.setStringValue_((self.model.retry_problem(entry, "whisper_cpp") or
+                                            "OpenAI Batch uploads the full recording and may charge again.")
+                                           if has_audio else "")
         self.attempts.removeAllItems()
         attempts = self.model.attempts(entry)
         self.attempts.addItemWithTitle_("Copy partial attempt…")

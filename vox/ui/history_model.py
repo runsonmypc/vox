@@ -233,17 +233,15 @@ class HistoryModel:
             self.control_error = str(e)
 
     def retry_problem(self, entry: Entry, mode: str) -> str | None:
-        if entry.record.status == "completed":
-            return "This dictation is already complete."
         if not entry.record.audio_id:
-            return "No saved audio is available. Record this dictation again."
+            return None  # nothing to retry: History shows no retry controls for it
         return (self.control_error or self.control_status.get("disabled")
                 or self.control_status.get("methods", {}).get(mode))
 
     def retry(self, entry: Entry, mode: str) -> tuple[str | None, str | None]:
         try:
             result = self.control.request("retry", id=entry.record.id, revision=entry.record.revision, mode=mode)
-            return result["token"], None
+            return result.get("token"), None  # None: a copy-only retry, History keeps focus
         except ControlError as e:
             return None, str(e)
 

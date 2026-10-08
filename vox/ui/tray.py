@@ -438,7 +438,7 @@ class TrayManager:
         for rec in self._recent:
             yield Item(("Partial: " if rec.status == "partial" else "") + _recent_label(rec.text), self._copier(rec.text))
         yield Menu.SEPARATOR
-        yield Item("Search History…", self._open_history, enabled=self._history is not None)
+        yield Item("History…", self._open_history, enabled=self._history is not None)
         yield Item("Transcription", Menu(self._transcription_items))
         yield Item(SETTINGS, self._open_settings_item, enabled=lambda _: self._state is IconState.IDLE)
         yield Menu.SEPARATOR

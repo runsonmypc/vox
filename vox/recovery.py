@@ -24,6 +24,8 @@ from pathlib import Path
 from .history import HistoryDB
 
 RETENTION_LOCK = threading.Lock()
+FAILURE_SUMMARY = 'Transcription failed. Check the selected provider and retry.'
+KEPT_RECORDINGS = 3  # audio is kept for the newest dictations only, failed or not
 
 
 class RecoveryError(OSError):
@@ -183,7 +185,9 @@ class RecoveryStore:
                 'batch', 'streaming', 'whisper_cpp'
             ):
                 raise RecoveryError('Recording metadata is invalid.')
-            if manifest['error_summary'] != 'Transcription failed. Check the selected provider and retry.':
+            if manifest['error_summary'] not in (FAILURE_SUMMARY, None):
+                raise RecoveryError('Recording metadata is invalid.')
+            if manifest['error_summary'] is None and not (isinstance(manifest['text'], str) and manifest['text'].strip()):
                 raise RecoveryError('Recording metadata is invalid.')
             for key in ('text', 'created_at'):
                 if not isinstance(manifest[key], str):
@@ -220,6 +224,29 @@ class RecoveryStore:
                     except (OSError, sqlite3.Error, ValueError, TypeError):
                         errors.append('A saved recording could not be indexed in History.')
         return errors
+
+    def prune(self, keep: int = KEPT_RECORDINGS) -> list[str]:
+        """Delete the audio of all but the newest ``keep`` recordings.
+
+        A failed entry with no text has nothing left once its audio goes, so it goes too.
+        A retry in progress keeps its audio until it finishes.
+        """
+        with self.locked():
+            with self.db._lock, self.db._conn:
+                self.db._conn.execute("BEGIN IMMEDIATE")
+                rows = self.db._conn.execute(
+                    "SELECT id, audio_id, status, text FROM history WHERE audio_id IS NOT NULL "
+                    "ORDER BY created_at DESC, id DESC LIMIT -1 OFFSET ?", (keep,)).fetchall()
+                rows = [row for row in rows if row[2] != 'retrying']
+                self.db._conn.executemany('INSERT OR IGNORE INTO pending_audio_cleanup VALUES (?)',
+                                          ((audio_id,) for _, audio_id, _, _ in rows))
+                for entry_id, _, status, text in rows:
+                    if status == 'failed' and not text.strip():
+                        self.db._conn.execute('DELETE FROM history WHERE id = ?', (entry_id,))
+                    else:
+                        self.db._conn.execute(
+                            'UPDATE history SET audio_id = NULL, revision = revision + 1 WHERE id = ?', (entry_id,))
+            return self.cleanup()
 
     def cleanup(self) -> list[str]:
         errors = []

@@ -139,7 +139,7 @@ def test_clear_includes_unindexed_staged_and_partial_recordings(store):
     assert store.db.search() == []
 
 
-def test_full_commit_preserves_metadata_and_tracks_cleanup(store):
+def test_full_commit_preserves_metadata_and_keeps_audio(store):
     audio_id, entry_id = save(store, 'first')
     first = store.db.get(entry_id)
     assert store.db.fail_retry(entry_id, first.revision, 'whisper_cpp', 'Retry failed.', 'second')
@@ -148,10 +148,10 @@ def test_full_commit_preserves_metadata_and_tracks_cleanup(store):
     assert store.db.finish_recovery(entry_id, second.revision, 'complete', 'whisper_cpp')
     rec = store.db.get(entry_id)
     assert rec.created_at == first.created_at and rec.duration_seconds == first.duration_seconds
-    assert rec.status == 'completed' and rec.text == 'complete' and rec.audio_id is None
+    assert rec.status == 'completed' and rec.text == 'complete' and rec.audio_id == audio_id
     assert store.db.attempts(entry_id) == []
     assert store.cleanup() == []
-    assert not (store.root / audio_id).exists()
+    assert (store.root / audio_id).exists()
 
 
 def test_publication_sync_failure_keeps_recoverable_manifest(store):
@@ -171,12 +171,76 @@ def test_disabled_publication_discards_audio(store):
     assert store.db.search() == []
 
 
-def test_reconcile_cannot_restore_completed_recording(store):
+def test_reconcile_cannot_duplicate_completed_recording(store):
     audio_id = store.stage(wav_bytes(), metadata('part'))
     store.publish(audio_id)
     original = store.db.insert_failure(audio_id=audio_id, **metadata('part'))
     assert store.db.finish_recovery(original, 0, 'full', 'batch')
-    with pytest.raises(sqlite3.IntegrityError, match='pending deletion'):
-        store.db.insert_failure(audio_id=audio_id, **metadata('part'))
+    assert store.db.insert_failure(audio_id=audio_id, **metadata('part')) == original
     assert store.reconcile() == []
     assert len(store.db.search()) == 1 and store.db.get(original).status == 'completed'
+
+
+def _keep(store, text, minute, *, completed=False):
+    fields = metadata(text) | {'created_at': f'2026-01-02 03:{minute:02d}:00'}
+    if completed:
+        fields['error_summary'] = None
+    audio_id = store.stage(wav_bytes(), fields)
+    store.publish(audio_id)
+    return audio_id, store.index(audio_id)
+
+
+def test_completed_recording_is_indexed_with_its_audio(store):
+    audio_id, entry_id = _keep(store, 'said this', 0, completed=True)
+    rec = store.db.get(entry_id)
+    assert rec.status == 'completed' and rec.text == 'said this' and rec.audio_id == audio_id
+    assert rec.error_summary is None and store.db.attempts(entry_id) == []
+
+
+def test_a_completed_recording_needs_text(store):
+    audio_id = store.stage(wav_bytes(), metadata('') | {'error_summary': None})
+    store.publish(audio_id)
+    with pytest.raises(RecoveryError, match='metadata'):
+        store.index(audio_id)
+
+
+def test_prune_keeps_the_audio_of_the_newest_three_only(store):
+    old_failed, old_failed_id = _keep(store, '', 0)
+    old_done, old_done_id = _keep(store, 'kept text', 1, completed=True)
+    old_partial, old_partial_id = _keep(store, 'part', 2)
+    newest = [_keep(store, f'new {n}', 3 + n, completed=True) for n in range(3)]
+
+    assert store.prune() == []
+
+    assert store.db.get(old_failed_id) is None  # nothing left to show once its audio goes
+    assert store.db.get(old_done_id).text == 'kept text' and store.db.get(old_done_id).audio_id is None
+    assert store.db.get(old_partial_id).status == 'partial' and store.db.get(old_partial_id).audio_id is None
+    for audio_id in (old_failed, old_done, old_partial):
+        assert not (store.root / audio_id).exists()
+    for audio_id, entry_id in newest:
+        assert store.db.get(entry_id).audio_id == audio_id and (store.root / audio_id).exists()
+
+
+def test_prune_spares_a_recording_being_retried(store):
+    audio_id, entry_id = _keep(store, '', 0)
+    for n in range(3):
+        _keep(store, f'new {n}', 1 + n, completed=True)
+    assert store.db.update_recovery(entry_id, 0, status='retrying', attempted_mode='batch')
+    assert store.prune() == []
+    assert store.db.get(entry_id).audio_id == audio_id and (store.root / audio_id).exists()
+
+
+def test_a_failed_retry_of_a_completed_dictation_keeps_its_text(store):
+    _, entry_id = _keep(store, 'original', 0, completed=True)
+    assert store.db.update_recovery(entry_id, 0, status='retrying', attempted_mode='batch')
+    assert store.db.fail_retry(entry_id, 1, 'batch', 'Retry failed.', 'other words')
+    rec = store.db.get(entry_id)
+    assert rec.status == 'completed' and rec.text == 'original' and rec.error_summary is None
+
+
+def test_an_interrupted_retry_of_a_completed_dictation_stays_completed(store):
+    _, entry_id = _keep(store, 'original', 0, completed=True)
+    assert store.db.update_recovery(entry_id, 0, status='retrying', attempted_mode='batch')
+    store.db.reset_interrupted_retries()
+    rec = store.db.get(entry_id)
+    assert rec.status == 'completed' and rec.error_summary is None

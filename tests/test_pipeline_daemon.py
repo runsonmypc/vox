@@ -1123,6 +1123,38 @@ async def test_history_records_batch_when_a_streaming_recording_fell_back_to_it(
 
 
 @pytest.mark.anyio
+async def test_a_dictation_keeps_its_audio_and_only_the_newest_three_are_kept(tmp_path, speech):
+    history = HistoryDB(tmp_path / "history.db")
+    for n in range(4):
+        kwargs = process_kwargs(history=history, created_at=f"2026-01-02 03:0{n}:00")
+        kwargs["batch_transcriber"].transcribe.return_value = f"words {n}"
+        with patch("vox.daemon.paste"):
+            await _process(**kwargs)
+    records = history.search()
+    assert [r.text for r in records] == ["words 3", "words 2", "words 1", "words 0"]
+    assert all(r.status == "completed" for r in records)
+    assert [r.audio_id is not None for r in records] == [True, True, True, False]
+    assert len(list((tmp_path / "audio").iterdir())) == 3
+    history.close()
+
+
+@pytest.mark.anyio
+async def test_an_empty_transcript_of_speech_is_reported_and_kept_for_retry(speech):
+    kwargs = process_kwargs()
+    kwargs["batch_transcriber"].transcribe.return_value = ""
+    with patch("vox.daemon._retain_recording", new_callable=AsyncMock) as retain, \
+         patch("vox.daemon.paste") as paste:
+        outcome = await _process(**kwargs)
+    paste.assert_not_called()
+    kwargs["sounds"].play.assert_called_once_with("error")
+    retain.assert_awaited_once()
+    assert retain.await_args.args[0] == SPEECH
+    assert retain.await_args.kwargs["failure_notice"] == daemon_module.EMPTY_NOTICE
+    assert outcome is None
+    assert kwargs["queue"].get_nowait() == "process_done"
+
+
+@pytest.mark.anyio
 async def test_a_partial_transcription_is_kept_in_history(tmp_path, speech, caplog):
     history = HistoryDB(tmp_path / "history.db")
     tray = MagicMock()

@@ -216,7 +216,7 @@ async def test_recent_dictations_are_their_own_menu_section(tmp_path):
         ["Vox Transfer · Idle"],
         ["Pause Dictation"],
         [RECENT_HEADER, "“three”", "“two”", "“one”"],
-        ["Search History…", "Transcription", SETTINGS],
+        ["History…", "Transcription", SETTINGS],
         ["Quit Vox Transfer"],
     ]
     history.close()
@@ -233,7 +233,7 @@ def test_a_missing_key_puts_set_api_key_under_the_status_line():
         ["Vox Transfer · API key needed", SET_KEY],
         ["Pause Dictation"],
         ["No dictations yet"],
-        ["Search History…", "Transcription", SETTINGS],
+        ["History…", "Transcription", SETTINGS],
         ["Quit Vox Transfer"],
     ]
 
@@ -339,7 +339,7 @@ def _fake_proc(alive=True):
 
 def test_history_item_disabled_without_history():
     _, icon = make_tray()
-    assert find(icon.menu, "Search History…").enabled is False
+    assert find(icon.menu, "History…").enabled is False
 
 
 def test_history_window_launch_is_single_instance(tmp_path):
@@ -350,16 +350,16 @@ def test_history_window_launch_is_single_instance(tmp_path):
     tray.attach(MagicMock(), MagicMock(), history, MagicMock())
     command = [sys.executable, "-P", "-m", HISTORY_WINDOW, "--db", str(history.path)]
 
-    find(icon.menu, "Search History…")(icon)
+    find(icon.menu, "History…")(icon)
     launcher.assert_called_once_with(command)
     focus.assert_called_once_with(procs[0], None)
 
-    find(icon.menu, "Search History…")(icon)  # still open: brought forward, not relaunched
+    find(icon.menu, "History…")(icon)  # still open: brought forward, not relaunched
     assert launcher.call_count == 1
     focus.assert_called_with(procs[0], command)
 
     procs[0].poll.return_value = 0  # user closed it
-    find(icon.menu, "Search History…")(icon)
+    find(icon.menu, "History…")(icon)
     assert launcher.call_count == 2
     focus.assert_called_with(procs[1], None)
     history.close()
@@ -673,7 +673,7 @@ def test_closing_the_history_window_refreshes_recent_dictations(tmp_path):
     tray, icon = make_tray(launcher=MagicMock(return_value=_fake_proc()))
     tray.attach(MagicMock(), MagicMock(), history, MagicMock())
     with patch("vox.ui.tray.threading.Thread") as thread:
-        find(icon.menu, "Search History…")(icon)
+        find(icon.menu, "History…")(icon)
     history.delete(history.recent(1)[0].id)
     kwargs = thread.call_args.kwargs
     kwargs["target"](*kwargs["args"])  # the window exits

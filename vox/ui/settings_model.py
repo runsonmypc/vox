@@ -46,10 +46,10 @@ DETECT_LANGUAGE = "Detect automatically"
 MICROPHONE = "Microphone"
 RECORDING_LIMIT = "Recording limit"
 RECORDING_LIMIT_NOTE = "A recording stops and is transcribed once it reaches this length."
-KEEP_FAILED_AUDIO = "Keep failed recordings for retry"
+KEEP_FAILED_AUDIO = "Keep recent recordings for retry"
 KEEP_FAILED_AUDIO_NOTE = (
-    "Save failed audio locally until recovery or deletion. Turning this off stops new saves and retries. "
-    "Delete existing recordings in History."
+    "Save the audio of the last 3 dictations locally, failed or not, so History can retry them. "
+    "Turning this off stops new saves and retries. Delete existing recordings in History."
 )
 SOUNDS = "Sounds"
 SOUNDS_NOTE = "Play a sound when dictation starts, stops, is cancelled or fails."

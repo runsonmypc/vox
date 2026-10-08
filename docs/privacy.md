@@ -72,7 +72,7 @@ looks up which app has focus, locally, to pick the right paste shortcut.
 - **History**: every dictation's text, with its time, length, the kind of app it went to (not the
   window title) and the transcription that produced it (batch, streaming or whisper.cpp; a streaming
   recording that fell back to batch counts as batch), in `~/.local/share/vox/history.db`, readable
-  only by you. Failed recordings are saved by default in `~/.local/share/vox/audio/`, with owner-only directories (0700) and files (0600). Open **Search History…** to find past dictations,
+  only by you. The last 3 recordings are saved by default in `~/.local/share/vox/audio/`, with owner-only directories (0700) and files (0600). Open **History…** to find past dictations,
   **Delete** one, or **Clear History** to erase them all; deleted text is overwritten, not just
   unlinked.
 - **Recent dictations**: the last three appear in the Vox Transfer menu, so anyone who sees your
@@ -94,28 +94,29 @@ looks up which app has focus, locally, to pick the right paste shortcut.
   mark, and a clipboard history would then keep it. On macOS it comes back for this Mac only, so
   Universal Clipboard does not offer it to your other devices.
 
-## Failed recordings
+## Recent recordings
 
-**Keep failed recordings for retry** is on by default in General Settings. A terminal
-transcription error keeps the complete original WAV locally, including recordings that were
-only partly transcribed. Recovery metadata contains the original time, duration, method,
+**Keep recent recordings for retry** is on by default in General Settings. Vox keeps the
+complete original WAV of your last 3 dictations locally: completed ones, terminal
+transcription errors, empty results and recordings that were only partly transcribed. Recovery metadata contains the original time, duration, method,
 app type and a safe failure summary, plus available partial text. It contains no API key,
-window title, screenshot or screen text. Cancellation, silence, an empty result and paste
-errors do not create recovery recordings.
+window title, screenshot or screen text. Cancellation and silence do not create recovery
+recordings.
 
 History offers **Retry with Local**, which uses whisper.cpp without uploading audio, and
 **Retry with OpenAI Batch**, which explicitly uploads the entire saved recording to OpenAI.
 A cloud retry can incur another charge, including for parts already transcribed. Retry uses
 current language, prompt, dictionary and snippets, without new screen or window-title hints.
 
-Audio remains until a complete transcript is saved or you use **Delete** or **Clear History**.
-There is no automatic expiry. Clear includes recordings that could not yet be indexed in
+Each new recording deletes the audio of any older than the newest 3, failed ones included;
+a failed entry with no text is removed with its audio. **Delete** and **Clear History**
+remove audio sooner. Clear includes recordings that could not yet be indexed in
 History. Cleanup failures are reported and retried on restart. Unlinking files is not a
 guarantee of secure erasure on an SSD. Transcript deletion keeps the existing SQLite
-secure-delete behavior. Saved audio uses space until recovery or deletion.
+secure-delete behavior. At most 3 recordings use space at a time.
 
 Turning the switch off stops new retention and all retries, and cancels an active retry.
 Existing audio and text remain available for copying or deletion; re-enabling restores retry
 eligibility. Delete existing recordings through History to remove them. Avoid downgrading
-Vox while failed recordings remain: older versions cannot manage their audio. Back up the
+Vox while recordings remain: older versions cannot manage their audio. Back up the
 History database before downgrading, and recover or delete pending recordings first.
