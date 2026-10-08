@@ -80,5 +80,6 @@ before calling a provider; copy available text and delete the entry or record ag
 
 If History cannot yield focus, select an external app and try again. Reopening a Vox window
 at completion leaves the full result ready to copy. A paste failure also leaves completed
-text in History. Saved audio is removed after full text is saved or through Delete/Clear;
-cleanup errors remain pending and are retried on startup. There is no expiry.
+text in History. Vox keeps the audio of the last 3 recordings only: each new one removes
+older audio, and Delete/Clear remove it sooner. Cleanup errors remain pending and are retried
+on startup.

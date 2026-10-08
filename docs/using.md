@@ -105,9 +105,9 @@ default mode; streaming recordings can be recovered through either method.
 History hides or minimizes before transcription starts. A complete result replaces the
 original entry and automatically pastes into the external app focused when retry finishes.
 If a Vox window has focus, the result stays ready to copy in History. The original time and
-duration are retained, and audio is removed after the complete transcript is saved, even if
-paste fails. If another attempt fails, the audio remains and distinct partial attempts can
-be copied separately. Retry never starts or pastes automatically after restart.
+duration are retained, and the audio stays for another retry until newer recordings push it
+out of the last 3. If another attempt fails, the audio remains and distinct partial attempts
+can be copied separately. A failed retry plays the error sound and says why in the menu. Retry never starts or pastes automatically after restart.
 
 Use **Cancel Retry** in History even when hotkeys are paused. Cancellation before completion
 keeps the audio and earlier text. After the full transcript is saved, cancellation preserves
