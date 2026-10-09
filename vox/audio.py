@@ -431,32 +431,35 @@ class Recorder:
         self._close_event: threading.Event | None = None
         self._on_recovered: Callable[[], None] | None = None
         # Re-initialising PortAudio must never overlap opening or closing a stream
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
+        self._cleanup_lock = threading.Lock()
+        self._callback_lock = threading.Lock()
 
     @property
     def failure(self) -> str | None:
-        if self._failure == AUDIO_RESTART_NOTICE:
-            if self._close_event is not None and self._close_event.is_set():
-                self._failure = None
-        return self._failure
-
-    @failure.setter
-    def failure(self, value: str | None) -> None:
-        self._failure = value
+        with self._cleanup_lock:
+            return self._failure
 
     def set_on_recovered(self, fn: Callable[[], None] | None) -> None:
-        """Set a callback invoked on the event loop when a delayed microphone shutdown completes."""
+        """Set a callback invoked on the recording's event loop after delayed shutdown."""
         self._on_recovered = fn
 
-    def _post_recovery(self) -> None:
-        if self._on_recovered is not None:
-            if self._loop is not None and not self._loop.is_closed():
-                try:
-                    self._loop.call_soon_threadsafe(self._on_recovered)
-                except RuntimeError:
-                    self._on_recovered()
-            else:
-                self._on_recovered()
+    @staticmethod
+    def _post_recovery(loop, callback) -> None:
+        # Never run application/UI code on the cleanup thread, including during exit.
+        if loop is not None and callback is not None:
+            try:
+                loop.call_soon_threadsafe(callback)
+            except RuntimeError:
+                pass  # the owning loop has closed
+
+    def _wait_for_cleanup(self) -> None:
+        """Call with the lifecycle lock held, before accepting another turn's audio."""
+        if (self._close_event is not None and not self._close_event.is_set()
+                and not self._close_event.wait(_STREAM_CLOSE_TIMEOUT)):
+            raise AudioError(AUDIO_RESTART_NOTICE)
+        if self.failure is not None:
+            raise AudioError(self.failure)
 
     def _get_resolved_device(self) -> int | None:
         if self.failure is not None:
@@ -469,12 +472,6 @@ class Recorder:
 
     def _ensure_stream(self) -> None:
         """Ensure audio input stream is active, creating it if necessary. Call with the lock held."""
-        # If a previous close operation is still finishing, wait briefly for it
-        if self._close_event is not None and not self._close_event.is_set():
-            if not self._close_event.wait(_STREAM_CLOSE_TIMEOUT):
-                self.failure = AUDIO_RESTART_NOTICE
-                raise AudioError(self.failure)
-
         resolved_device = self._get_resolved_device()
         if self._stream is not None and getattr(self._stream, "active", False):
             return
@@ -504,32 +501,50 @@ class Recorder:
         finished = threading.Event()
         self._close_event = finished
 
+        delayed = False
+        loop, callback = self._loop, self._on_recovered
+
         def close() -> None:
             try:
-                try:
-                    stream.stop()
-                finally:
-                    stream.close()
+                stream.stop()
+            except Exception as e:
+                log.warning("Error stopping audio stream: %s", e)
+            closed = False
+            try:
+                stream.close()
+                closed = True
             except Exception as e:
                 log.warning("Error closing audio stream: %s", e)
-            finally:
-                finished.set()
-                if self._failure == AUDIO_RESTART_NOTICE:
-                    log.info("Microphone stream closed after initial delay; audio system recovered")
-                    self._failure = None
-                    if hasattr(sd, "_exit_handler"):
+            # Independent of _lock: its owner may be waiting for us. Publish completion
+            # only after restoring the exit handler and failure state.
+            with self._cleanup_lock:
+                if closed:
+                    if delayed:
                         atexit.register(sd._exit_handler)
-                    self._post_recovery()
+                        self._failure = None
+                        log.info("Microphone stream closed after initial delay; audio system recovered")
+                        self._post_recovery(loop, callback)
+                else:
+                    self._failure = AUDIO_RESTART_NOTICE
+                    if not delayed:
+                        atexit.unregister(sd._exit_handler)
+                finished.set()
 
         threading.Thread(target=close, name="vox-audio-close", daemon=True).start()
         if not finished.wait(_STREAM_CLOSE_TIMEOUT):
-            self.failure = AUDIO_RESTART_NOTICE
+            with self._cleanup_lock:
+                # Cleanup may finish between wait() timing out and acquiring this lock.
+                if not finished.is_set():
+                    delayed = True
+                    self._failure = AUDIO_RESTART_NOTICE
+                    # Do not re-enter a still-blocked driver at interpreter exit.
+                    atexit.unregister(sd._exit_handler)
+                    log.warning("Microphone shutdown timed out after %.1fs; captured audio retained. %s",
+                                _STREAM_CLOSE_TIMEOUT, AUDIO_RESTART_NOTICE)
+        # Drain in-flight Python work before flushing the resampler or taking buffers.
+        # Never hold this lock while waiting for native stop (which can invoke a callback).
+        with self._callback_lock:
             self._is_recording = False
-            # PortAudio termination would re-enter the same deadlocked driver at interpreter exit.
-            # The OS releases its resources when the process exits. No further PortAudio calls are safe.
-            atexit.unregister(sd._exit_handler)
-            log.warning("Microphone shutdown timed out after %.1fs; captured audio retained. %s",
-                        _STREAM_CLOSE_TIMEOUT, AUDIO_RESTART_NOTICE)
 
     def warmup(self) -> None:
         """Pre-warm device resolution and PortAudio bindings without keeping microphone open."""
@@ -539,33 +554,38 @@ class Recorder:
             return
         try:
             with self._lock:
+                if self._close_event is not None and not self._close_event.is_set():
+                    return
+                if self._stream is not None or self._is_recording:
+                    return
                 dev = self._get_resolved_device()
-                dummy = sd.InputStream(
+                self._stream = sd.InputStream(
                     samplerate=self._sample_rate,
                     channels=self._channels,
                     dtype="int16",
                     device=dev,
                     blocksize=self._blocksize,
                 )
-                dummy.close()
+                self._close_stream()
             log.debug("Audio system pre-warmed (microphone closed)")
         except Exception as e:
             log.debug("Warmup stream could not be initialized: %s (will open on demand)", e)
 
     def reconfigure(self, config: Config) -> None:
         """Apply new audio settings; during a recording they wait until it ends, so it isn't lost."""
-        if self._is_recording:
-            self._pending_config = config
-            return
-        self._pending_config = None
-        self._config = config
-        self._sample_rate = config.sample_rate
-        self._channels = config.channels
-        self._resolved_device = None
-        self._last_resolved_spec = None
-        self._blocksize = int(self._sample_rate * 0.05)
-        self.close()
-        self.warmup()
+        with self._lock:
+            if self._is_recording:
+                self._pending_config = config
+                return
+            self._pending_config = None
+            self._config = config
+            self._sample_rate = config.sample_rate
+            self._channels = config.channels
+            self._resolved_device = None
+            self._last_resolved_spec = None
+            self._blocksize = int(self._sample_rate * 0.05)
+            self.close()
+            self.warmup()
 
     def refresh_input_devices(self) -> list[tuple[int, str]] | None:
         """Re-scan the audio devices and list the inputs as (index, name).
@@ -627,40 +647,45 @@ class Recorder:
         ``stream`` also feeds 24 kHz chunks to ``stream_chunks()``. ``on_limit``
         is called on ``loop`` once the recording reaches max_recording_seconds.
         """
-        # A fresh queue for each recording: the tail and end marker of one that was just stopped or
-        # discarded may still be on their way through the loop, and must land in the old queue
-        self.set_level_generation(None)
-        self._stream_queue = None
-        self.get_chunk_queue(loop)
+        with self._lock:
+            if self._is_recording:
+                raise AudioError("Recording already started")
+            self._wait_for_cleanup()
+            # A fresh queue for each recording: the tail and end marker of one that was just stopped or
+            # discarded may still be on their way through the loop, and must land in the old queue
+            self.set_level_generation(None)
+            self._stream_queue = None
+            self.get_chunk_queue(loop)
 
-        self._streaming = stream
-        self._resampler = Resampler(self._sample_rate, STREAM_RATE) if stream else None
-        self._on_limit = on_limit
-        self._chunks = []
-        self._frames = 0
-        self._limit_reached = False
-        # Read now: a limit changed mid-recording applies to the next one
-        self._max_frames = max(1, self._config.max_recording_seconds) * self._sample_rate
-        self._is_recording = True
-        try:
-            with self._lock:
+            self._streaming = stream
+            self._resampler = Resampler(self._sample_rate, STREAM_RATE) if stream else None
+            self._on_limit = on_limit
+            self._chunks = []
+            self._frames = 0
+            self._limit_reached = False
+            # Read now: a limit changed mid-recording applies to the next one
+            self._max_frames = max(1, self._config.max_recording_seconds) * self._sample_rate
+            self._is_recording = True
+            try:
                 self._ensure_stream()
-        except Exception:
-            self._is_recording = False
-            raise
+            except Exception:
+                with self._callback_lock:
+                    self._is_recording = False
+                self._close_stream()
+                raise
         log.info("Recording started")
 
     def stop(self) -> bytes:
         """Stop active recording turn, close microphone stream, and return WAV bytes."""
         # Settings can reload while the worker encodes audio: keep this recording's format.
-        sample_rate, channels = self._sample_rate, self._channels
-        self.set_level_generation(None)
         with self._lock:
+            sample_rate, channels = self._sample_rate, self._channels
+            self.set_level_generation(None)
             self._close_stream()
-        self._is_recording = False
-        self._end_stream_queue()
+            self._is_recording = False
+            self._end_stream_queue()
 
-        chunks, self._chunks = self._chunks, []
+            chunks, self._chunks = self._chunks, []
         try:
             if not chunks:
                 raise AudioError("No audio data recorded")
@@ -673,12 +698,12 @@ class Recorder:
 
     def discard(self) -> None:
         """Stop recording turn, close microphone stream, and discard buffered frames."""
-        self.set_level_generation(None)
         with self._lock:
+            self.set_level_generation(None)
             self._close_stream()
-        self._is_recording = False
-        self._end_stream_queue()
-        self._chunks = []
+            self._is_recording = False
+            self._end_stream_queue()
+            self._chunks = []
         self._apply_pending_config()
 
     def close(self) -> None:
@@ -695,8 +720,9 @@ class Recorder:
         return self._limit_reached
 
     def _apply_pending_config(self) -> None:
-        if self._pending_config is not None:
-            self.reconfigure(self._pending_config)
+        with self._lock:
+            if self._pending_config is not None:
+                self.reconfigure(self._pending_config)
 
     def stop_streaming(self) -> None:
         """The live session ended before the recording: stop queueing chunks it will never read."""
@@ -728,6 +754,10 @@ class Recorder:
     def _callback(
         self, indata: np.ndarray, frames: int, time_info: object, status: sd.CallbackFlags
     ) -> None:
+        with self._callback_lock:
+            self._accept_block(indata, frames, time_info, status)
+
+    def _accept_block(self, indata, frames, time_info, status) -> None:
         if status:
             log.warning("Audio callback status: %s", status)
         room = self._max_frames - self._frames
@@ -745,7 +775,7 @@ class Recorder:
             if self._on_limit is not None:
                 self._post(self._on_limit)
         # Optional feedback runs after all audio delivery. Only one scalar snapshot is retained;
-        # no UI calls, locks or additional audio queue are involved.
+        # no UI calls or additional audio queue are involved.
         generation = self._level_generation
         if generation is not None and not self._meter_failed:
             try:

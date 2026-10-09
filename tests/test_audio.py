@@ -244,7 +244,8 @@ def test_has_speech_soft_and_short_utterances():
 @pytest.fixture(autouse=True)
 def _no_real_devices():
     """Keep device resolution off the real audio hardware; tests that care patch it themselves."""
-    with patch("vox.audio.sd.query_devices", return_value=[{"name": "Test Mic", "max_input_channels": 2}]):
+    with patch("vox.audio.sd.query_devices", return_value=[{"name": "Test Mic", "max_input_channels": 2}]), \
+         patch("vox.audio.atexit.register"), patch("vox.audio.atexit.unregister"):
         yield
 
 
@@ -312,7 +313,7 @@ def test_stuck_native_cleanup_is_bounded_and_quarantines_driver(operation, block
             terminate.assert_not_called()
         finally:
             release.set()
-            assert finished.wait(1)
+            assert recorder._close_event.wait(1)
 
 
 def test_stuck_native_cleanup_does_not_block_interpreter_exit():
@@ -334,7 +335,8 @@ assert recorder.failure == audio.AUDIO_RESTART_NOTICE
     assert result.returncode == 0, result.stderr.decode()
 
 
-def test_delayed_native_cleanup_recovers_without_restart():
+@pytest.mark.anyio
+async def test_delayed_native_cleanup_recovers_without_restart():
     entered, release, finished = threading.Event(), threading.Event(), threading.Event()
     first_stream = MagicMock(active=True)
 
@@ -357,7 +359,7 @@ def test_delayed_native_cleanup_recovers_without_restart():
     with patch("vox.audio.sd.InputStream", side_effect=[first_stream, second_stream]) as open_stream, \
          patch("vox.audio._STREAM_CLOSE_TIMEOUT", 0.05), \
          patch("vox.audio.atexit.unregister") as unregister:
-        recorder.start()
+        recorder.start(loop=asyncio.get_running_loop())
         recorder._callback(_block(5), 800, None, 0)
         # 1. Stop recording; cleanup is delayed beyond 0.05s timeout
         result = recorder.stop()
@@ -373,7 +375,8 @@ def test_delayed_native_cleanup_recovers_without_restart():
         # 2. Native cleanup finishes (delayed, not deadlocked)
         release.set()
         assert finished.wait(1)
-        time.sleep(0.01)
+        assert recorder._close_event.wait(1)
+        await asyncio.sleep(0)
 
         # 3. Recorder automatically recovers without restart
         assert recorder.failure is None
@@ -876,3 +879,281 @@ def test_nonfinite_meter_is_disabled_without_losing_audio(level):
             recorder._callback(_block(100), 800, None, 0)
         assert recorder.latest_level is None and recorder._meter_failed
         assert len(read_wav(recorder.stop())[0]) == 800
+
+
+def test_cleanup_completion_at_timeout_boundary_does_not_quarantine():
+    recorder = Recorder(Config())
+    wait = threading.Event.wait
+
+    def timeout_after_completion(event, timeout=None):
+        result = wait(event, timeout)
+        # Model the waiter losing the race just as the cleanup thread finishes.
+        return False if event is recorder._close_event else result
+
+    with patch('vox.audio.sd.InputStream', return_value=FakeStream()), \
+         patch.object(threading.Event, 'wait', timeout_after_completion), \
+         patch('vox.audio.atexit.unregister') as unregister:
+        recorder.start()
+        recorder.discard()
+        assert recorder.failure is None
+        unregister.assert_not_called()
+        recorder.start()
+        recorder.discard()
+
+
+@pytest.mark.parametrize('stop_fails', [False, True])
+def test_close_failure_quarantines_but_stop_failure_alone_can_recover(stop_fails):
+    stream = MagicMock(active=True)
+    if stop_fails:
+        stream.stop.side_effect = RuntimeError('stop failed')
+    else:
+        stream.close.side_effect = RuntimeError('close failed')
+    recorder = Recorder(Config())
+    with patch('vox.audio.sd.InputStream', return_value=stream) as opened:
+        recorder.start()
+        recorder.discard()
+        stream.close.assert_called_once()
+        if stop_fails:
+            assert recorder.failure is None
+        else:
+            assert recorder.failure == AUDIO_RESTART_NOTICE
+            with pytest.raises(AudioError):
+                recorder.start()
+            assert opened.call_count == 1
+
+
+def test_failed_start_closes_allocated_stream():
+    stream = MagicMock()
+    stream.start.side_effect = RuntimeError('start failed')
+    recorder = Recorder(Config())
+    with patch('vox.audio.sd.InputStream', return_value=stream):
+        with pytest.raises(AudioError, match='start failed'):
+            recorder.start()
+    stream.close.assert_called_once()
+    assert not recorder.is_recording
+    assert recorder._stream is None
+
+
+@pytest.mark.parametrize('loop_state', ['open', 'closed', 'absent'])
+def test_delayed_recovery_dispatch_is_once_and_never_runs_on_cleanup_thread(loop_state):
+    release = threading.Event()
+    stream = MagicMock(active=True)
+    stream.stop.side_effect = lambda: release.wait(2)
+    loop = MagicMock() if loop_state != 'absent' else None
+    if loop_state == 'closed':
+        loop.call_soon_threadsafe.side_effect = RuntimeError('closed')
+    callback = MagicMock()
+    recorder = Recorder(Config())
+    recorder.set_on_recovered(callback)
+    with patch('vox.audio.sd.InputStream', return_value=stream), \
+         patch('vox.audio._STREAM_CLOSE_TIMEOUT', 0.01), \
+         patch('vox.audio.atexit.register') as register:
+        recorder.start(loop=loop)
+        try:
+            recorder.discard()
+            assert recorder.failure == AUDIO_RESTART_NOTICE
+        finally:
+            release.set()
+            assert recorder._close_event.wait(1)
+        assert recorder.failure is None
+        register.assert_called_once()
+        callback.assert_not_called()
+        if loop is not None:
+            loop.call_soon_threadsafe.assert_called_once_with(callback)
+
+
+def test_retry_does_not_accept_old_stream_callbacks_while_waiting():
+    release, waiting = threading.Event(), threading.Event()
+    stream = MagicMock(active=True)
+    stream.stop.side_effect = lambda: release.wait(2)
+    recorder = Recorder(Config(sample_rate=16000))
+    with patch('vox.audio.sd.InputStream', side_effect=[stream, FakeStream()]), \
+         patch('vox.audio._STREAM_CLOSE_TIMEOUT', 0.01):
+        recorder.start()
+        recorder.discard()
+        event = recorder._close_event
+        wait = event.wait
+        errors = []
+
+        def observed_wait(timeout):
+            waiting.set()
+            return wait(timeout)
+
+        def retry():
+            try:
+                recorder.start()
+            except Exception as exc:
+                errors.append(exc)
+
+        with patch.object(event, 'wait', observed_wait), patch('vox.audio._STREAM_CLOSE_TIMEOUT', 1):
+            worker = threading.Thread(target=retry)
+            worker.start()
+            try:
+                assert waiting.wait(1)
+                recorder._callback(_block(99), 800, None, 0)
+                assert recorder._chunks == []
+            finally:
+                release.set()
+                worker.join(2)
+        assert not worker.is_alive() and not errors
+        recorder._callback(_block(7), 800, None, 0)
+        samples, _ = _wav_samples(recorder.stop())
+        np.testing.assert_array_equal(samples, np.full(800, 7))
+
+
+def test_warmup_close_is_bounded_and_recovers():
+    release = threading.Event()
+    stream = MagicMock()
+    stream.close.side_effect = lambda: release.wait(2)
+    recorder = Recorder(Config())
+    with patch('vox.audio.sd.InputStream', return_value=stream), patch('vox.audio._STREAM_CLOSE_TIMEOUT', 0.01):
+        try:
+            recorder.warmup()
+            assert recorder.failure == AUDIO_RESTART_NOTICE
+        finally:
+            release.set()
+            assert recorder._close_event.wait(1)
+        assert recorder.failure is None
+
+
+def test_repeated_start_and_warmup_preserve_active_recording():
+    recorder = Recorder(Config(sample_rate=16000))
+    with patch('vox.audio.sd.InputStream', return_value=FakeStream()) as opened:
+        recorder.start()
+        recorder._callback(_block(7), 800, None, 0)
+        with pytest.raises(AudioError, match='already started'):
+            recorder.start()
+        recorder.warmup()
+        assert opened.call_count == 1
+        samples, _ = _wav_samples(recorder.stop())
+        np.testing.assert_array_equal(samples, np.full(800, 7))
+
+
+def test_shutdown_drains_inflight_callback_before_flushing_stream():
+    entered, release, stopping = threading.Event(), threading.Event(), threading.Event()
+    recorder = Recorder(Config(sample_rate=16000))
+    results = []
+    with patch('vox.audio.sd.InputStream', return_value=FakeStream(on_stop=stopping.set)):
+        recorder.start(stream=True)
+        resampler = recorder._resampler
+        process = resampler.process
+
+        def delayed_process(chunk):
+            entered.set()
+            assert release.wait(2)
+            return process(chunk)
+
+        with patch.object(resampler, 'process', delayed_process), patch.object(resampler, 'flush', wraps=resampler.flush) as flush:
+            callback = threading.Thread(target=lambda: recorder._callback(_block(7), 800, None, 0))
+            callback.start()
+            worker = threading.Thread(target=lambda: results.append(recorder.stop()))
+            try:
+                assert entered.wait(1)
+                worker.start()
+                assert stopping.wait(1)
+                flush.assert_not_called()
+            finally:
+                release.set()
+                callback.join(2)
+                if worker.ident is not None:
+                    worker.join(2)
+            assert not callback.is_alive() and not worker.is_alive()
+            flush.assert_called_once()
+    samples, _ = _wav_samples(results[0])
+    np.testing.assert_array_equal(samples, np.full(800, 7))
+
+
+def test_reconfigure_cannot_change_format_during_startup():
+    entered, release, changing = threading.Event(), threading.Event(), threading.Event()
+    recorder = Recorder(Config(sample_rate=48000))
+    errors = []
+
+    def create_resampler(src, dst):
+        entered.set()
+        assert release.wait(2)
+        return Resampler(src, dst)
+
+    def start():
+        try:
+            recorder.start(stream=True)
+        except Exception as exc:
+            errors.append(exc)
+
+    def change():
+        changing.set()
+        recorder.reconfigure(Config(sample_rate=16000))
+
+    with patch('vox.audio.sd.InputStream', return_value=FakeStream()), \
+         patch('vox.audio.Resampler', create_resampler), patch.object(recorder, 'warmup'):
+        starter = threading.Thread(target=start)
+        changer = threading.Thread(target=change)
+        starter.start()
+        try:
+            assert entered.wait(1)
+            changer.start()
+            assert changing.wait(1)
+            assert recorder._sample_rate == 48000
+        finally:
+            release.set()
+            starter.join(2)
+            if changer.ident is not None:
+                changer.join(2)
+        assert not errors and not starter.is_alive() and not changer.is_alive()
+        assert recorder._sample_rate == 48000
+        recorder._callback(_block(7), 800, None, 0)
+        _, rate = _wav_samples(recorder.stop())
+        assert rate == 48000
+        assert recorder._sample_rate == 16000
+
+
+def test_recovery_does_not_publish_completion_before_exit_handler_is_restored():
+    release, restoring, restored = threading.Event(), threading.Event(), threading.Event()
+    stream = MagicMock(active=True)
+    stream.stop.side_effect = lambda: release.wait(2)
+    recorder = Recorder(Config())
+
+    def register(handler):
+        restoring.set()
+        assert restored.wait(2)
+
+    with patch('vox.audio.sd.InputStream', return_value=stream), \
+         patch('vox.audio._STREAM_CLOSE_TIMEOUT', 0.01), patch('vox.audio.atexit.register', register):
+        recorder.start()
+        try:
+            recorder.discard()
+            release.set()
+            assert restoring.wait(1)
+            assert not recorder._close_event.is_set()
+        finally:
+            release.set()
+            restored.set()
+            assert recorder._close_event.wait(1)
+        assert recorder.failure is None
+
+
+def test_delayed_close_error_does_not_report_recovery():
+    release = threading.Event()
+    stream = MagicMock(active=True)
+    recorder = Recorder(Config())
+    loop = MagicMock()
+    recorder.set_on_recovered(MagicMock())
+
+    def close():
+        assert release.wait(2)
+        raise RuntimeError('close failed')
+
+    stream.close.side_effect = close
+    with patch('vox.audio.sd.InputStream', return_value=stream), \
+         patch('vox.audio._STREAM_CLOSE_TIMEOUT', 0.01), patch('vox.audio.atexit.register') as register:
+        recorder.start(loop=loop)
+        try:
+            recorder.discard()
+            assert recorder.failure == AUDIO_RESTART_NOTICE
+        finally:
+            release.set()
+            assert recorder._close_event.wait(1)
+        assert recorder.failure == AUDIO_RESTART_NOTICE
+        register.assert_not_called()
+        loop.call_soon_threadsafe.assert_not_called()
+        with pytest.raises(AudioError):
+            recorder.start()
