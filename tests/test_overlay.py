@@ -198,7 +198,7 @@ def test_smoothing_attack_release_staleness_and_identity():
     assert 0 < first < attack < 1
     # Compare the fraction of the remaining distance, not raw deltas near saturation.
     assert 0 < (attack - release) / attack < (attack - first) / (1 - first) < 1
-    assert envelope.sample(2, (1, 1.06, 1), 1) < 0.01
+    assert envelope.sample(2.4, (1, 1.06, 1), 1) < 0.01
     assert envelope.sample(3, (2, 3, 1), 1) < 0.001
 
 
@@ -211,7 +211,7 @@ def test_meter_staleness_tolerates_jitter_and_clock_race():
     # Jitter of 500ms still does not flatline
     assert envelope.sample(1.50, (1, 1.00, 0.05), 1) > 0
     # Stale updates older than LEVEL_TIMEOUT (0.6s) decay to flat
-    assert envelope.sample(2.2, (1, 1.00, 0.05), 1) < 0.01
+    assert envelope.sample(2.3, (1, 1.00, 0.05), 1) < 0.01
 
 
 def test_reduced_motion_static_status_no_timer_or_fade(rig):
@@ -550,3 +550,56 @@ def test_cancel_ignored_during_capture_and_fade(rig):
     rig.overlay.complete(1)
     rig.overlay.request_cancel(1)
     rig.overlay.on_cancel.assert_not_called()
+
+
+def test_late_tick_decays_only_after_level_expiry():
+    dense, sparse = Envelope(), Envelope()
+    level = (1, 1.0, 0.05)
+    dense.sample(1, level, 1)
+    sparse.sample(1, level, 1)
+    for tick in range(1, 62):
+        dense.sample(1 + tick / 100, level, 1)
+    height = sparse.sample(1.61, level, 1)
+    assert height > 0.9
+    assert height == pytest.approx(dense.value)
+    assert sparse.sample(2.6, level, 1) < 0.001
+
+
+def test_meter_repeated_and_backwards_times_do_not_double_count():
+    envelope = Envelope()
+    level = (1, 1, 0.05)
+    height = envelope.sample(1, level, 1)
+    assert envelope.sample(1, level, 1) == height
+    assert envelope.sample(0.99, level, 1) == height
+    assert envelope.sample(1, level, 1) == height
+    assert envelope.sample(1.03, level, 1) > height
+
+
+@pytest.mark.parametrize('level', [(2, 1, 1), (1, 2, 1), (1, 1, float('nan')), (1, 1, float('inf'))])
+def test_invalid_or_wrong_session_levels_do_not_drive_meter(level):
+    assert Envelope().sample(1, level, 1) == 0
+
+
+def test_overlay_reads_level_before_clock_and_recovers_after_staleness(rig):
+    rig.start()
+    rig.flush()
+    backend = rig.made[0]
+    rig.recorder.latest_level = (1, 1, 0.05)
+
+    def clock_with_concurrent_publication():
+        # Publication after the GUI reads its clock must belong to the next tick.
+        rig.recorder.latest_level = (1, 10, 0.05)
+        return 1.03
+
+    rig.overlay.clock = clock_with_concurrent_publication
+    backend.callback()
+    assert backend.frames[-1][0] > 0.5
+    rig.overlay.clock = lambda: rig.now[0]
+    rig.recorder.latest_level = (1, 1, 0.05)
+    rig.now[0] = 3
+    backend.callback()
+    assert backend.frames[-1][0] < 0.001
+    rig.recorder.latest_level = (1, 3.04, 0.05)
+    rig.now[0] = 3.04
+    backend.callback()
+    assert backend.frames[-1][0] > 0.5

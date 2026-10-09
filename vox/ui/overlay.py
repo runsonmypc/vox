@@ -46,16 +46,22 @@ class Envelope:
         self.time = None
 
     def sample(self, now, level, generation):
-        target = 0.0
-        if level is not None and level[0] == generation and -0.05 <= now - level[1] <= LEVEL_TIMEOUT:
-            # Map -60 to -26 dBFS into visible height: ordinary low-level microphone
-            # speech barely moved a linear meter. Keep quieter background noise flat.
-            if level[2] > 0.001:
-                target = min(1.0, (20 * math.log10(level[2]) + 60) / 34)
-        dt = 1 / 30 if self.time is None else max(0.0, now - self.time)
+        # Do not count an interval twice if an injected clock moves backwards.
+        now = now if self.time is None else max(now, self.time)
+        previous = now - 1 / 30 if self.time is None else self.time
         self.time = now
+        target = 0.0
+        active_until = previous
+        if level is not None and level[0] == generation and level[1] <= now + 0.05:
+            # Map -60 to -26 dBFS into visible height; keep background noise flat.
+            if math.isfinite(level[2]) and level[2] > 0.001:
+                target = min(1.0, (20 * math.log10(level[2]) + 60) / 34)
+            active_until = max(previous, min(now, level[1] + LEVEL_TIMEOUT))
+        # A late GUI tick can straddle expiry. Only the portion after expiry is
+        # silence, otherwise scheduling jitter retroactively erases valid speech.
         tau = 0.035 if target > self.value else 0.14
-        self.value += (target - self.value) * (1 - math.exp(-dt / tau))
+        self.value += (target - self.value) * (1 - math.exp(-(active_until - previous) / tau))
+        self.value *= math.exp(-(now - active_until) / 0.14)
         return self.value
 
 
