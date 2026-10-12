@@ -5,6 +5,13 @@ All notable changes to Vox Transfer are listed here. Vox Transfer follows
 
 ## [Unreleased]
 
+### Fixed
+
+- Stop the GNOME journal filling with "Failed to recognize image format" errors from the tray icon
+  on every dictation state change. The tray deleted an icon's image file the moment the next icon
+  replaced it, and GNOME's AppIndicator extension, which reloads the icon it was last told about
+  whenever the menu is rebuilt, found the file gone. Each icon's file now stays until Vox exits.
+
 ## [1.2.5] - 2026-10-08
 
 ### Fixed

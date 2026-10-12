@@ -128,7 +128,30 @@ def _glib_dispatch(fn: Callable[..., Any], *args: Any) -> None:
 
 def _linux_icon_class(pystray: Any) -> type:
     class VoxIcon(pystray.Icon):
-        """pystray's Linux icon, tolerating a missing notification server at exit."""
+        """pystray's Linux icon, keeping each icon's file while Vox runs and tolerating a missing notification
+        server at exit."""
+
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            self._icon_files: dict[tuple, str] = {}
+            super().__init__(*args, **kwargs)
+
+        # The tray hands AppIndicator a file path per icon. pystray deletes the file of the icon it replaces, but
+        # every menu rebuild makes AppIndicator register the item again, and GNOME's AppIndicator extension then
+        # reloads the icon it was last told about: the file a state change has just deleted. That fails with
+        # "Failed to recognize image format" in the journal on each dictation state change. Vox has only a few
+        # icons, so each keeps one file until exit and a stale reload still finds it.
+
+        def _remove_fs_icon(self) -> None:
+            self._icon_valid = False
+
+        def _update_fs_icon(self) -> None:
+            image = self.icon
+            key = (image.mode, image.size, image.tobytes())
+            if key not in self._icon_files:
+                super()._update_fs_icon()
+                self._icon_files[key] = self._icon_path
+            self._icon_path = self._icon_files[key]
+            self._icon_valid = True
 
         def _finalize(self) -> None:
             # pystray always closes its notification on exit, which raises without org.freedesktop.Notifications
@@ -136,6 +159,12 @@ def _linux_icon_class(pystray: Any) -> type:
                 super()._finalize()
             except Exception as e:
                 log.debug("Tray cleanup: %s", e)
+            for path in self._icon_files.values():
+                try:
+                    os.unlink(path)
+                except OSError:
+                    pass
+            self._icon_files.clear()
 
     return VoxIcon
 
