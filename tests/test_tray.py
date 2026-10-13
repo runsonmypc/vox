@@ -1,6 +1,7 @@
 """Unit tests for the menu bar TrayManager using a fake pystray icon."""
 
 import asyncio
+import os
 import subprocess
 import sys
 from unittest.mock import MagicMock, patch
@@ -446,6 +447,53 @@ def test_linux_icon_tolerates_missing_notification_server():
 
     icon = _linux_icon_class(SimpleNamespace(Icon=Backend))("vox", None, "Vox Transfer", None)
     icon._finalize()  # must not raise, or Quit would exit non-zero and systemd would restart vox
+
+
+_REAL_APPINDICATOR_ICON_FILES = """
+import os
+import sys
+
+from PIL import Image
+
+try:
+    import pystray
+except ImportError:  # no display, or no backend
+    sys.exit(77)
+
+if pystray.Icon.__module__ != "pystray._appindicator":
+    sys.exit(77)
+
+from vox.ui.tray import _linux_icon_class
+
+idle, recording = (Image.new("RGBA", (44, 44), color) for color in ((240, 240, 240, 255), (255, 59, 48, 255)))
+icon = _linux_icon_class(pystray)("vox-test", idle, "Vox Transfer", None)
+paths = []
+for image in (idle, recording, idle, recording):
+    icon._icon = image
+    # What the AppIndicator backend's _update_icon does, minus the GLib idle it is scheduled on
+    icon._remove_fs_icon()
+    icon._update_fs_icon()
+    paths.append(icon._icon_path)
+    # Every file handed to AppIndicator so far must still be readable: GNOME's extension reloads the icon it
+    # was last told about when the menu rebuild makes AppIndicator register the item again
+    missing = [p for p in paths if not os.path.exists(p)]
+    assert not missing, f"icon files deleted while the tray runs: {missing}"
+assert paths[0] == paths[2] and paths[1] == paths[3] and paths[0] != paths[1], paths
+icon._finalize()
+assert not any(os.path.exists(p) for p in paths), "icon files left behind after exit"
+"""
+
+
+def test_linux_icon_files_outlive_the_icon_updates_that_replace_them():
+    """pystray deleted each icon's file when the next icon replaced it, so GNOME's AppIndicator extension, reloading the
+    old icon after a state change, logged "Failed to recognize image format" every time."""
+    env = {k: v for k, v in os.environ.items() if k != "PYSTRAY_BACKEND"}  # conftest picks the dummy backend
+    done = subprocess.run(
+        [sys.executable, "-P", "-c", _REAL_APPINDICATOR_ICON_FILES], env=env, capture_output=True, text=True, timeout=60
+    )
+    if done.returncode == 77:
+        pytest.skip("pystray's AppIndicator backend is unavailable here")
+    assert done.returncode == 0, done.stderr
 
 
 # -- API key ----------------------------------------------------------------------
