@@ -2,15 +2,19 @@
 import asyncio
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from unittest.mock import AsyncMock, Mock, patch
+from datetime import date
+from unittest.mock import AsyncMock, Mock, call, patch
 
 import pytest
 from test_overlay import rig as rig
-from test_pipeline_daemon import SILENT, openai_config, running, until
+from test_pipeline_daemon import SILENT, SPEECH, openai_config, running, until
 
 from vox.config import Config, load_config
-from vox.daemon import State, _config_reloader
+from vox.daemon import CANCELLED_NOTICE, State, _config_reloader
 from vox.errors import AudioError
+from vox.history import HistoryDB
+from vox.recovery import CANCELLED_SUMMARY, RecoveryStore
+from vox.ui.history_model import build_rows
 from vox.window import start_screen_capture
 
 
@@ -285,6 +289,42 @@ async def test_overlay_button_cancels_operation_without_paste(rig, processing):
             h.daemon._cancel = AsyncMock()
             await h.daemon._handle(f'overlay:cancel:{h.daemon._generation}')
             h.daemon._cancel.assert_not_called()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize('how', ['overlay', 'hotkey'])
+async def test_overlay_cancel_keeps_the_interrupted_recording_for_retry(rig, tmp_path, how):
+    history = HistoryDB(tmp_path / 'history.db')
+    tray = Mock()
+    with patch('vox.daemon.create_overlay', return_value=rig.overlay), patch('vox.daemon._POST_ROLL_SECONDS', 0):
+        async with running(openai_config(attenuation_enabled=False), tray, history=history) as h:
+            h.recorder.latest_level = None
+            async def stuck(*_):
+                await asyncio.Event().wait()
+            h.batch.transcribe.side_effect = stuck
+            await h.daemon._start_recording()
+            await h.daemon._stop_recording()
+            await until(lambda: h.batch.transcribe.called)
+            rig.flush()
+            if how == 'overlay':
+                rig.made[0].on_cancel(h.daemon._generation)
+            else:
+                h.send('cancel')  # the double-tap discards, as before
+            await until(lambda: h.state is State.IDLE)
+            h.paste.assert_not_called()
+            if how == 'hotkey':
+                await asyncio.sleep(0.05)
+                assert history.recent() == []
+                return
+            await until(lambda: history.recent())
+            [rec] = history.recent()
+            assert (rec.status, rec.text, rec.error_summary) == ('failed', '', CANCELLED_SUMMARY)
+            assert rec.original_mode == 'batch' and rec.app_type == 'EDITOR'
+            assert RecoveryStore(history).read(rec.audio_id) == SPEECH
+            await until(lambda: call(CANCELLED_NOTICE) in tray.set_notice.call_args_list)
+            [_, entry] = build_rows([rec], date.today())
+            assert entry.preview == 'Cancelled recording'
+    history.close()
 
 
 @pytest.mark.anyio

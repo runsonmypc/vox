@@ -10,6 +10,7 @@ from datetime import UTC, date, datetime
 
 from ..control import ControlClient, ControlError, ControlUnavailable
 from ..history import HistoryDB, HistoryRecord
+from ..recovery import CANCELLED_SUMMARY
 
 log = logging.getLogger(__name__)
 
@@ -100,6 +101,8 @@ def build_rows(records: list[HistoryRecord], today: date, clock24: bool = False)
         time = time_label(moment, clock24) if moment else rec.created_at or ""
         app, took = app_label(rec.app_type), duration_label(rec.duration_seconds)
         status = {"failed": "Failed recording", "partial": "Partial transcript", "retrying": "Retrying…"}.get(rec.status, "")
+        if rec.status == "failed" and rec.error_summary == CANCELLED_SUMMARY:
+            status = "Cancelled recording"
         rows.append(Entry(
             record=rec,
             preview=(f"{status}: " if status and rec.text else "") + (one_line(rec.text) or status),

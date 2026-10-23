@@ -26,7 +26,7 @@ from .hotkey import HotkeyListener
 from .injector import check_accessibility_permission, paste
 from .keystore import KeystoreError, get_api_key
 from .modes import mode_problem
-from .recovery import FAILURE_SUMMARY, RETENTION_LOCK, RecoveryStore
+from .recovery import CANCELLED_SUMMARY, FAILURE_SUMMARY, RETENTION_LOCK, RecoveryStore
 from .sounds import SoundPlayer, sound_playing_until
 from .streaming import StreamingTranscriber
 from .transcribe import PartialTranscriptionError, Transcriber
@@ -44,6 +44,7 @@ SILENT_MIC_NOTICE = "Microphone is silent: check its permission"
 EMPTY_NOTICE = "Last dictation came back empty: retry in History"
 ACCESSIBILITY_NOTICE = "Accessibility access needed"
 PARTIAL_NOTICE = "Last dictation only partly transcribed: see History"
+CANCELLED_NOTICE = "Cancelled dictation kept: retry in History"
 
 # Trailing audio kept after the stop key, so the last syllable isn't cut off
 _POST_ROLL_SECONDS = 0.12
@@ -193,6 +194,9 @@ class _Session:
     streaming: StreamingTranscriber | None = None
     stream_task: asyncio.Task | None = None
     screen_future: asyncio.Future | None = None
+    # The finished recording and where it stopped, kept so a cancelled transcription can be retried
+    wav_data: bytes | None = None
+    context: AppContext | None = None
 
     def release(self) -> None:
         """Drop the live transcription and screen capture. Safe to repeat."""
@@ -352,7 +356,7 @@ class _Daemon:
         if event.startswith("overlay:cancel:"):
             if event != f"overlay:cancel:{self._generation}" or (self.session is None and self.inflight is None):
                 return
-            await self._cancel()
+            await self._cancel(keep_audio=True)
             return
 
         if event in ("pause", "resume"):
@@ -502,6 +506,7 @@ class _Daemon:
         stop_context = await asyncio.to_thread(detect_active_window, self.config)
 
         session, self.session = self.session, None
+        session.wav_data, session.context = wav_data, stop_context
         self.inflight = session
         self.process_task = asyncio.create_task(_process(
             wav_data=wav_data,
@@ -529,7 +534,12 @@ class _Daemon:
         self._end_session()
         self.set_state(State.IDLE)
 
-    async def _cancel(self) -> None:
+    async def _cancel(self, keep_audio: bool = False) -> None:
+        """Discard the recording or transcription in progress.
+
+        ``keep_audio`` (the overlay's ×) keeps a recording whose transcription was interrupted
+        in History, so it can be retried.
+        """
         self.overlay.dismiss()
         if self.state is State.RECORDING:
             log.info("Cancelling active recording...")
@@ -551,14 +561,22 @@ class _Daemon:
                 return
             log.info("Cancelling in-flight processing...")
             await self._restore_volume()
-            if self.process_task is not None and not self.process_task.done():
-                self.process_task.cancel()
-                await asyncio.gather(self.process_task, return_exceptions=True)
+            task, session = self.process_task, self.inflight
+            if task is not None and not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
             # The task may be cancelled before it ever ran, so its own cleanup can't be relied on
             self._end_processing()
             self.sounds.play("cancel")
             self.set_state(State.IDLE)
             log.info("Processing cancelled, state reset to IDLE")
+            # A task that finished on its own already kept what it had; one cut short kept nothing
+            if keep_audio and task is not None and task.cancelled() and session is not None and session.wav_data:
+                _spawn(_retain_recording(
+                    session.wav_data, self.config, self.history, session.context, session.mode, session.mode, "",
+                    self.tray, session.created_at, self._set_recovery_notice,
+                    failure_notice=CANCELLED_NOTICE, error_summary=CANCELLED_SUMMARY,
+                ))
 
         else:
             log.debug("Ignoring cancel event in IDLE state")
@@ -950,6 +968,8 @@ async def _process(
         if not text or not text.strip():
             # The audio passed the speech check, so an empty transcript loses words: say so and keep it
             log.warning("Empty transcription result, skipping injection")
+            if overlay is not None:
+                overlay.complete(overlay_generation, False)  # no × to cancel a recording already being kept
             sounds.play("error")
             await _retain_recording(wav_data, config, history, context, mode, provider, "", tray, created_at,
                                   recovery_notice, failure_notice=EMPTY_NOTICE)

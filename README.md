@@ -30,7 +30,7 @@
 
 1. **Tap right Shift** and start talking.
 2. **Tap it again.** Vox Transfer types what you said into the app you're in.
-3. Changed your mind? Click **×** in the recording overlay to cancel. Double-tap cancellation is available as an opt-in setting.
+3. Changed your mind? Click **×** in the recording overlay to cancel. A transcription cancelled this way stays in History, where you can retry it. Double-tap cancellation is available as an opt-in setting.
 
 Shift still types capitals: only a tap on its own starts dictation. It works in email, chat,
 documents, code editors and terminals.
