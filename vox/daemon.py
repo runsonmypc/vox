@@ -57,6 +57,8 @@ _DEVICE_REFRESH_DELAY = 1.0
 # and PipeWire's or PulseAudio's "default" device already follows hotplugs, so the re-scan after a recording does.
 _IDLE_DEVICE_SCAN_SECONDS: float | None = 30.0 if sys.platform == "darwin" else None
 _CONFIG_POLL_SECONDS = 2.0
+# How long quitting waits for a cancelled transcription to finish being kept in History
+_KEEP_ON_QUIT_SECONDS = 5.0
 
 
 class State(Enum):
@@ -334,16 +336,37 @@ class _Daemon:
                 self.process_task.cancel()
                 await asyncio.gather(self.process_task, return_exceptions=True)
             if self._keeping:  # a quit right after × must not throw away the recording being kept
-                await asyncio.wait(self._keeping)
+                _, pending = await asyncio.wait(self._keeping, timeout=_KEEP_ON_QUIT_SECONDS)
+                if pending:
+                    log.warning("Quitting before a cancelled dictation could be kept in History")
             self._shutdown(reload_task)
 
     def _overlay_cancel(self, generation: int) -> None:
         """Interrupt processing even while the event consumer awaits settings or device work."""
         if generation != self._generation or (self.session is None and self.inflight is None):
             return
-        if self.process_task is not None and not self.process_task.done():
-            self.process_task.cancel()
+        task, session = self.process_task, self.inflight
+        if task is not None and not task.done():
+            task.cancel()
+            # Kept from here rather than the queued event, which a quit could overtake
+            if session is not None:
+                task.add_done_callback(lambda task: self._keep_cancelled(task, session))
         self.queue.put_nowait(f"overlay:cancel:{generation}")
+
+    def _keep_cancelled(self, task: asyncio.Task, session: _Session) -> None:
+        """Keep a recording whose transcription the overlay's × cut short in History, so it can be retried.
+
+        A task that finished on its own already kept what it had; one cut short kept nothing.
+        """
+        if not task.cancelled() or not session.wav_data:
+            return
+        keeping = _spawn(_retain_recording(
+            session.wav_data, self.config, self.history, session.context, session.mode, session.mode, "",
+            self.tray, session.created_at, self._set_recovery_notice,
+            failure_notice=CANCELLED_NOTICE, error_summary=CANCELLED_SUMMARY,
+        ))
+        self._keeping.add(keeping)
+        keeping.add_done_callback(self._keeping.discard)
 
     async def _handle(self, event: str) -> None:
         if event.startswith("mode:"):
@@ -359,7 +382,7 @@ class _Daemon:
         if event.startswith("overlay:cancel:"):
             if event != f"overlay:cancel:{self._generation}" or (self.session is None and self.inflight is None):
                 return
-            await self._cancel(keep_audio=True)
+            await self._cancel()
             return
 
         if event in ("pause", "resume"):
@@ -537,12 +560,7 @@ class _Daemon:
         self._end_session()
         self.set_state(State.IDLE)
 
-    async def _cancel(self, keep_audio: bool = False) -> None:
-        """Discard the recording or transcription in progress.
-
-        ``keep_audio`` (the overlay's ×) keeps a recording whose transcription was interrupted
-        in History, so it can be retried.
-        """
+    async def _cancel(self) -> None:
         self.overlay.dismiss()
         if self.state is State.RECORDING:
             log.info("Cancelling active recording...")
@@ -564,24 +582,14 @@ class _Daemon:
                 return
             log.info("Cancelling in-flight processing...")
             await self._restore_volume()
-            task, session = self.process_task, self.inflight
-            if task is not None and not task.done():
-                task.cancel()
-                await asyncio.gather(task, return_exceptions=True)
+            if self.process_task is not None and not self.process_task.done():
+                self.process_task.cancel()
+                await asyncio.gather(self.process_task, return_exceptions=True)
             # The task may be cancelled before it ever ran, so its own cleanup can't be relied on
             self._end_processing()
             self.sounds.play("cancel")
             self.set_state(State.IDLE)
             log.info("Processing cancelled, state reset to IDLE")
-            # A task that finished on its own already kept what it had; one cut short kept nothing
-            if keep_audio and task is not None and task.cancelled() and session is not None and session.wav_data:
-                keeping = _spawn(_retain_recording(
-                    session.wav_data, self.config, self.history, session.context, session.mode, session.mode, "",
-                    self.tray, session.created_at, self._set_recovery_notice,
-                    failure_notice=CANCELLED_NOTICE, error_summary=CANCELLED_SUMMARY,
-                ))
-                self._keeping.add(keeping)
-                keeping.add_done_callback(self._keeping.discard)
 
         else:
             log.debug("Ignoring cancel event in IDLE state")

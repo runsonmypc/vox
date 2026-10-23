@@ -328,7 +328,8 @@ async def test_overlay_cancel_keeps_the_interrupted_recording_for_retry(rig, tmp
 
 
 @pytest.mark.anyio
-async def test_quitting_right_after_overlay_cancel_still_keeps_the_recording(rig, tmp_path):
+@pytest.mark.parametrize('when', ['while_staging', 'before_the_event', 'staging_hangs'])
+async def test_quitting_right_after_overlay_cancel_still_keeps_the_recording(rig, tmp_path, when):
     history = HistoryDB(tmp_path / 'history.db')
     staging, release = threading.Event(), threading.Event()
     real_stage = RecoveryStore.stage
@@ -339,7 +340,8 @@ async def test_quitting_right_after_overlay_cancel_still_keeps_the_recording(rig
         return real_stage(self, *args)
 
     with patch('vox.daemon.create_overlay', return_value=rig.overlay), patch('vox.daemon._POST_ROLL_SECONDS', 0), \
-         patch.object(RecoveryStore, 'stage', slow_stage):
+         patch('vox.daemon._KEEP_ON_QUIT_SECONDS', 0.2), \
+         patch.object(RecoveryStore, 'stage', slow_stage if when != 'before_the_event' else real_stage):
         async with running(openai_config(attenuation_enabled=False), history=history) as h:
             h.recorder.latest_level = None
             async def stuck(*_):
@@ -350,15 +352,24 @@ async def test_quitting_right_after_overlay_cancel_still_keeps_the_recording(rig
             await until(lambda: h.batch.transcribe.called)
             rig.flush()
             rig.made[0].on_cancel(h.daemon._generation)
-            await until(staging.is_set)
-            stopping = asyncio.create_task(h.stop())  # quit while the recording is still being staged
-            await asyncio.sleep(0.05)
-            assert not stopping.done()
-            release.set()
-            await stopping
+            if when == 'before_the_event':
+                await h.stop()  # the quit overtakes the queued overlay:cancel event
+                assert not h.played('cancel')
+            else:
+                await until(staging.is_set)
+                stopping = asyncio.create_task(h.stop())  # quit while the recording is still being staged
+                await asyncio.sleep(0.05)
+                assert not stopping.done()
+                if when == 'while_staging':
+                    release.set()
+                await stopping  # a staging that hangs gives up after the bound
+                release.set()
     reopened = HistoryDB(tmp_path / 'history.db')
-    [rec] = reopened.recent()
-    assert rec.error_summary == CANCELLED_SUMMARY and rec.audio_id
+    if when == 'staging_hangs':
+        assert reopened.recent() == []
+    else:
+        [rec] = reopened.recent()
+        assert rec.error_summary == CANCELLED_SUMMARY and rec.audio_id
     reopened.close()
 
 
