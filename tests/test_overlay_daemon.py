@@ -328,6 +328,41 @@ async def test_overlay_cancel_keeps_the_interrupted_recording_for_retry(rig, tmp
 
 
 @pytest.mark.anyio
+async def test_quitting_right_after_overlay_cancel_still_keeps_the_recording(rig, tmp_path):
+    history = HistoryDB(tmp_path / 'history.db')
+    staging, release = threading.Event(), threading.Event()
+    real_stage = RecoveryStore.stage
+
+    def slow_stage(self, *args):
+        staging.set()
+        assert release.wait(5)
+        return real_stage(self, *args)
+
+    with patch('vox.daemon.create_overlay', return_value=rig.overlay), patch('vox.daemon._POST_ROLL_SECONDS', 0), \
+         patch.object(RecoveryStore, 'stage', slow_stage):
+        async with running(openai_config(attenuation_enabled=False), history=history) as h:
+            h.recorder.latest_level = None
+            async def stuck(*_):
+                await asyncio.Event().wait()
+            h.batch.transcribe.side_effect = stuck
+            await h.daemon._start_recording()
+            await h.daemon._stop_recording()
+            await until(lambda: h.batch.transcribe.called)
+            rig.flush()
+            rig.made[0].on_cancel(h.daemon._generation)
+            await until(staging.is_set)
+            stopping = asyncio.create_task(h.stop())  # quit while the recording is still being staged
+            await asyncio.sleep(0.05)
+            assert not stopping.done()
+            release.set()
+            await stopping
+    reopened = HistoryDB(tmp_path / 'history.db')
+    [rec] = reopened.recent()
+    assert rec.error_summary == CANCELLED_SUMMARY and rec.audio_id
+    reopened.close()
+
+
+@pytest.mark.anyio
 async def test_double_tap_preference_reloads_without_other_hotkey_changes():
     async with running(openai_config(attenuation_enabled=False)) as h:
         with patch('vox.daemon.HotkeyListener') as listener:

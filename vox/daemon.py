@@ -262,6 +262,7 @@ class _Daemon:
         self.session: _Session | None = None  # the recording in progress
         self.inflight: _Session | None = None  # the recording being transcribed
         self.process_task: asyncio.Task | None = None
+        self._keeping: set[asyncio.Task] = set()  # cancelled transcriptions being saved to History
         # What the tray's notice says, most pressing first; the platform's notice shows when neither is set
         self.mic_silent = False
         self.partly_transcribed = False
@@ -332,6 +333,8 @@ class _Daemon:
             if self.process_task is not None and not self.process_task.done():
                 self.process_task.cancel()
                 await asyncio.gather(self.process_task, return_exceptions=True)
+            if self._keeping:  # a quit right after × must not throw away the recording being kept
+                await asyncio.wait(self._keeping)
             self._shutdown(reload_task)
 
     def _overlay_cancel(self, generation: int) -> None:
@@ -572,11 +575,13 @@ class _Daemon:
             log.info("Processing cancelled, state reset to IDLE")
             # A task that finished on its own already kept what it had; one cut short kept nothing
             if keep_audio and task is not None and task.cancelled() and session is not None and session.wav_data:
-                _spawn(_retain_recording(
+                keeping = _spawn(_retain_recording(
                     session.wav_data, self.config, self.history, session.context, session.mode, session.mode, "",
                     self.tray, session.created_at, self._set_recovery_notice,
                     failure_notice=CANCELLED_NOTICE, error_summary=CANCELLED_SUMMARY,
                 ))
+                self._keeping.add(keeping)
+                keeping.add_done_callback(self._keeping.discard)
 
         else:
             log.debug("Ignoring cancel event in IDLE state")
