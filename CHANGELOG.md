@@ -5,6 +5,12 @@ All notable changes to Vox Transfer are listed here. Vox Transfer follows
 
 ## [Unreleased]
 
+### Changed
+
+- Cancelling a transcription with the overlay's × no longer throws the recording away. It is kept
+  in History as a cancelled recording, ready to retry, while Keep recent recordings for retry is on.
+  Cancelling while still recording, or with the double-tap hotkey, still discards it.
+
 ## [1.2.6] - 2026-10-13
 
 ### Fixed

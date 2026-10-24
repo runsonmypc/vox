@@ -2,15 +2,19 @@
 import asyncio
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from unittest.mock import AsyncMock, Mock, patch
+from datetime import date
+from unittest.mock import AsyncMock, Mock, call, patch
 
 import pytest
 from test_overlay import rig as rig
-from test_pipeline_daemon import SILENT, openai_config, running, until
+from test_pipeline_daemon import SILENT, SPEECH, openai_config, running, until
 
 from vox.config import Config, load_config
-from vox.daemon import State, _config_reloader
+from vox.daemon import CANCELLED_NOTICE, State, _config_reloader
 from vox.errors import AudioError
+from vox.history import HistoryDB
+from vox.recovery import CANCELLED_SUMMARY, RecoveryStore
+from vox.ui.history_model import build_rows
 from vox.window import start_screen_capture
 
 
@@ -285,6 +289,110 @@ async def test_overlay_button_cancels_operation_without_paste(rig, processing):
             h.daemon._cancel = AsyncMock()
             await h.daemon._handle(f'overlay:cancel:{h.daemon._generation}')
             h.daemon._cancel.assert_not_called()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize('how', ['overlay', 'hotkey', 'streaming_fallback', 'during_stop'])
+async def test_overlay_cancel_keeps_the_interrupted_recording_for_retry(rig, tmp_path, how):
+    history = HistoryDB(tmp_path / 'history.db')
+    tray = Mock()
+    mode = 'streaming' if how == 'streaming_fallback' else 'batch'
+    post_roll = 0.2 if how == 'during_stop' else 0
+    with patch('vox.daemon.create_overlay', return_value=rig.overlay), patch('vox.daemon._POST_ROLL_SECONDS', post_roll):
+        async with running(openai_config(attenuation_enabled=False, mode=mode), tray, history=history) as h:
+            h.recorder.latest_level = None
+            h.streaming.finish.return_value = None  # the live session failed: batch takes the recording
+            async def stuck(*_):
+                await asyncio.Event().wait()
+            h.batch.transcribe.side_effect = stuck
+            if how == 'during_stop':  # the hotkey's events, so the click's event waits behind the stop
+                h.send('toggle')
+                await until(lambda: h.state is State.RECORDING)
+                rig.flush()
+                h.send('toggle')
+                await until(lambda: h.state is State.PROCESSING)
+                rig.flush()
+                assert h.daemon.process_task is None  # × before the transcription task exists
+                rig.made[0].on_cancel(h.daemon._generation)
+            else:
+                await h.daemon._start_recording()
+                await h.daemon._stop_recording()
+                await until(lambda: h.batch.transcribe.called)
+                rig.flush()
+            if how == 'during_stop':
+                pass
+            elif how == 'hotkey':
+                h.send('cancel')  # the double-tap discards, as before
+            else:
+                rig.made[0].on_cancel(h.daemon._generation)
+                h.daemon._overlay_cancel(h.daemon._generation)  # a second request still keeps it only once
+            await until(lambda: h.state is State.IDLE)
+            h.paste.assert_not_called()
+            if how == 'hotkey':
+                await asyncio.sleep(0.05)
+                assert history.recent() == []
+                return
+            await until(lambda: history.recent())
+            [rec] = history.recent()
+            assert (rec.status, rec.text, rec.error_summary) == ('failed', '', CANCELLED_SUMMARY)
+            assert (rec.original_mode, rec.attempted_mode) == (mode, 'batch') and rec.app_type == 'EDITOR'
+            assert RecoveryStore(history).read(rec.audio_id) == SPEECH
+            await until(lambda: call(CANCELLED_NOTICE) in tray.set_notice.call_args_list)
+            [_, entry] = build_rows([rec], date.today())
+            assert entry.preview == 'Cancelled recording'
+    history.close()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize('when', ['while_staging', 'before_the_event', 'staging_hangs', 'as_the_task_ends'])
+async def test_quitting_right_after_overlay_cancel_still_keeps_the_recording(rig, tmp_path, when):
+    history = HistoryDB(tmp_path / 'history.db')
+    staging, release = threading.Event(), threading.Event()
+    real_stage = RecoveryStore.stage
+
+    def slow_stage(self, *args):
+        staging.set()
+        assert release.wait(5)
+        return real_stage(self, *args)
+
+    with patch('vox.daemon.create_overlay', return_value=rig.overlay), patch('vox.daemon._POST_ROLL_SECONDS', 0), \
+         patch('vox.daemon._KEEP_ON_QUIT_SECONDS', 0.2 if when == 'staging_hangs' else 5), \
+         patch.object(RecoveryStore, 'stage', slow_stage if when in ('while_staging', 'staging_hangs') else real_stage):
+        async with running(openai_config(attenuation_enabled=False), history=history) as h:
+            h.recorder.latest_level = None
+            async def stuck(*_):
+                await asyncio.Event().wait()
+            h.batch.transcribe.side_effect = stuck
+            await h.daemon._start_recording()
+            await h.daemon._stop_recording()
+            await until(lambda: h.batch.transcribe.called)
+            rig.flush()
+            if when != 'as_the_task_ends':
+                rig.made[0].on_cancel(h.daemon._generation)
+            if when == 'as_the_task_ends':
+                h.daemon.retry = None  # no awaits in shutdown before the processing task is checked
+                h.daemon._overlay_cancel(h.daemon._generation)
+                h.task.cancel()  # the quit lands just as the cancelled task ends, before its callbacks run
+                await h.stop()
+            elif when == 'before_the_event':
+                await h.stop()  # the quit overtakes the queued overlay:cancel event
+                assert not h.played('cancel')
+            else:
+                await until(staging.is_set)
+                stopping = asyncio.create_task(h.stop())  # quit while the recording is still being staged
+                await asyncio.sleep(0.05)
+                assert not stopping.done()
+                if when == 'while_staging':
+                    release.set()
+                await stopping  # a staging that hangs gives up after the bound
+                release.set()
+    reopened = HistoryDB(tmp_path / 'history.db')
+    if when == 'staging_hangs':
+        assert reopened.recent() == []
+    else:
+        [rec] = reopened.recent()
+        assert rec.error_summary == CANCELLED_SUMMARY and rec.audio_id
+    reopened.close()
 
 
 @pytest.mark.anyio

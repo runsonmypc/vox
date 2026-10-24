@@ -25,6 +25,7 @@ from .history import HistoryDB
 
 RETENTION_LOCK = threading.Lock()
 FAILURE_SUMMARY = 'Transcription failed. Check the selected provider and retry.'
+CANCELLED_SUMMARY = 'Transcription cancelled. Choose a method to retry.'
 KEPT_RECORDINGS = 3  # audio is kept for the newest dictations only, failed or not
 
 
@@ -185,7 +186,7 @@ class RecoveryStore:
                 'batch', 'streaming', 'whisper_cpp'
             ):
                 raise RecoveryError('Recording metadata is invalid.')
-            if manifest['error_summary'] not in (FAILURE_SUMMARY, None):
+            if manifest['error_summary'] not in (FAILURE_SUMMARY, CANCELLED_SUMMARY, None):
                 raise RecoveryError('Recording metadata is invalid.')
             if manifest['error_summary'] is None and not (isinstance(manifest['text'], str) and manifest['text'].strip()):
                 raise RecoveryError('Recording metadata is invalid.')

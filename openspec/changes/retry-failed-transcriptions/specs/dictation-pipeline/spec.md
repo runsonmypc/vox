@@ -29,7 +29,7 @@ When a recording's upload file would exceed about 24 MB (roughly 13 minutes at 1
 ## ADDED Requirements
 
 ### Requirement: Terminal Transcription Failure Recovery
-When failed-transcription recovery is enabled, the system SHALL retain the complete captured recording for retry when a transcription attempt fails with an error, including local failures and failure of batch fallback after streaming. It SHALL preserve existing partial-text recovery behavior when recovery storage is unavailable. It SHALL NOT retain audio solely because paste failed, speech was not detected, the transcript was empty, or the user cancelled the initial dictation.
+When failed-transcription recovery is enabled, the system SHALL retain the complete captured recording for retry when a transcription attempt fails with an error, including local failures and failure of batch fallback after streaming. It SHALL preserve existing partial-text recovery behavior when recovery storage is unavailable. When the user cancels an initial dictation's transcription with the overlay's × button, the system SHALL retain the complete recording with a cancelled History entry that can be retried. It SHALL NOT retain audio solely because paste failed, speech was not detected, the user cancelled while still recording, or the user cancelled with the double-tap hotkey.
 
 #### Scenario: Local or batch fails
 - **WHEN** a finished recording fails local or batch transcription with recovery enabled
@@ -47,6 +47,10 @@ When failed-transcription recovery is enabled, the system SHALL retain the compl
 - **WHEN** a partial transcription cannot be saved to History
 - **THEN** the existing fallback pastes the partial text and Vox reports any failure to retain the audio when recovery is enabled
 
-#### Scenario: Cancellation or successful transcription
-- **WHEN** the initial dictation is cancelled, contains no detected speech, returns an empty transcript without an error, or succeeds but cannot paste
+#### Scenario: Transcription cancelled from the overlay
+- **WHEN** the user clicks the overlay's × while an initial dictation is being transcribed, with recovery enabled
+- **THEN** nothing is pasted, the complete recording is saved locally with a History entry shown as a cancelled recording, and it can be retried like a failed one
+
+#### Scenario: Other cancellation or successful transcription
+- **WHEN** the initial dictation is cancelled while still recording or with the double-tap hotkey, contains no detected speech, or succeeds but cannot paste
 - **THEN** no failed recording is created for that reason and existing transcript recovery rules still apply

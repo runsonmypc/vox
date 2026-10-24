@@ -26,7 +26,7 @@ from .hotkey import HotkeyListener
 from .injector import check_accessibility_permission, paste
 from .keystore import KeystoreError, get_api_key
 from .modes import mode_problem
-from .recovery import FAILURE_SUMMARY, RETENTION_LOCK, RecoveryStore
+from .recovery import CANCELLED_SUMMARY, FAILURE_SUMMARY, RETENTION_LOCK, RecoveryStore
 from .sounds import SoundPlayer, sound_playing_until
 from .streaming import StreamingTranscriber
 from .transcribe import PartialTranscriptionError, Transcriber
@@ -44,6 +44,7 @@ SILENT_MIC_NOTICE = "Microphone is silent: check its permission"
 EMPTY_NOTICE = "Last dictation came back empty: retry in History"
 ACCESSIBILITY_NOTICE = "Accessibility access needed"
 PARTIAL_NOTICE = "Last dictation only partly transcribed: see History"
+CANCELLED_NOTICE = "Cancelled dictation kept: retry in History"
 
 # Trailing audio kept after the stop key, so the last syllable isn't cut off
 _POST_ROLL_SECONDS = 0.12
@@ -56,6 +57,8 @@ _DEVICE_REFRESH_DELAY = 1.0
 # and PipeWire's or PulseAudio's "default" device already follows hotplugs, so the re-scan after a recording does.
 _IDLE_DEVICE_SCAN_SECONDS: float | None = 30.0 if sys.platform == "darwin" else None
 _CONFIG_POLL_SECONDS = 2.0
+# How long quitting waits for a cancelled transcription to finish being kept in History
+_KEEP_ON_QUIT_SECONDS = 5.0
 
 
 class State(Enum):
@@ -193,6 +196,11 @@ class _Session:
     streaming: StreamingTranscriber | None = None
     stream_task: asyncio.Task | None = None
     screen_future: asyncio.Future | None = None
+    # The finished recording, where it stopped and what transcribed it, kept so a cancelled transcription can be retried
+    wav_data: bytes | None = None
+    context: AppContext | None = None
+    provider: str | None = None
+    keep_if_cancelled: bool = False  # the overlay's × asked to keep it; set once, so it is kept once
 
     def release(self) -> None:
         """Drop the live transcription and screen capture. Safe to repeat."""
@@ -258,6 +266,7 @@ class _Daemon:
         self.session: _Session | None = None  # the recording in progress
         self.inflight: _Session | None = None  # the recording being transcribed
         self.process_task: asyncio.Task | None = None
+        self._keeping: set[asyncio.Task] = set()  # cancelled transcriptions being saved to History
         # What the tray's notice says, most pressing first; the platform's notice shows when neither is set
         self.mic_silent = False
         self.partly_transcribed = False
@@ -328,15 +337,46 @@ class _Daemon:
             if self.process_task is not None and not self.process_task.done():
                 self.process_task.cancel()
                 await asyncio.gather(self.process_task, return_exceptions=True)
+            if self._keeping:  # a quit right after × must not throw away the recording being kept
+                _, pending = await asyncio.wait(self._keeping, timeout=_KEEP_ON_QUIT_SECONDS)
+                if pending:
+                    log.warning("Quitting before a cancelled dictation could be kept in History")
             self._shutdown(reload_task)
 
     def _overlay_cancel(self, generation: int) -> None:
         """Interrupt processing even while the event consumer awaits settings or device work."""
         if generation != self._generation or (self.session is None and self.inflight is None):
             return
-        if self.process_task is not None and not self.process_task.done():
-            self.process_task.cancel()
+        task, session = self.process_task, self.inflight
+        if task is not None and not task.done():
+            task.cancel()
+            # Kept from here rather than the queued event, which a quit could overtake
+            if session is not None:
+                self._keep_when_cancelled(task, session)
         self.queue.put_nowait(f"overlay:cancel:{generation}")
+
+    def _keep_when_cancelled(self, task: asyncio.Task, session: _Session) -> None:
+        """Watch, from the moment of the click, so that a quit waits for it too."""
+        if not session.keep_if_cancelled:
+            session.keep_if_cancelled = True
+            keeping = _spawn(self._keep_cancelled(task, session))
+            self._keeping.add(keeping)
+            keeping.add_done_callback(self._keeping.discard)
+
+    async def _keep_cancelled(self, task: asyncio.Task, session: _Session) -> None:
+        """Keep a recording whose transcription the overlay's × cut short in History, so it can be retried.
+
+        A task that finished on its own already kept what it had; one cut short kept nothing.
+        """
+        await asyncio.wait([task])
+        if not task.cancelled() or not session.wav_data:
+            return
+        await _retain_recording(
+            session.wav_data, self.config, self.history, session.context, session.mode,
+            session.provider or session.mode, "",
+            self.tray, session.created_at, self._set_recovery_notice,
+            failure_notice=CANCELLED_NOTICE, error_summary=CANCELLED_SUMMARY,
+        )
 
     async def _handle(self, event: str) -> None:
         if event.startswith("mode:"):
@@ -502,6 +542,7 @@ class _Daemon:
         stop_context = await asyncio.to_thread(detect_active_window, self.config)
 
         session, self.session = self.session, None
+        session.wav_data, session.context = wav_data, stop_context
         self.inflight = session
         self.process_task = asyncio.create_task(_process(
             wav_data=wav_data,
@@ -520,7 +561,11 @@ class _Daemon:
             recovery_notice=self._set_recovery_notice,
             overlay=self.overlay,
             overlay_generation=session.generation,
+            on_fallback=lambda provider: setattr(session, "provider", provider),
         ))
+        if self.overlay.is_cancelled(session.generation):  # × clicked while the recording was being stopped
+            self.process_task.cancel()
+            self._keep_when_cancelled(self.process_task, session)
 
     def _abandon_recording(self) -> None:
         """A recording that can't be transcribed: error sound, release what it held, back to idle."""
@@ -898,10 +943,12 @@ async def _process(
     recovery_notice: Callable[[str | None], None] | None = None,
     overlay=None,
     overlay_generation: int = 0,
+    on_fallback: Callable[[str], None] | None = None,
 ) -> Outcome | None:
     """Transcribe a finished recording (finish the live stream, else batch), paste it, and keep it in history.
 
     ``mode`` is the mode the recording started in; a config reload may change config.mode meanwhile.
+    ``on_fallback`` hears when a failed live session hands the recording to batch.
     Returns how the transcription went, or None when it failed or gave no text.
     """
     use_streaming = streaming_transcriber is not None  # only a streaming recording has one
@@ -938,6 +985,8 @@ async def _process(
         if text is None:
             if use_streaming:
                 provider = "batch"
+                if on_fallback is not None:
+                    on_fallback(provider)
             if screen_capture_future is not None:
                 context.screen_text = await _screen_text(screen_capture_future)
                 screen_capture_future = None
@@ -950,6 +999,8 @@ async def _process(
         if not text or not text.strip():
             # The audio passed the speech check, so an empty transcript loses words: say so and keep it
             log.warning("Empty transcription result, skipping injection")
+            if overlay is not None:
+                overlay.complete(overlay_generation, False)  # no × to cancel a recording already being kept
             sounds.play("error")
             await _retain_recording(wav_data, config, history, context, mode, provider, "", tray, created_at,
                                   recovery_notice, failure_notice=EMPTY_NOTICE)
