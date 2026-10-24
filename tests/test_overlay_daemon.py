@@ -356,7 +356,7 @@ async def test_quitting_right_after_overlay_cancel_still_keeps_the_recording(rig
         return real_stage(self, *args)
 
     with patch('vox.daemon.create_overlay', return_value=rig.overlay), patch('vox.daemon._POST_ROLL_SECONDS', 0), \
-         patch('vox.daemon._KEEP_ON_QUIT_SECONDS', 0.2), \
+         patch('vox.daemon._KEEP_ON_QUIT_SECONDS', 0.2 if when == 'staging_hangs' else 5), \
          patch.object(RecoveryStore, 'stage', slow_stage if when in ('while_staging', 'staging_hangs') else real_stage):
         async with running(openai_config(attenuation_enabled=False), history=history) as h:
             h.recorder.latest_level = None
