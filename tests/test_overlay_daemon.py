@@ -344,7 +344,7 @@ async def test_overlay_cancel_keeps_the_interrupted_recording_for_retry(rig, tmp
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize('when', ['while_staging', 'before_the_event', 'staging_hangs'])
+@pytest.mark.parametrize('when', ['while_staging', 'before_the_event', 'staging_hangs', 'as_the_task_ends'])
 async def test_quitting_right_after_overlay_cancel_still_keeps_the_recording(rig, tmp_path, when):
     history = HistoryDB(tmp_path / 'history.db')
     staging, release = threading.Event(), threading.Event()
@@ -357,7 +357,7 @@ async def test_quitting_right_after_overlay_cancel_still_keeps_the_recording(rig
 
     with patch('vox.daemon.create_overlay', return_value=rig.overlay), patch('vox.daemon._POST_ROLL_SECONDS', 0), \
          patch('vox.daemon._KEEP_ON_QUIT_SECONDS', 0.2), \
-         patch.object(RecoveryStore, 'stage', slow_stage if when != 'before_the_event' else real_stage):
+         patch.object(RecoveryStore, 'stage', slow_stage if when in ('while_staging', 'staging_hangs') else real_stage):
         async with running(openai_config(attenuation_enabled=False), history=history) as h:
             h.recorder.latest_level = None
             async def stuck(*_):
@@ -367,8 +367,14 @@ async def test_quitting_right_after_overlay_cancel_still_keeps_the_recording(rig
             await h.daemon._stop_recording()
             await until(lambda: h.batch.transcribe.called)
             rig.flush()
-            rig.made[0].on_cancel(h.daemon._generation)
-            if when == 'before_the_event':
+            if when != 'as_the_task_ends':
+                rig.made[0].on_cancel(h.daemon._generation)
+            if when == 'as_the_task_ends':
+                h.daemon.retry = None  # no awaits in shutdown before the processing task is checked
+                h.daemon._overlay_cancel(h.daemon._generation)
+                h.task.cancel()  # the quit lands just as the cancelled task ends, before its callbacks run
+                await h.stop()
+            elif when == 'before_the_event':
                 await h.stop()  # the quit overtakes the queued overlay:cancel event
                 assert not h.played('cancel')
             else:

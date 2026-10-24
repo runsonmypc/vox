@@ -356,25 +356,27 @@ class _Daemon:
         self.queue.put_nowait(f"overlay:cancel:{generation}")
 
     def _keep_when_cancelled(self, task: asyncio.Task, session: _Session) -> None:
+        """Watch, from the moment of the click, so that a quit waits for it too."""
         if not session.keep_if_cancelled:
             session.keep_if_cancelled = True
-            task.add_done_callback(lambda task: self._keep_cancelled(task, session))
+            keeping = _spawn(self._keep_cancelled(task, session))
+            self._keeping.add(keeping)
+            keeping.add_done_callback(self._keeping.discard)
 
-    def _keep_cancelled(self, task: asyncio.Task, session: _Session) -> None:
+    async def _keep_cancelled(self, task: asyncio.Task, session: _Session) -> None:
         """Keep a recording whose transcription the overlay's × cut short in History, so it can be retried.
 
         A task that finished on its own already kept what it had; one cut short kept nothing.
         """
+        await asyncio.wait([task])
         if not task.cancelled() or not session.wav_data:
             return
-        keeping = _spawn(_retain_recording(
+        await _retain_recording(
             session.wav_data, self.config, self.history, session.context, session.mode,
             session.provider or session.mode, "",
             self.tray, session.created_at, self._set_recovery_notice,
             failure_notice=CANCELLED_NOTICE, error_summary=CANCELLED_SUMMARY,
-        ))
-        self._keeping.add(keeping)
-        keeping.add_done_callback(self._keeping.discard)
+        )
 
     async def _handle(self, event: str) -> None:
         if event.startswith("mode:"):
