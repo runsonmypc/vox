@@ -196,9 +196,10 @@ class _Session:
     streaming: StreamingTranscriber | None = None
     stream_task: asyncio.Task | None = None
     screen_future: asyncio.Future | None = None
-    # The finished recording and where it stopped, kept so a cancelled transcription can be retried
+    # The finished recording, where it stopped and what transcribed it, kept so a cancelled transcription can be retried
     wav_data: bytes | None = None
     context: AppContext | None = None
+    provider: str | None = None
 
     def release(self) -> None:
         """Drop the live transcription and screen capture. Safe to repeat."""
@@ -361,7 +362,8 @@ class _Daemon:
         if not task.cancelled() or not session.wav_data:
             return
         keeping = _spawn(_retain_recording(
-            session.wav_data, self.config, self.history, session.context, session.mode, session.mode, "",
+            session.wav_data, self.config, self.history, session.context, session.mode,
+            session.provider or session.mode, "",
             self.tray, session.created_at, self._set_recovery_notice,
             failure_notice=CANCELLED_NOTICE, error_summary=CANCELLED_SUMMARY,
         ))
@@ -551,6 +553,7 @@ class _Daemon:
             recovery_notice=self._set_recovery_notice,
             overlay=self.overlay,
             overlay_generation=session.generation,
+            on_fallback=lambda provider: setattr(session, "provider", provider),
         ))
 
     def _abandon_recording(self) -> None:
@@ -929,10 +932,12 @@ async def _process(
     recovery_notice: Callable[[str | None], None] | None = None,
     overlay=None,
     overlay_generation: int = 0,
+    on_fallback: Callable[[str], None] | None = None,
 ) -> Outcome | None:
     """Transcribe a finished recording (finish the live stream, else batch), paste it, and keep it in history.
 
     ``mode`` is the mode the recording started in; a config reload may change config.mode meanwhile.
+    ``on_fallback`` hears when a failed live session hands the recording to batch.
     Returns how the transcription went, or None when it failed or gave no text.
     """
     use_streaming = streaming_transcriber is not None  # only a streaming recording has one
@@ -969,6 +974,8 @@ async def _process(
         if text is None:
             if use_streaming:
                 provider = "batch"
+                if on_fallback is not None:
+                    on_fallback(provider)
             if screen_capture_future is not None:
                 context.screen_text = await _screen_text(screen_capture_future)
                 screen_capture_future = None

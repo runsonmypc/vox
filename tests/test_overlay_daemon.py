@@ -292,13 +292,15 @@ async def test_overlay_button_cancels_operation_without_paste(rig, processing):
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize('how', ['overlay', 'hotkey'])
+@pytest.mark.parametrize('how', ['overlay', 'hotkey', 'streaming_fallback'])
 async def test_overlay_cancel_keeps_the_interrupted_recording_for_retry(rig, tmp_path, how):
     history = HistoryDB(tmp_path / 'history.db')
     tray = Mock()
+    mode = 'streaming' if how == 'streaming_fallback' else 'batch'
     with patch('vox.daemon.create_overlay', return_value=rig.overlay), patch('vox.daemon._POST_ROLL_SECONDS', 0):
-        async with running(openai_config(attenuation_enabled=False), tray, history=history) as h:
+        async with running(openai_config(attenuation_enabled=False, mode=mode), tray, history=history) as h:
             h.recorder.latest_level = None
+            h.streaming.finish.return_value = None  # the live session failed: batch takes the recording
             async def stuck(*_):
                 await asyncio.Event().wait()
             h.batch.transcribe.side_effect = stuck
@@ -306,10 +308,10 @@ async def test_overlay_cancel_keeps_the_interrupted_recording_for_retry(rig, tmp
             await h.daemon._stop_recording()
             await until(lambda: h.batch.transcribe.called)
             rig.flush()
-            if how == 'overlay':
-                rig.made[0].on_cancel(h.daemon._generation)
-            else:
+            if how == 'hotkey':
                 h.send('cancel')  # the double-tap discards, as before
+            else:
+                rig.made[0].on_cancel(h.daemon._generation)
             await until(lambda: h.state is State.IDLE)
             h.paste.assert_not_called()
             if how == 'hotkey':
@@ -319,7 +321,7 @@ async def test_overlay_cancel_keeps_the_interrupted_recording_for_retry(rig, tmp
             await until(lambda: history.recent())
             [rec] = history.recent()
             assert (rec.status, rec.text, rec.error_summary) == ('failed', '', CANCELLED_SUMMARY)
-            assert rec.original_mode == 'batch' and rec.app_type == 'EDITOR'
+            assert (rec.original_mode, rec.attempted_mode) == (mode, 'batch') and rec.app_type == 'EDITOR'
             assert RecoveryStore(history).read(rec.audio_id) == SPEECH
             await until(lambda: call(CANCELLED_NOTICE) in tray.set_notice.call_args_list)
             [_, entry] = build_rows([rec], date.today())
