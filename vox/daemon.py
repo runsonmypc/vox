@@ -200,6 +200,7 @@ class _Session:
     wav_data: bytes | None = None
     context: AppContext | None = None
     provider: str | None = None
+    keep_if_cancelled: bool = False  # the overlay's × asked to keep it; set once, so it is kept once
 
     def release(self) -> None:
         """Drop the live transcription and screen capture. Safe to repeat."""
@@ -351,8 +352,13 @@ class _Daemon:
             task.cancel()
             # Kept from here rather than the queued event, which a quit could overtake
             if session is not None:
-                task.add_done_callback(lambda task: self._keep_cancelled(task, session))
+                self._keep_when_cancelled(task, session)
         self.queue.put_nowait(f"overlay:cancel:{generation}")
+
+    def _keep_when_cancelled(self, task: asyncio.Task, session: _Session) -> None:
+        if not session.keep_if_cancelled:
+            session.keep_if_cancelled = True
+            task.add_done_callback(lambda task: self._keep_cancelled(task, session))
 
     def _keep_cancelled(self, task: asyncio.Task, session: _Session) -> None:
         """Keep a recording whose transcription the overlay's × cut short in History, so it can be retried.
@@ -555,6 +561,9 @@ class _Daemon:
             overlay_generation=session.generation,
             on_fallback=lambda provider: setattr(session, "provider", provider),
         ))
+        if self.overlay.is_cancelled(session.generation):  # × clicked while the recording was being stopped
+            self.process_task.cancel()
+            self._keep_when_cancelled(self.process_task, session)
 
     def _abandon_recording(self) -> None:
         """A recording that can't be transcribed: error sound, release what it held, back to idle."""

@@ -292,26 +292,40 @@ async def test_overlay_button_cancels_operation_without_paste(rig, processing):
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize('how', ['overlay', 'hotkey', 'streaming_fallback'])
+@pytest.mark.parametrize('how', ['overlay', 'hotkey', 'streaming_fallback', 'during_stop'])
 async def test_overlay_cancel_keeps_the_interrupted_recording_for_retry(rig, tmp_path, how):
     history = HistoryDB(tmp_path / 'history.db')
     tray = Mock()
     mode = 'streaming' if how == 'streaming_fallback' else 'batch'
-    with patch('vox.daemon.create_overlay', return_value=rig.overlay), patch('vox.daemon._POST_ROLL_SECONDS', 0):
+    post_roll = 0.2 if how == 'during_stop' else 0
+    with patch('vox.daemon.create_overlay', return_value=rig.overlay), patch('vox.daemon._POST_ROLL_SECONDS', post_roll):
         async with running(openai_config(attenuation_enabled=False, mode=mode), tray, history=history) as h:
             h.recorder.latest_level = None
             h.streaming.finish.return_value = None  # the live session failed: batch takes the recording
             async def stuck(*_):
                 await asyncio.Event().wait()
             h.batch.transcribe.side_effect = stuck
-            await h.daemon._start_recording()
-            await h.daemon._stop_recording()
-            await until(lambda: h.batch.transcribe.called)
-            rig.flush()
-            if how == 'hotkey':
+            if how == 'during_stop':  # the hotkey's events, so the click's event waits behind the stop
+                h.send('toggle')
+                await until(lambda: h.state is State.RECORDING)
+                rig.flush()
+                h.send('toggle')
+                await until(lambda: h.state is State.PROCESSING)
+                rig.flush()
+                assert h.daemon.process_task is None  # × before the transcription task exists
+                rig.made[0].on_cancel(h.daemon._generation)
+            else:
+                await h.daemon._start_recording()
+                await h.daemon._stop_recording()
+                await until(lambda: h.batch.transcribe.called)
+                rig.flush()
+            if how == 'during_stop':
+                pass
+            elif how == 'hotkey':
                 h.send('cancel')  # the double-tap discards, as before
             else:
                 rig.made[0].on_cancel(h.daemon._generation)
+                h.daemon._overlay_cancel(h.daemon._generation)  # a second request still keeps it only once
             await until(lambda: h.state is State.IDLE)
             h.paste.assert_not_called()
             if how == 'hotkey':
