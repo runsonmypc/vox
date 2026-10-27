@@ -117,11 +117,13 @@ def test_replacements_are_kept_apart_from_snippets(cfg):
     model.save_snippet("my email", "fixed", kind=REPLACEMENTS)
     assert model.replacements == {"my email": "fixed"}
     assert model.snippets == {"my email": "alex@example.com"}
-    assert model.conflict("My Email", kind=REPLACEMENTS) == "my email"
-    model.save_snippet("All Right", "alright", original="my email", kind=REPLACEMENTS)
-    assert load_config(cfg).replacements == {"All Right": "alright"}
+    assert model.conflict("my  email", kind=REPLACEMENTS) == "my email"
+    assert model.conflict("My Email", kind=REPLACEMENTS) is None  # case matters for replacements
+    model.save_snippet("All right", "Alright", original="my email", kind=REPLACEMENTS)
+    model.save_snippet("all right", "alright", kind=REPLACEMENTS)
+    assert load_config(cfg).replacements == {"All right": "Alright", "all right": "alright"}
     model.remove_snippet("all right", kind=REPLACEMENTS)
-    assert model.replacements == {}
+    assert model.replacements == {"All right": "Alright"}
     assert model.snippets == {"my email": "alex@example.com"}
 
 

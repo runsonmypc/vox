@@ -1159,23 +1159,24 @@ async def test_snippets_match_ignoring_case_and_punctuation_and_stay_out_of_info
 
 @pytest.mark.parametrize("text, expected", [
     ("All right dude, I'm getting sick of this.", "Alright dude, I'm getting sick of this."),
-    ("Fine. all right then! ALL RIGHT?", "Fine. alright then! Alright?"),
+    ("Fine. All right then! All right?", "Fine. Alright then! Alright?"),
     ("Sure.\nAll  right", "Sure.\nAlright"),
+    ("all right, lowercase. ALL RIGHT, shouting.", "all right, lowercase. ALL RIGHT, shouting."),
     ("The answers were all right.", "The answers were all right."),
     ("All righty then.", "All righty then."),
 ])
-def test_replacements_apply_only_at_sentence_starts(text, expected):
-    assert _rewrite(text, Config(replacements={"all right": "alright"})) == expected
+def test_replacements_apply_only_at_sentence_starts_with_the_same_case(text, expected):
+    assert _rewrite(text, Config(replacements={"All right": "Alright"})) == expected
 
 
 def test_a_matching_snippet_wins_over_replacements():
-    config = Config(snippets={"all right": "OK!"}, replacements={"all right": "alright"})
+    config = Config(snippets={"all right": "OK!"}, replacements={"All right": "Alright"})
     assert _rewrite("All right.", config) == "OK!"
 
 
 @pytest.mark.anyio
 async def test_replacements_are_pasted_and_stay_out_of_info_logs(speech, caplog):
-    kwargs = process_kwargs(config=Config(replacements={"all right": "alright"}))
+    kwargs = process_kwargs(config=Config(replacements={"All right": "Alright"}))
     kwargs["batch_transcriber"].transcribe.return_value = "All right dude."
     caplog.set_level(logging.INFO, logger="vox")
     with patch("vox.daemon.detect_active_window", return_value=AppContext("", "", AppType.OTHER)), \

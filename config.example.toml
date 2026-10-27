@@ -115,10 +115,10 @@
 #   "my address" = "123 Main St, Springfield, IL"
 
 [replacements]
-# Rewrites a phrase, ignoring case, only where it starts a sentence: at the start of a dictation
-# or after . ? or !, so the same words mid-sentence are left alone. A capitalized phrase gets a
-# capitalized replacement. The Replacements page of Settings edits these. For example:
-#   "all right" = "alright"
+# Rewrites a phrase only where it starts a sentence (at the start of a dictation or after . ? or !)
+# and only with exactly the same capitals, so the same words mid-sentence are left alone. The
+# Replacements page of Settings edits these. For example:
+#   "All right" = "Alright"
 
 [window_classes]
 # Tell Vox Transfer what kind of app a window belongs to: TERMINAL, EDITOR, CHAT, EMAIL, BROWSER or

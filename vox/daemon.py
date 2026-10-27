@@ -1209,19 +1209,12 @@ def _rewrite(text: str, config: Config) -> str:
 
 
 def _replace_sentence_starts(text: str, config: Config) -> str:
-    """Rewrite each replacement phrase, ignoring case, where it starts the dictation or follows .?! and
-    whitespace; a capitalized phrase gets a capitalized replacement."""
+    """Rewrite each replacement phrase, matching its case exactly, where it starts the dictation or
+    follows .?! and whitespace."""
     for phrase, replacement in config.replacements.items():
         words = r"\s+".join(re.escape(word) for word in phrase.split())
-        pattern = re.compile(rf"(^|[.?!]\s+){words}(?!\w)", re.IGNORECASE)
-
-        def swap(match: re.Match[str], replacement: str = replacement) -> str:
-            start = match.group(1)
-            if match.group(0)[len(start)].isupper():
-                replacement = replacement[:1].upper() + replacement[1:]
-            return start + replacement
-
-        replaced, count = pattern.subn(swap, text)
+        pattern = re.compile(rf"(^|[.?!]\s+){words}(?!\w)")
+        replaced, count = pattern.subn(lambda match, r=replacement: match.group(1) + r, text)
         if count:
             log.info("Applied a replacement %d time(s)", count)
             log.debug("Replacement: %r -> %r", phrase, replacement)

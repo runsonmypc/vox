@@ -339,20 +339,22 @@ def update_snippet(path: Path, trigger: str, expansion: str | None) -> dict[str,
     (ignoring case and trailing punctuation) replaces it. Returns the resulting
     snippets.
     """
-    return _update_phrases(path, "snippets", "Snippet trigger", "Snippet expansion", trigger, expansion)
+    return _update_phrases(path, "snippets", "Snippet trigger", "Snippet expansion", trigger, expansion,
+                           snippet_key)
 
 
 def update_replacement(path: Path, phrase: str, replacement: str | None) -> dict[str, str]:
     """Set a sentence-start replacement in config.toml, or remove it when `replacement` is None.
 
-    A phrase that matches an existing one ignoring case and trailing punctuation
-    replaces it. Returns the resulting replacements.
+    Phrases match case-sensitively, so only one with the same words and case
+    replaces an existing one. Returns the resulting replacements.
     """
-    return _update_phrases(path, "replacements", "Replacement phrase", "Replacement text", phrase, replacement)
+    return _update_phrases(path, "replacements", "Replacement phrase", "Replacement text", phrase, replacement,
+                           replacement_key)
 
 
 def _update_phrases(path: Path, table: str, key_name: str, value_name: str, key: str,
-                    value: str | None) -> dict[str, str]:
+                    value: str | None, key_of: Callable[[str], str]) -> dict[str, str]:
     key = key.strip()
     if not key:
         raise ValueError(f"{key_name} must not be empty")
@@ -363,7 +365,7 @@ def _update_phrases(path: Path, table: str, key_name: str, value_name: str, key:
     if table not in doc:
         doc[table] = tomlkit.table()
     phrases = doc[table]
-    for existing in [k for k in phrases if snippet_key(k) == snippet_key(key)]:
+    for existing in [k for k in phrases if key_of(k) == key_of(key)]:
         del phrases[existing]
     if value is not None:
         phrases[key] = value
@@ -518,6 +520,11 @@ def remove_api_key_setting(path: Path) -> None:
     if not api.as_string().strip():
         del doc["api"]
     _replace_document(path, doc)
+
+
+def replacement_key(phrase: str) -> str:
+    """Normalize a replacement phrase the way the daemon matches it: case-sensitive, any spacing between words."""
+    return " ".join(phrase.split())
 
 
 def snippet_key(trigger: str) -> str:
