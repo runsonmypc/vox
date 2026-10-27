@@ -5,6 +5,8 @@ All notable changes to Vox Transfer are listed here. Vox Transfer follows
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-10-27
+
 ### Added
 
 - Replacements rewrite a phrase anywhere in a dictation, but only with exactly the same capitals,
@@ -254,6 +256,7 @@ The first public release. The command is `vox`, and its settings live in `~/.con
 - `install.sh` refuses to run as root, retries `apt-get` after refreshing package lists, and tells
   users of other distributions which packages to install.
 
+[1.4.0]: https://github.com/runsonmypc/vox/releases/tag/v1.4.0
 [1.3.0]: https://github.com/runsonmypc/vox/releases/tag/v1.3.0
 [1.2.6]: https://github.com/runsonmypc/vox/releases/tag/v1.2.6
 [1.2.5]: https://github.com/runsonmypc/vox/releases/tag/v1.2.5
