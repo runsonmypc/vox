@@ -20,7 +20,15 @@ from typing import TYPE_CHECKING, Any
 
 from .attenuation import get_volume, set_volume
 from .audio import AUDIO_RESTART_NOTICE, Recorder, has_speech, is_digital_silence
-from .config import DEFAULT_CONFIG_PATH, Config, file_stamp, load_config, snippet_key, update_transcription_mode
+from .config import (
+    DEFAULT_CONFIG_PATH,
+    Config,
+    file_stamp,
+    load_config,
+    replacement_key,
+    snippet_key,
+    update_transcription_mode,
+)
 from .errors import ConfigError, DependencyError, InjectionError, VoxError
 from .history import HistoryDB
 from .hotkey import HotkeyListener
@@ -1209,17 +1217,18 @@ def _rewrite(text: str, config: Config) -> str:
 
 
 def _replace_sentence_starts(text: str, config: Config) -> str:
-    """Rewrite each replacement phrase, matching its case exactly, where it starts the dictation or
-    follows .?! and whitespace."""
-    for phrase, replacement in config.replacements.items():
-        words = r"\s+".join(re.escape(word) for word in phrase.split())
-        pattern = re.compile(rf"(^|[.?!]\s+){words}(?!\w)")
-        replaced, count = pattern.subn(lambda match, r=replacement: match.group(1) + r, text)
-        if count:
-            log.info("Applied a replacement %d time(s)", count)
-            log.debug("Replacement: %r -> %r", phrase, replacement)
-            text = replaced
-    return text
+    """Rewrite a replacement phrase, matching its case exactly, where it starts the dictation or
+    follows .?! and whitespace. Each sentence start takes the longest phrase that matches it, once."""
+    if not config.replacements:
+        return text
+    replacements = {replacement_key(phrase): value for phrase, value in config.replacements.items()}
+    phrases = sorted(replacements, key=len, reverse=True)  # longest first, so "All right" beats "All"
+    words = "|".join(r"\s+".join(re.escape(word) for word in phrase.split()) for phrase in phrases)
+    pattern = re.compile(rf"(^|[.?!]\s+)({words})(?!\w)")
+    replaced, count = pattern.subn(lambda match: match.group(1) + replacements[replacement_key(match.group(2))], text)
+    if count:
+        log.info("Applied a replacement %d time(s)", count)
+    return replaced
 
 
 def _expand_snippet(text: str, config: Config) -> str:

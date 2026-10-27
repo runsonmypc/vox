@@ -169,6 +169,7 @@ def load(tmp_path, text):
     ('[window_classes]\nSlack = ["CHAT"]\n', r'\[window_classes\] "Slack" must be text'),
     ('[replacements]\n"all right" = 1\n', r'\[replacements\] "all right" must be text in quotes, not 1'),
     ('[replacements]\n" " = "x"\n', r"\[replacements\] phrases must not be empty"),
+    ('[replacements]\n"All right" = " "\n', r"\[replacements\] replacement text must not be empty"),
     ('dictionary = "Kubernetes"\n', r'dictionary must be a list of words in quotes, not "Kubernetes"'),
     ('[whisper]\ndictionary = ["Vox", 1]\n', r"\[whisper\] dictionary must be a list of words"),
     ('[attenuation]\nlevel = "0.5"\n', r'\[attenuation\] level must be a number from 0 to 1, not "0.5"'),

@@ -1169,6 +1169,11 @@ def test_replacements_apply_only_at_sentence_starts_with_the_same_case(text, exp
     assert _rewrite(text, Config(replacements={"All right": "Alright"})) == expected
 
 
+def test_each_sentence_start_takes_the_longest_replacement_once():
+    config = Config(replacements={"All": "Every", "All right": "Alright", "Alright": "OK"})
+    assert _rewrite("All right then. All of it.", config) == "Alright then. Every of it."
+
+
 def test_a_matching_snippet_wins_over_replacements():
     config = Config(snippets={"all right": "OK!"}, replacements={"All right": "Alright"})
     assert _rewrite("All right.", config) == "OK!"
