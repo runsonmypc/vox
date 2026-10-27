@@ -170,11 +170,11 @@ def selected_tab(controller):
 # 5.1: the window and its tabs
 
 
-def test_mac_has_the_five_tabs_and_says_dictation_is_off(appkit, mac_settings):
+def test_mac_has_the_six_tabs_and_says_dictation_is_off(appkit, mac_settings):
     controller = mac_settings()
     assert tab_identifiers(controller) == list(PAGES)
     assert [item.label() for item in controller.tabs.tabViewItems()] == [
-        "General", "Hotkey", "Transcription", "Vocabulary", "Snippets",
+        "General", "Hotkey", "Transcription", "Vocabulary", "Snippets", "Replacements",
     ]
     assert selected_tab(controller) == "general"
     assert controller.window.title() == "Settings"
@@ -943,7 +943,7 @@ def tap(window, keyval):
 # 6.1: the window and its pages
 
 
-def test_gtk_has_the_five_pages_and_says_dictation_is_off(gtk, gtk_settings):
+def test_gtk_has_the_six_pages_and_says_dictation_is_off(gtk, gtk_settings):
     window = gtk_settings()
     pages = window.stack.get_pages()
     names = [pages.get_item(i).get_name() for i in range(pages.get_n_items())]
