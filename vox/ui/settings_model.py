@@ -35,7 +35,7 @@ from ..modes import LABELS, mode_problem
 
 log = logging.getLogger(__name__)
 
-PAGES: tuple[str, ...] = ("general", "hotkey", "transcription", "vocabulary", "snippets")
+PAGES: tuple[str, ...] = ("general", "hotkey", "transcription", "vocabulary", "snippets", "replacements")
 
 # What both windows say, so macOS and Linux never drift apart
 TITLE = "Settings"

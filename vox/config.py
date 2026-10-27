@@ -339,22 +339,36 @@ def update_snippet(path: Path, trigger: str, expansion: str | None) -> dict[str,
     (ignoring case and trailing punctuation) replaces it. Returns the resulting
     snippets.
     """
-    trigger = trigger.strip()
-    if not trigger:
-        raise ValueError("Snippet trigger must not be empty")
-    if expansion is not None and not expansion.strip():
-        raise ValueError("Snippet expansion must not be empty")
+    return _update_phrases(path, "snippets", "Snippet trigger", "Snippet expansion", trigger, expansion)
+
+
+def update_replacement(path: Path, phrase: str, replacement: str | None) -> dict[str, str]:
+    """Set a sentence-start replacement in config.toml, or remove it when `replacement` is None.
+
+    A phrase that matches an existing one ignoring case and trailing punctuation
+    replaces it. Returns the resulting replacements.
+    """
+    return _update_phrases(path, "replacements", "Replacement phrase", "Replacement text", phrase, replacement)
+
+
+def _update_phrases(path: Path, table: str, key_name: str, value_name: str, key: str,
+                    value: str | None) -> dict[str, str]:
+    key = key.strip()
+    if not key:
+        raise ValueError(f"{key_name} must not be empty")
+    if value is not None and not value.strip():
+        raise ValueError(f"{value_name} must not be empty")
 
     doc = _read_document(path)
-    if "snippets" not in doc:
-        doc["snippets"] = tomlkit.table()
-    snippets = doc["snippets"]
-    for key in [k for k in snippets if snippet_key(k) == snippet_key(trigger)]:
-        del snippets[key]
-    if expansion is not None:
-        snippets[trigger] = expansion
+    if table not in doc:
+        doc[table] = tomlkit.table()
+    phrases = doc[table]
+    for existing in [k for k in phrases if snippet_key(k) == snippet_key(key)]:
+        del phrases[existing]
+    if value is not None:
+        phrases[key] = value
 
-    result = {str(k): str(v) for k, v in snippets.items()}
+    result = {str(k): str(v) for k, v in phrases.items()}
     _write_document(path, doc)
     return result
 

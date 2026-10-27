@@ -23,7 +23,7 @@ from vox.ui.hotkey_model import (
 )
 from vox.ui.key_model import BAD_CHARACTER, CheckResult, KeyModel, Outcome
 from vox.ui.settings_model import DETECT_LANGUAGE, DICTATION_OFF, NOT_CONNECTED, PAGES, SYSTEM_DEFAULT, SettingsModel
-from vox.ui.vocab_model import VocabModel
+from vox.ui.vocab_model import REPLACEMENTS, VocabModel
 
 KEY = "sk-test-dummy-0001"
 OTHER = "sk-test-dummy-0002"
@@ -778,6 +778,21 @@ def test_mac_snippet_editor_adds_a_multiline_snippet(appkit, mac_settings):
     assert controller.editor is None
 
 
+def test_mac_replacement_editor_saves_on_its_own_tab(appkit, mac_settings):
+    controller = mac_settings(CONFIG)
+    controller.select_tab("replacements")
+    command = appkit.NSEventModifierFlagCommand
+    assert controller.handle_key(_key(appkit, controller, 45, flags=command, chars="n")) is None
+    editor = controller.editor
+    assert editor.kind is REPLACEMENTS
+    editor.trigger.setStringValue_("all right")
+    editor.expansion.setString_("alright")
+    editor.validate()
+    editor.save_(None)
+    assert load_config(controller.path).replacements == {"all right": "alright"}
+    assert controller.replacements_table.numberOfRows() == 1
+
+
 def test_mac_delete_key_removes_the_selected_word(appkit, mac_settings):
     controller = mac_settings(CONFIG)
     controller.select_tab("vocabulary")
@@ -1447,6 +1462,23 @@ def test_gtk_snippet_editor(gtk, gtk_settings):
     editor.save()
     _drain(gtk)
     assert load_config(window.path).snippets["sign off"] == "Best,\nAlex"
+
+
+def test_gtk_replacement_editor_saves_on_its_own_page(gtk, gtk_settings):
+    window = gtk_settings(CONFIG)
+    window.open_editor(None, REPLACEMENTS)
+    assert window.stack.get_visible_child_name() == "replacements"
+    editor = window.editor
+    editor.trigger.set_text("all right")
+    editor.expansion.get_buffer().set_text("alright")
+    editor.save()
+    _drain(gtk)
+    config = load_config(window.path)
+    assert config.replacements == {"all right": "alright"}
+    assert "all right" not in config.snippets
+    assert gtk_titles(window.replacements_list) == ["all right"]
+    window.remove_snippet("all right", REPLACEMENTS)
+    assert load_config(window.path).replacements == {}
 
 
 # 6.5: a file that can't be read, and edits made by hand

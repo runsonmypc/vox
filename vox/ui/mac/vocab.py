@@ -1,7 +1,7 @@
-"""Vocabulary and Snippets tabs for macOS, which the Settings window builds on.
+"""Vocabulary, Snippets and Replacements tabs for macOS, which the Settings window builds on.
 
 Words are added from a field at the top and removed from their row; snippets
-open in a sheet to add, edit or delete. Every change is saved to config.toml
+and replacements open in a sheet to add, edit or delete. Every change is saved to config.toml
 at once.
 """
 
@@ -16,11 +16,12 @@ from Foundation import NSObject
 
 from ..vocab_model import (
     LOAD_FAILED_TITLE,
-    NO_SNIPPETS,
     NO_WORDS,
+    REPLACEMENTS,
     SAVE_FAILED_TITLE,
-    SNIPPETS_INTRO,
+    SNIPPETS,
     WORDS_INTRO,
+    PhraseKind,
     VocabModel,
     clash_warning,
 )
@@ -92,6 +93,7 @@ class VocabController(NSObject):
         self._build()
         kit.attach(self.words_table, self)
         kit.attach(self.snippets_table, self)
+        kit.attach(self.replacements_table, self)
         model.reload()
         self.render()
         if model.load_error:
@@ -125,10 +127,12 @@ class VocabController(NSObject):
 
     @objc.python_method
     def vocab_tabs(self) -> list[tuple[str, str, str, AppKit.NSView]]:
-        """The Vocabulary and Snippets tabs: (identifier, title, symbol, view)."""
+        """The Vocabulary, Snippets and Replacements tabs: (identifier, title, symbol, view)."""
         return [
             ("vocabulary", "Vocabulary", "character.book.closed", self._build_words()),
-            ("snippets", "Snippets", "text.insert", self._build_snippets()),
+            ("snippets", "Snippets", "text.insert", self._build_phrases(SNIPPETS, "text.insert")),
+            ("replacements", "Replacements", "arrow.left.arrow.right",
+             self._build_phrases(REPLACEMENTS, "arrow.left.arrow.right")),
         ]
 
     @objc.python_method
@@ -199,20 +203,23 @@ class VocabController(NSObject):
         return view
 
     @objc.python_method
-    def _build_snippets(self) -> AppKit.NSView:
-        new = self.new_button = AppKit.NSButton.buttonWithTitle_image_target_action_(
-            "New Snippet", kit.symbol("plus", 11, AppKit.NSFontWeightSemibold), self, "newSnippet:"
+    def _build_phrases(self, kind: PhraseKind, symbol: str) -> AppKit.NSView:
+        new = AppKit.NSButton.buttonWithTitle_image_target_action_(
+            f"New {kind.noun}", kit.symbol("plus", 11, AppKit.NSFontWeightSemibold), self,
+            "newSnippet:" if kind is SNIPPETS else "newReplacement:"
         )
         new.setImagePosition_(AppKit.NSImageLeading)
         new.setTranslatesAutoresizingMaskIntoConstraints_(False)
-        view, text, box, self.snippets_table, self.snippets_footer, empty = self._pane(
-            SNIPPETS_INTRO, new, AppKit.NSTableViewStyleInset
-        )
-        self.snippets_table.setDoubleAction_("editSnippet:")
-        self.snippets_empty = empty
-        empty[0].views()[0].setImage_(kit.symbol("text.insert", 34, AppKit.NSFontWeightLight))
-        empty[1].setStringValue_(NO_SNIPPETS[0])
-        empty[2].setStringValue_(NO_SNIPPETS[1])
+        view, text, box, table, footer, empty = self._pane(kind.intro, new, AppKit.NSTableViewStyleInset)
+        table.setDoubleAction_("editSnippet:")
+        empty[0].views()[0].setImage_(kit.symbol(symbol, 34, AppKit.NSFontWeightLight))
+        empty[1].setStringValue_(kind.empty[0])
+        empty[2].setStringValue_(kind.empty[1])
+        if kind is SNIPPETS:
+            self.new_button, self.snippets_table, self.snippets_footer, self.snippets_empty = new, table, footer, empty
+        else:
+            self.new_replacement_button, self.replacements_table = new, table
+            self.replacements_footer, self.replacements_empty = footer, empty
         kit.constrain(
             new.centerYAnchor().constraintEqualToAnchor_(text.centerYAnchor()),
             view.trailingAnchor().constraintEqualToAnchor_constant_(new.trailingAnchor(), _PAD),
@@ -223,8 +230,22 @@ class VocabController(NSObject):
 
     # -- Tables -----------------------------------------------------------
 
+    @objc.python_method
+    def table_kind(self, table) -> PhraseKind | None:
+        """The phrases a table lists, or None for the words table."""
+        return {self.snippets_table: SNIPPETS, self.replacements_table: REPLACEMENTS}.get(table)
+
+    @objc.python_method
+    def phrase_table(self, kind: PhraseKind) -> AppKit.NSTableView:
+        return self.snippets_table if kind is SNIPPETS else self.replacements_table
+
+    @objc.python_method
+    def shown_kind(self) -> PhraseKind:
+        return REPLACEMENTS if self.tabs.tabView().selectedTabViewItem().identifier() == "replacements" else SNIPPETS
+
     def numberOfRowsInTableView_(self, table) -> int:
-        return len(self.model.words) if table == self.words_table else len(self.model.snippets)
+        kind = self.table_kind(table)
+        return len(self.model.words) if kind is None else len(self.model.phrases(kind))
 
     def tableView_heightOfRow_(self, table, row: int) -> float:
         return _WORD_HEIGHT if table == self.words_table else _SNIPPET_HEIGHT
@@ -237,7 +258,7 @@ class VocabController(NSObject):
             cell = kit.reuse(table, "word", lambda: WordCell.alloc().initWithFrame_(AppKit.NSZeroRect).build(self))
             cell.text.setStringValue_(self.model.words[row])
             return cell
-        trigger, expansion = list(self.model.snippets.items())[row]
+        trigger, expansion = list(self.model.phrases(self.table_kind(table)).items())[row]
         cell = kit.reuse(table, "snippet", lambda: SnippetCell.alloc().initWithFrame_(AppKit.NSZeroRect).build(self))
         cell.trigger.setStringValue_(trigger)
         cell.expansion.setStringValue_(" ".join(expansion.split()))
@@ -269,15 +290,24 @@ class VocabController(NSObject):
     def newSnippet_(self, sender) -> None:
         self.open_editor(None)
 
+    def newReplacement_(self, sender) -> None:
+        self.open_editor(None, REPLACEMENTS)
+
     def editSnippet_(self, sender) -> None:
-        row = self.snippets_table.clickedRow() if sender == self.snippets_table else self.snippets_table.selectedRow()
-        if 0 <= row < len(self.model.snippets):
-            self.open_editor(list(self.model.snippets)[row])
+        kind = self.table_kind(sender) or self.shown_kind()
+        table = self.phrase_table(kind)
+        row = table.clickedRow() if sender == table else table.selectedRow()
+        phrases = list(self.model.phrases(kind))
+        if 0 <= row < len(phrases):
+            self.open_editor(phrases[row], kind)
 
     def removeSnippet_(self, sender) -> None:
-        row = self.snippets_table.rowForView_(sender)
-        if 0 <= row < len(self.model.snippets):
-            self.confirm_remove_snippet(list(self.model.snippets)[row])
+        for kind in (SNIPPETS, REPLACEMENTS):
+            row = self.phrase_table(kind).rowForView_(sender)
+            phrases = list(self.model.phrases(kind))
+            if 0 <= row < len(phrases):
+                self.confirm_remove_snippet(phrases[row], kind)
+                return
 
     def windowWillClose_(self, notification) -> None:
         AppKit.NSEvent.removeMonitor_(self._monitor)
@@ -304,32 +334,32 @@ class VocabController(NSObject):
             self.note(f"Removed {_quoted(words)}.")
 
     @objc.python_method
-    def save_snippet(self, trigger: str, expansion: str, original: str | None) -> bool:
-        if not self.change(lambda: self.model.save_snippet(trigger, expansion, original)):
+    def save_snippet(self, trigger: str, expansion: str, original: str | None, kind: PhraseKind = SNIPPETS) -> bool:
+        if not self.change(lambda: self.model.save_snippet(trigger, expansion, original, kind)):
             return False
-        keys = list(self.model.snippets)
+        keys = list(self.model.phrases(kind))
         row = next((i for i, t in enumerate(keys) if t == trigger.strip()), None)
         if row is not None:
-            self._select(self.snippets_table, [row])
+            self._select(self.phrase_table(kind), [row])
         self.note(f"Saved “{trigger.strip()}”.")
         return True
 
     @objc.python_method
-    def remove_snippet(self, trigger: str) -> None:
-        if self.change(lambda: self.model.remove_snippet(trigger)):
+    def remove_snippet(self, trigger: str, kind: PhraseKind = SNIPPETS) -> None:
+        if self.change(lambda: self.model.remove_snippet(trigger, kind)):
             self.note(f"Deleted “{trigger}”.")
 
     @objc.python_method
-    def confirm_remove_snippet(self, trigger: str) -> None:
+    def confirm_remove_snippet(self, trigger: str, kind: PhraseKind = SNIPPETS) -> None:
         alert = AppKit.NSAlert.alloc().init()
         alert.setMessageText_(f"Delete “{trigger}”?")
-        alert.setInformativeText_("Vox Transfer will stop expanding this phrase.")
+        alert.setInformativeText_(kind.removed)
         alert.addButtonWithTitle_("Delete").setHasDestructiveAction_(True)
         alert.addButtonWithTitle_("Cancel")
 
         def done(response: int) -> None:
             if response == AppKit.NSAlertFirstButtonReturn:
-                self.remove_snippet(trigger)
+                self.remove_snippet(trigger, kind)
 
         alert.beginSheetModalForWindow_completionHandler_(self.window, done)
 
@@ -340,12 +370,13 @@ class VocabController(NSObject):
         for table, items, empty in (
             (self.words_table, self.model.words, self.words_empty),
             (self.snippets_table, self.model.snippets, self.snippets_empty),
+            (self.replacements_table, self.model.replacements, self.replacements_empty),
         ):
             table.reloadData()
             table.enclosingScrollView().setHidden_(not items)
             empty[0].setHidden_(bool(items))
         writable = self.model.load_error is None
-        for control in (self.word_field, self.add_button, self.new_button):
+        for control in (self.word_field, self.add_button, self.new_button, self.new_replacement_button):
             control.setEnabled_(writable)
         self._set_footer(None)
 
@@ -363,7 +394,7 @@ class VocabController(NSObject):
             text, color = f"Couldn’t read {self.model.shown_path}", AppKit.NSColor.systemRedColor()
         else:
             text, color = message or f"Saved to {self.model.shown_path}", AppKit.NSColor.tertiaryLabelColor()
-        for footer in (self.words_footer, self.snippets_footer):
+        for footer in (self.words_footer, self.snippets_footer, self.replacements_footer):
             footer.setStringValue_(text)
             footer.setTextColor_(color)
 
@@ -380,11 +411,11 @@ class VocabController(NSObject):
         table.scrollRowToVisible_(rows[-1])
 
     @objc.python_method
-    def open_editor(self, original: str | None) -> None:
+    def open_editor(self, original: str | None, kind: PhraseKind = SNIPPETS) -> None:
         if self.editor is not None:
             return
-        self.select_tab("snippets")
-        self.editor = SnippetEditor.alloc().initWithOwner_original_(self, original)
+        self.select_tab(kind.page)
+        self.editor = SnippetEditor.alloc().initWithOwner_original_kind_(self, original, kind)
         self.window.beginSheet_completionHandler_(self.editor.window, None)
         self.editor.window.makeFirstResponder_(self.editor.trigger if original is None else self.editor.expansion)
 
@@ -415,10 +446,11 @@ class VocabController(NSObject):
             self.window.performClose_(None)
             return None
         if flags == AppKit.NSEventModifierFlagCommand and kit.shortcut_key(event) == "n":
-            self.open_editor(None)
+            self.open_editor(None, self.shown_kind())
             return None
+        kind = self.table_kind(responder)
         if code in (kit.KEY_DELETE, kit.KEY_FORWARD_DELETE) and plain:
-            if event.isARepeat() and responder in (self.words_table, self.snippets_table):
+            if event.isARepeat() and (responder == self.words_table or kind is not None):
                 return None  # a held key removes what was selected, not the rows that move up after it
             if responder == self.words_table:
                 rows = self.words_table.selectedRowIndexes()
@@ -426,28 +458,30 @@ class VocabController(NSObject):
                 if words:
                     self.remove_words(words)
                 return None
-            if responder == self.snippets_table and self.snippets_table.selectedRow() >= 0:
-                self.confirm_remove_snippet(list(self.model.snippets)[self.snippets_table.selectedRow()])
+            if kind is not None and responder.selectedRow() >= 0:
+                self.confirm_remove_snippet(list(self.model.phrases(kind))[responder.selectedRow()], kind)
                 return None
-        if code in (kit.KEY_RETURN, kit.KEY_ENTER) and plain and responder == self.snippets_table:
+        if code in (kit.KEY_RETURN, kit.KEY_ENTER) and plain and kind is not None:
             self.editSnippet_(None)
             return None
         return event
 
 
 class SnippetEditor(NSObject):
-    """Sheet for adding or editing one snippet."""
+    """Sheet for adding or editing one snippet or replacement."""
 
-    def initWithOwner_original_(self, owner: VocabController, original: str | None) -> SnippetEditor:
+    def initWithOwner_original_kind_(self, owner: VocabController, original: str | None,
+                                     kind: PhraseKind) -> SnippetEditor:
         self = objc.super(SnippetEditor, self).init()
         if self is None:
             return None
         self.owner = owner
         self.original = original
+        self.kind = kind
         self._build()
         if original is not None:
             self.trigger.setStringValue_(original)
-            self.expansion.setString_(owner.model.snippets.get(original, ""))
+            self.expansion.setString_(owner.model.phrases(kind).get(original, ""))
         self.validate()
         return self
 
@@ -459,8 +493,9 @@ class SnippetEditor(NSObject):
         self.window.setReleasedWhenClosed_(False)
         view = self.window.contentView()
 
-        heading = kit.label("New Snippet" if self.original is None else "Edit Snippet", 15, AppKit.NSFontWeightSemibold)
-        self.trigger = kit.text_field("my email")
+        heading = kit.label(f"{'New' if self.original is None else 'Edit'} {self.kind.noun}", 15,
+                            AppKit.NSFontWeightSemibold)
+        self.trigger = kit.text_field(self.kind.example)
         self.trigger.setDelegate_(self)
 
         scroll = AppKit.NSTextView.scrollableTextView()
@@ -475,7 +510,7 @@ class SnippetEditor(NSObject):
         self.expansion.setAllowsUndo_(True)
         self.expansion.setDrawsBackground_(False)
         self.expansion.setTextContainerInset_((4, 6))
-        # Snippets are pasted verbatim, so keep quotes, dashes and spelling exactly as typed
+        # Snippets and replacements are pasted verbatim, so keep quotes, dashes and spelling exactly as typed
         for setter in ("setAutomaticQuoteSubstitutionEnabled_", "setAutomaticDashSubstitutionEnabled_",
                        "setAutomaticTextReplacementEnabled_", "setAutomaticSpellingCorrectionEnabled_"):
             getattr(self.expansion, setter)(False)
@@ -483,8 +518,8 @@ class SnippetEditor(NSObject):
 
         secondary = AppKit.NSColor.secondaryLabelColor()
         grid = AppKit.NSGridView.gridViewWithViews_([
-            [kit.label("When you say", 13, color=secondary), self.trigger],
-            [kit.label("Vox Transfer types", 13, color=secondary), field_box],
+            [kit.label(self.kind.say, 13, color=secondary), self.trigger],
+            [kit.label(self.kind.write, 13, color=secondary), field_box],
         ])
         grid.setRowSpacing_(12)
         grid.setColumnSpacing_(12)
@@ -548,7 +583,7 @@ class SnippetEditor(NSObject):
 
     def save_(self, sender) -> None:
         if self.save_button.isEnabled() and self.owner.save_snippet(
-            self.trigger.stringValue(), self.expansion.string(), self.original
+            self.trigger.stringValue(), self.expansion.string(), self.original, self.kind
         ):
             self.owner.close_editor()
 
@@ -557,14 +592,14 @@ class SnippetEditor(NSObject):
 
     def delete_(self, sender) -> None:
         self.owner.close_editor()
-        self.owner.remove_snippet(self.original)
+        self.owner.remove_snippet(self.original, self.kind)
 
     @objc.python_method
     def validate(self) -> None:
         trigger = self.trigger.stringValue()
         self.save_button.setEnabled_(bool(trigger.strip() and self.expansion.string().strip()))
-        clash = self.owner.model.conflict(trigger, self.original)
-        self.warning.setStringValue_(clash_warning(clash) if clash else "")
+        clash = self.owner.model.conflict(trigger, self.original, self.kind)
+        self.warning.setStringValue_(clash_warning(clash, self.kind) if clash else "")
 
 
 def _quoted(words: list[str]) -> str:

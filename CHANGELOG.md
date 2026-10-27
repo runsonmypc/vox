@@ -7,9 +7,9 @@ All notable changes to Vox Transfer are listed here. Vox Transfer follows
 
 ### Added
 
-- A `[replacements]` table in config.toml rewrites a phrase only where it starts a sentence, such
-  as `"all right" = "alright"`, leaving the same words alone mid-sentence. Snippets still replace
-  only a whole dictation.
+- Replacements rewrite a phrase only where it starts a sentence, such as "all right" to "alright",
+  leaving the same words alone mid-sentence. Edit them on the new Replacements page of Settings, or
+  in the `[replacements]` table of config.toml. Snippets still replace only a whole dictation.
 
 ## [1.3.0] - 2026-10-24
 

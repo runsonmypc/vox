@@ -117,7 +117,7 @@
 [replacements]
 # Rewrites a phrase, ignoring case, only where it starts a sentence: at the start of a dictation
 # or after . ? or !, so the same words mid-sentence are left alone. A capitalized phrase gets a
-# capitalized replacement. For example:
+# capitalized replacement. The Replacements page of Settings edits these. For example:
 #   "all right" = "alright"
 
 [window_classes]

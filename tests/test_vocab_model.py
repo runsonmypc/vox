@@ -6,7 +6,7 @@ import pytest
 
 from vox.config import load_config
 from vox.errors import ConfigError
-from vox.ui.vocab_model import VocabModel
+from vox.ui.vocab_model import REPLACEMENTS, VocabModel
 
 CONFIG = """\
 # my settings
@@ -110,6 +110,19 @@ def test_remove_snippet(cfg):
     model.remove_snippet("my email")
     assert model.snippets == {}
     assert tomllib.loads(cfg.read_text())["snippets"] == {}
+
+
+def test_replacements_are_kept_apart_from_snippets(cfg):
+    model = loaded(cfg)
+    model.save_snippet("my email", "fixed", kind=REPLACEMENTS)
+    assert model.replacements == {"my email": "fixed"}
+    assert model.snippets == {"my email": "alex@example.com"}
+    assert model.conflict("My Email", kind=REPLACEMENTS) == "my email"
+    model.save_snippet("All Right", "alright", original="my email", kind=REPLACEMENTS)
+    assert load_config(cfg).replacements == {"All Right": "alright"}
+    model.remove_snippet("all right", kind=REPLACEMENTS)
+    assert model.replacements == {}
+    assert model.snippets == {"my email": "alex@example.com"}
 
 
 def test_broken_config_is_reported_not_overwritten(tmp_path):
