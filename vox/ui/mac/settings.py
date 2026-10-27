@@ -526,7 +526,7 @@ class SettingsController(VocabController):
         if not self.settings.poll():
             return
         self.model.reload()
-        self.render()  # the Vocabulary and Snippets tabs
+        self.render()  # the Vocabulary, Snippets and Replacements tabs
         if self.hotkey.recording is None:
             self.hotkey_model.reload()
         self.render_pages(keep_prompt=True)

@@ -1,8 +1,8 @@
-"""Vocabulary and Snippets pages for Linux (GTK 4 and libadwaita), in a view switcher.
+"""Vocabulary, Snippets and Replacements pages for Linux (GTK 4 and libadwaita), in a view switcher.
 
 The Settings window builds on this one and adds its own pages. Words are added
-from an entry row and removed from their row; snippets open in a dialog to add,
-edit or delete. Every change is saved to config.toml at once, and removals can
+from an entry row and removed from their row; snippets and replacements open in
+a dialog to add, edit or delete. Every change is saved to config.toml at once, and removals can
 be undone from the toast that confirms them.
 """
 
@@ -13,11 +13,12 @@ from collections.abc import Callable
 
 from ..vocab_model import (
     LOAD_FAILED_TITLE,
-    NO_SNIPPETS,
     NO_WORDS,
+    REPLACEMENTS,
     SAVE_FAILED_TITLE,
-    SNIPPETS_INTRO,
+    SNIPPETS,
     WORDS_INTRO,
+    PhraseKind,
     VocabModel,
     clash_warning,
 )
@@ -67,7 +68,8 @@ class VocabWindow(Adw.ApplicationWindow):
 
         new = Gtk.ShortcutController()  # bubble phase: fields and the snippet dialog see keys first
         new.add_shortcut(Gtk.Shortcut(trigger=Gtk.ShortcutTrigger.parse_string("<Control>n"),
-                                      action=Gtk.CallbackAction.new(lambda *_: self.open_editor(None) or True)))
+                                      action=Gtk.CallbackAction.new(lambda *_: self.open_editor(None, self.shown_kind())
+                                                                    or True)))
         new.add_shortcut(Gtk.Shortcut(trigger=Gtk.ShortcutTrigger.parse_string("Escape"),
                                       action=Gtk.CallbackAction.new(lambda *_: self.close() or True)))
         self.add_controller(new)
@@ -83,7 +85,8 @@ class VocabWindow(Adw.ApplicationWindow):
         """The pages, as (name, title, icon, widget); the Settings window adds its own before these."""
         return [
             ("vocabulary", "Vocabulary", "accessories-dictionary-symbolic", self._build_words()),
-            ("snippets", "Snippets", "insert-text-symbolic", self._build_snippets()),
+            ("snippets", "Snippets", "insert-text-symbolic", self._build_phrases(SNIPPETS)),
+            ("replacements", "Replacements", "edit-find-replace-symbolic", self._build_phrases(REPLACEMENTS)),
         ]
 
     def _build_words(self) -> Gtk.Widget:
@@ -103,18 +106,28 @@ class VocabWindow(Adw.ApplicationWindow):
         self.words_footer = self._footer(page)
         return page
 
-    def _build_snippets(self) -> Gtk.Widget:
+    def _build_phrases(self, kind: PhraseKind) -> Gtk.Widget:
         page = Adw.PreferencesPage()
-        self.new_button = Gtk.Button(child=Adw.ButtonContent(icon_name="list-add-symbolic", label="New Snippet"),
-                                     valign=Gtk.Align.CENTER)
-        self.new_button.add_css_class("flat")
-        self.new_button.connect("clicked", lambda _button: self.open_editor(None))
-        group = Adw.PreferencesGroup(description=SNIPPETS_INTRO, header_suffix=self.new_button)
-        self.snippets_list = _boxed_list(*NO_SNIPPETS)
-        group.add(self.snippets_list)
+        new = Gtk.Button(child=Adw.ButtonContent(icon_name="list-add-symbolic", label=f"New {kind.noun}"),
+                         valign=Gtk.Align.CENTER)
+        new.add_css_class("flat")
+        new.connect("clicked", lambda _button: self.open_editor(None, kind))
+        group = Adw.PreferencesGroup(description=kind.intro, header_suffix=new)
+        phrases = _boxed_list(*kind.empty)
+        group.add(phrases)
         page.add(group)
-        self.snippets_footer = self._footer(page)
+        footer = self._footer(page)
+        if kind is SNIPPETS:
+            self.new_button, self.snippets_list, self.snippets_footer = new, phrases, footer
+        else:
+            self.new_replacement_button, self.replacements_list, self.replacements_footer = new, phrases, footer
         return page
+
+    def phrase_list(self, kind: PhraseKind) -> Gtk.ListBox:
+        return self.snippets_list if kind is SNIPPETS else self.replacements_list
+
+    def shown_kind(self) -> PhraseKind:
+        return REPLACEMENTS if self.stack.get_visible_child_name() == "replacements" else SNIPPETS
 
     def _footer(self, page: Adw.PreferencesPage) -> Gtk.Label:
         footer = label("", "caption", "dim-label", wrap=True)
@@ -133,22 +146,25 @@ class VocabWindow(Adw.ApplicationWindow):
             self.words_list.append(row)
         self.words_group.set_title(f"Words · {len(self.model.words)}" if self.model.words else "Words")
 
-        self.snippets_list.remove_all()
-        for trigger, expansion in self.model.snippets.items():
-            row = Adw.ActionRow(title=trigger, subtitle=" ".join(expansion.split()), use_markup=False,
-                                subtitle_lines=1, activatable=True)
-            row.add_suffix(_remove_button("Delete", lambda t=trigger: self.remove_snippet(t)))
-            row.add_suffix(Gtk.Image(icon_name="go-next-symbolic"))
-            row.connect("activated", lambda _row, t=trigger: self.open_editor(t))
-            self.snippets_list.append(row)
+        for kind in (SNIPPETS, REPLACEMENTS):
+            phrases = self.phrase_list(kind)
+            phrases.remove_all()
+            for trigger, expansion in self.model.phrases(kind).items():
+                row = Adw.ActionRow(title=trigger, subtitle=" ".join(expansion.split()), use_markup=False,
+                                    subtitle_lines=1, activatable=True)
+                row.add_suffix(_remove_button("Delete", lambda t=trigger, k=kind: self.remove_snippet(t, k)))
+                row.add_suffix(Gtk.Image(icon_name="go-next-symbolic"))
+                row.connect("activated", lambda _row, t=trigger, k=kind: self.open_editor(t, k))
+                phrases.append(row)
 
         broken = self.model.load_error is not None
         self.show_banner()
-        for widget in (self.word_entry, self.new_button, self.words_list, self.snippets_list):
+        for widget in (self.word_entry, self.new_button, self.new_replacement_button, self.words_list,
+                       self.snippets_list, self.replacements_list):
             widget.set_sensitive(not broken)
         footer = f"Saved to {self.model.shown_path}. Vox Transfer picks up changes within a few seconds."
-        self.words_footer.set_label(footer)
-        self.snippets_footer.set_label(footer)
+        for widget in (self.words_footer, self.snippets_footer, self.replacements_footer):
+            widget.set_label(footer)
 
     def show_banner(self) -> None:
         self.banner.set_title(GLib.markup_escape_text(f"Couldn’t read {self.model.shown_path}. Fix the file, then reopen this window."))
@@ -192,33 +208,34 @@ class VocabWindow(Adw.ApplicationWindow):
         if self.change(lambda: self.model.remove_words([word])):
             self.toast(f"Removed “{word}”", undo=lambda: self.model.add_words(word))
 
-    def remove_snippet(self, trigger: str) -> None:
-        expansion = self.model.snippets.get(trigger, "")
-        if self.change(lambda: self.model.remove_snippet(trigger)):
-            self.toast(f"Deleted “{trigger}”", undo=lambda: self.model.save_snippet(trigger, expansion))
+    def remove_snippet(self, trigger: str, kind: PhraseKind = SNIPPETS) -> None:
+        expansion = self.model.phrases(kind).get(trigger, "")
+        if self.change(lambda: self.model.remove_snippet(trigger, kind)):
+            self.toast(f"Deleted “{trigger}”", undo=lambda: self.model.save_snippet(trigger, expansion, kind=kind))
 
-    def save_snippet(self, trigger: str, expansion: str, original: str | None) -> bool:
-        if not self.change(lambda: self.model.save_snippet(trigger, expansion, original)):
+    def save_snippet(self, trigger: str, expansion: str, original: str | None, kind: PhraseKind = SNIPPETS) -> bool:
+        if not self.change(lambda: self.model.save_snippet(trigger, expansion, original, kind)):
             return False
         self.toast(f"Saved “{trigger.strip()}”")
         return True
 
-    def open_editor(self, original: str | None) -> None:
+    def open_editor(self, original: str | None, kind: PhraseKind = SNIPPETS) -> None:
         if self.editor is not None:
             return
-        self.stack.set_visible_child_name("snippets")
-        self.editor = SnippetEditor(self, original)
+        self.stack.set_visible_child_name(kind.page)
+        self.editor = SnippetEditor(self, original, kind)
         self.editor.connect("closed", lambda _dialog: setattr(self, "editor", None))
         self.editor.present(self)
 
 
 class SnippetEditor(Adw.Dialog):
-    """Dialog for adding or editing one snippet. Ctrl+Enter saves."""
+    """Dialog for adding or editing one snippet or replacement. Ctrl+Enter saves."""
 
-    def __init__(self, owner: VocabWindow, original: str | None) -> None:
-        super().__init__(title="New Snippet" if original is None else "Edit Snippet", content_width=480)
+    def __init__(self, owner: VocabWindow, original: str | None, kind: PhraseKind = SNIPPETS) -> None:
+        super().__init__(title=f"{'New' if original is None else 'Edit'} {kind.noun}", content_width=480)
         self.owner = owner
         self.original = original
+        self.kind = kind
 
         cancel = Gtk.Button(label="Cancel")
         cancel.connect("clicked", lambda _button: self.close())
@@ -229,7 +246,7 @@ class SnippetEditor(Adw.Dialog):
         header.pack_start(cancel)
         header.pack_end(self.save_button)
 
-        self.trigger = Adw.EntryRow(title="When you say", use_markup=False)
+        self.trigger = Adw.EntryRow(title=kind.say, use_markup=False)
         self.trigger.connect("changed", lambda _row: self.validate())
         self.trigger.connect("entry-activated", lambda _row: self._next())
         trigger_group = Adw.PreferencesGroup()
@@ -242,7 +259,7 @@ class SnippetEditor(Adw.Dialog):
         frame = Gtk.ScrolledWindow(child=self.expansion, min_content_height=140, hscrollbar_policy=Gtk.PolicyType.NEVER)
         frame.add_css_class("card")
         frame.add_css_class("snippet-box")
-        expansion_group = Adw.PreferencesGroup(title="Vox Transfer types")
+        expansion_group = Adw.PreferencesGroup(title=kind.write)
         expansion_group.add(frame)
 
         self.warning = label("", "caption", "warning", wrap=True)
@@ -251,13 +268,13 @@ class SnippetEditor(Adw.Dialog):
         for widget in (trigger_group, expansion_group, self.warning):
             body.append(widget)
         if original is not None:
-            delete = Gtk.Button(label="Delete Snippet", halign=Gtk.Align.CENTER)
+            delete = Gtk.Button(label=f"Delete {kind.noun}", halign=Gtk.Align.CENTER)
             delete.add_css_class("destructive-action")
             delete.add_css_class("pill")
             delete.connect("clicked", lambda _button: self._delete())
             body.append(delete)
             self.trigger.set_text(original)
-            self.expansion.get_buffer().set_text(owner.model.snippets.get(original, ""))
+            self.expansion.get_buffer().set_text(owner.model.phrases(kind).get(original, ""))
 
         view = Adw.ToolbarView(content=body)
         view.add_top_bar(header)
@@ -277,13 +294,13 @@ class SnippetEditor(Adw.Dialog):
     def validate(self) -> None:
         trigger = self.trigger.get_text()
         self.save_button.set_sensitive(bool(trigger.strip() and self.expansion_text().strip()))
-        clash = self.owner.model.conflict(trigger, self.original)
-        self.warning.set_label(clash_warning(clash) if clash else "")
+        clash = self.owner.model.conflict(trigger, self.original, self.kind)
+        self.warning.set_label(clash_warning(clash, self.kind) if clash else "")
         self.warning.set_visible(bool(clash))
 
     def save(self) -> None:
         if self.save_button.get_sensitive() and self.owner.save_snippet(
-            self.trigger.get_text(), self.expansion_text(), self.original
+            self.trigger.get_text(), self.expansion_text(), self.original, self.kind
         ):
             self.close()
 
@@ -296,4 +313,4 @@ class SnippetEditor(Adw.Dialog):
 
     def _delete(self) -> None:
         self.close()
-        self.owner.remove_snippet(self.original)
+        self.owner.remove_snippet(self.original, self.kind)

@@ -167,6 +167,9 @@ def load(tmp_path, text):
     ('snippets = ["a"]\n', r"\[snippets\] must be a table, not a list"),
     ('[snippets]\n"my email" = 5\n', r'\[snippets\] "my email" must be text in quotes, not 5'),
     ('[window_classes]\nSlack = ["CHAT"]\n', r'\[window_classes\] "Slack" must be text'),
+    ('[replacements]\n"all right" = 1\n', r'\[replacements\] "all right" must be text in quotes, not 1'),
+    ('[replacements]\n" " = "x"\n', r"\[replacements\] phrases must not be empty"),
+    ('[replacements]\n"All right" = " "\n', r"\[replacements\] replacement text must not be empty"),
     ('dictionary = "Kubernetes"\n', r'dictionary must be a list of words in quotes, not "Kubernetes"'),
     ('[whisper]\ndictionary = ["Vox", 1]\n', r"\[whisper\] dictionary must be a list of words"),
     ('[attenuation]\nlevel = "0.5"\n', r'\[attenuation\] level must be a number from 0 to 1, not "0.5"'),
@@ -224,6 +227,8 @@ enabled = false
 level = 0.3
 [snippets]
 "sign off" = "Best,\\nAlex"
+[replacements]
+"all right" = "alright"
 [window_classes]
 Slack = "CHAT"
 """)
@@ -235,6 +240,7 @@ Slack = "CHAT"
     assert config.sounds_enabled is False
     assert (config.attenuation_enabled, config.attenuation_level) == (False, 0.3)
     assert config.snippets == {"sign off": "Best,\nAlex"}
+    assert config.replacements == {"all right": "alright"}
     assert config.window_classes == {"Slack": "CHAT"}
     assert load(tmp_path, '[audio]\ndevice = "USB"\n').audio_device == "USB"
 

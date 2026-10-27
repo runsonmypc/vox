@@ -52,6 +52,9 @@ class Config:
     # Snippets: trigger phrase -> expansion
     snippets: dict[str, str] = field(default_factory=dict)
 
+    # Replacements: phrase -> text, rewritten wherever the phrase appears with the same case
+    replacements: dict[str, str] = field(default_factory=dict)
+
     # Custom dictionary words to preserve
     dictionary: list[str] = field(default_factory=list)
 
@@ -192,6 +195,12 @@ def _apply(config: Config, data: dict) -> None:
             break
     if "snippets" in data:
         config.snippets = _text_table("[snippets]", data["snippets"])
+    if "replacements" in data:
+        config.replacements = _text_table("[replacements]", data["replacements"])
+        if any(not phrase.strip() for phrase in config.replacements):
+            raise ConfigError("[replacements] phrases must not be empty")
+        if any(not text.strip() for text in config.replacements.values()):
+            raise ConfigError("[replacements] replacement text must not be empty")
     if "window_classes" in data:
         config.window_classes = _text_table("[window_classes]", data["window_classes"])
 
@@ -332,22 +341,38 @@ def update_snippet(path: Path, trigger: str, expansion: str | None) -> dict[str,
     (ignoring case and trailing punctuation) replaces it. Returns the resulting
     snippets.
     """
-    trigger = trigger.strip()
-    if not trigger:
-        raise ValueError("Snippet trigger must not be empty")
-    if expansion is not None and not expansion.strip():
-        raise ValueError("Snippet expansion must not be empty")
+    return _update_phrases(path, "snippets", "Snippet trigger", "Snippet expansion", trigger, expansion,
+                           snippet_key)
+
+
+def update_replacement(path: Path, phrase: str, replacement: str | None) -> dict[str, str]:
+    """Set a replacement in config.toml, or remove it when `replacement` is None.
+
+    Phrases match case-sensitively, so only one with the same words and case
+    replaces an existing one. Returns the resulting replacements.
+    """
+    return _update_phrases(path, "replacements", "Replacement phrase", "Replacement text", phrase, replacement,
+                           replacement_key)
+
+
+def _update_phrases(path: Path, table: str, key_name: str, value_name: str, key: str,
+                    value: str | None, key_of: Callable[[str], str]) -> dict[str, str]:
+    key = key.strip()
+    if not key:
+        raise ValueError(f"{key_name} must not be empty")
+    if value is not None and not value.strip():
+        raise ValueError(f"{value_name} must not be empty")
 
     doc = _read_document(path)
-    if "snippets" not in doc:
-        doc["snippets"] = tomlkit.table()
-    snippets = doc["snippets"]
-    for key in [k for k in snippets if snippet_key(k) == snippet_key(trigger)]:
-        del snippets[key]
-    if expansion is not None:
-        snippets[trigger] = expansion
+    if table not in doc:
+        doc[table] = tomlkit.table()
+    phrases = doc[table]
+    for existing in [k for k in phrases if key_of(k) == key_of(key)]:
+        del phrases[existing]
+    if value is not None:
+        phrases[key] = value
 
-    result = {str(k): str(v) for k, v in snippets.items()}
+    result = {str(k): str(v) for k, v in phrases.items()}
     _write_document(path, doc)
     return result
 
@@ -497,6 +522,11 @@ def remove_api_key_setting(path: Path) -> None:
     if not api.as_string().strip():
         del doc["api"]
     _replace_document(path, doc)
+
+
+def replacement_key(phrase: str) -> str:
+    """Normalize a replacement phrase the way the daemon matches it: case-sensitive, any spacing between words."""
+    return " ".join(phrase.split())
 
 
 def snippet_key(trigger: str) -> str:

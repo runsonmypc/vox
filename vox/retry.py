@@ -178,7 +178,7 @@ class RetryController:
         self.daemon.set_state(State.IDLE)
 
     async def run(self, entry_id, revision, snapshot, provider, wav):
-        from .daemon import Outcome, _expand_snippet
+        from .daemon import Outcome, _apply_replacements, _rewrite
 
         outcome = 'failed'
         committed = False
@@ -197,7 +197,7 @@ class RetryController:
                 self.db.fail_retry(entry_id, revision, snapshot.mode, problem)
                 revision += 1
                 return
-            text = _expand_snippet(text, snapshot)
+            text = _rewrite(text, snapshot)
             try:
                 # Commit is short and synchronous, serialized with live cancellation/config gates on the loop.
                 committed = self.db.finish_recovery(entry_id, revision, text, snapshot.mode)
@@ -235,13 +235,14 @@ class RetryController:
         except PartialTranscriptionError as e:
             if self.cancelled:
                 return
+            partial = _apply_replacements(e.text, snapshot)  # not a whole dictation, so no snippet
             try:
-                if self.db.fail_retry(entry_id, revision, snapshot.mode, 'Retry failed partway. Try again.', e.text):
+                if self.db.fail_retry(entry_id, revision, snapshot.mode, 'Retry failed partway. Try again.', partial):
                     revision += 1
                 problem = 'Retry failed partway. Try again.'
             except Exception:
                 if not self.cancelled:
-                    await self.paste(e.text, snapshot)
+                    await self.paste(partial, snapshot)
                 if self.daemon.tray is not None:
                     self.daemon.tray.set_notice('Partial text could not be saved. Earlier text and audio are retained.')
         except TimeoutError:

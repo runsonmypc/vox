@@ -5,6 +5,13 @@ All notable changes to Vox Transfer are listed here. Vox Transfer follows
 
 ## [Unreleased]
 
+### Added
+
+- Replacements rewrite a phrase anywhere in a dictation, but only with exactly the same capitals,
+  such as "All right" to "Alright" while "all right" is left alone. Edit them on the new
+  Replacements page of Settings, or in the `[replacements]` table of config.toml. Snippets still
+  replace only a whole dictation.
+
 ## [1.3.0] - 2026-10-24
 
 ### Changed

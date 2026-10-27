@@ -6,6 +6,7 @@ import asyncio
 import io
 import logging
 import os
+import re
 import signal
 import sys
 import threading
@@ -19,7 +20,15 @@ from typing import TYPE_CHECKING, Any
 
 from .attenuation import get_volume, set_volume
 from .audio import AUDIO_RESTART_NOTICE, Recorder, has_speech, is_digital_silence
-from .config import DEFAULT_CONFIG_PATH, Config, file_stamp, load_config, snippet_key, update_transcription_mode
+from .config import (
+    DEFAULT_CONFIG_PATH,
+    Config,
+    file_stamp,
+    load_config,
+    replacement_key,
+    snippet_key,
+    update_transcription_mode,
+)
 from .errors import ConfigError, DependencyError, InjectionError, VoxError
 from .history import HistoryDB
 from .hotkey import HotkeyListener
@@ -1006,7 +1015,7 @@ async def _process(
                                   recovery_notice, failure_notice=EMPTY_NOTICE)
             return
 
-        text = _expand_snippet(text, config)
+        text = _rewrite(text, config)
         if overlay is not None:
             await asyncio.to_thread(overlay.hide_before_paste, overlay_generation)
             if overlay.is_cancelled(overlay_generation):
@@ -1046,9 +1055,10 @@ async def _process(
         if overlay is not None:
             overlay.complete(overlay_generation, False)
         sounds.play("error")
-        saved = await _retain_recording(wav_data, config, history, context, mode, provider, e.text, tray, created_at, recovery_notice) if transcribing else False
+        partial = _apply_replacements(e.text, config)  # not a whole dictation, so no snippet
+        saved = await _retain_recording(wav_data, config, history, context, mode, provider, partial, tray, created_at, recovery_notice) if transcribing else False
         if saved is False and history is not None:
-            saved = await _record_history(history, e.text, context, wav_data, provider)
+            saved = await _record_history(history, partial, context, wav_data, provider)
         if saved:
             if tray is not None and not config.keep_failed_audio:
                 tray.history_changed()
@@ -1057,7 +1067,7 @@ async def _process(
             await asyncio.to_thread(overlay.hide_before_paste, overlay_generation)
             if overlay.is_cancelled(overlay_generation):
                 raise asyncio.CancelledError from None
-        await _paste(e.text, context, config)
+        await _paste(partial, context, config)
     except Exception as e:
         if overlay is not None and overlay.is_cancelled(overlay_generation):
             raise asyncio.CancelledError from None
@@ -1201,11 +1211,33 @@ async def _screen_text(future: asyncio.Future) -> str:
     return text
 
 
-def _expand_snippet(text: str, config: Config) -> str:
+def _rewrite(text: str, config: Config) -> str:
+    """Expand a whole-dictation snippet, or else apply the replacements."""
+    expanded = _expand_snippet(text, config)
+    return expanded if expanded is not None else _apply_replacements(text, config)
+
+
+def _apply_replacements(text: str, config: Config) -> str:
+    """Rewrite each replacement phrase wherever it appears as whole words, matching its case exactly.
+    Each spot takes the longest phrase that matches it, once."""
+    if not config.replacements:
+        return text
+    replacements = {replacement_key(phrase): value for phrase, value in config.replacements.items()}
+    phrases = sorted(replacements, key=len, reverse=True)  # longest first, so "All right" beats "All"
+    words = "|".join(r"\s+".join(re.escape(word) for word in phrase.split()) for phrase in phrases)
+    pattern = re.compile(rf"(?<!\w)(?<!\w['’])(?:{words})(?!\w|['’]\w)")  # not "Can" in "Can't", or "s" in "John's"
+    replaced, count = pattern.subn(lambda match: replacements[replacement_key(match.group())], text)
+    if count:
+        log.info("Applied a replacement %d time(s)", count)
+    return replaced
+
+
+def _expand_snippet(text: str, config: Config) -> str | None:
+    """The expansion of the snippet the whole dictation matches, or None when it matches none."""
     key = snippet_key(text)
     expansion = next((value for trigger, value in config.snippets.items() if snippet_key(trigger) == key), None)
     if expansion is None:
-        return text
+        return None
     log.info("Expanded a snippet (%d chars)", len(expansion))
     log.debug("Snippet match: %r -> %r", text, expansion)
     return expansion
@@ -1284,6 +1316,7 @@ class _ConfigApplier:
         """Apply ``new_config``; ``gone`` says config.toml was deleted, so these are the defaults."""
         config = self.config
         config.snippets = new_config.snippets
+        config.replacements = new_config.replacements
         config.dictionary = new_config.dictionary
         config.window_classes = new_config.window_classes
         config.context_screen = new_config.context_screen

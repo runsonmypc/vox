@@ -121,6 +121,18 @@ async def test_retry_failure_keeps_audio_and_distinct_partial_attempts(recovery,
 
 
 @pytest.mark.anyio
+async def test_retry_partial_text_gets_replacements(recovery):
+    controller, daemon, entry_id, _audio_id = recovery
+    daemon.config.replacements = {'new': 'fresh'}
+    token, provider = await begin(controller, entry_id)
+    provider.transcribe.side_effect = PartialTranscriptionError('secret', 'new partial')
+    with patch('vox.retry.detect_paste_target', return_value=EXTERNAL), patch('vox.injector.paste'):
+        await ready(controller, token)
+        await daemon.process_task
+    assert controller.db.get(entry_id).text == 'fresh partial'
+
+
+@pytest.mark.anyio
 @pytest.mark.parametrize('action', ['cancel', 'delete', 'clear'])
 async def test_cancel_and_delete_during_provider_prevent_late_paste(recovery, action):
     controller, daemon, entry_id, audio_id = recovery

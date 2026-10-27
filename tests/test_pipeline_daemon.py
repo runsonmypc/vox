@@ -42,6 +42,7 @@ from vox.daemon import (
     _Daemon,
     _platform_notice,
     _process,
+    _rewrite,
 )
 from vox.errors import AudioError, ConfigError, StreamingError, TranscriptionError
 from vox.history import HistoryDB
@@ -1156,6 +1157,52 @@ async def test_snippets_match_ignoring_case_and_punctuation_and_stay_out_of_info
     assert "my email" not in caplog.text
 
 
+@pytest.mark.parametrize("text, expected", [
+    ("All right dude, I'm getting sick of this.", "Alright dude, I'm getting sick of this."),
+    ("Fine. All right then! All right?", "Fine. Alright then! Alright?"),
+    ("Sure.\nAll  right", "Sure.\nAlright"),
+    ("He said “All right” twice", "He said “Alright” twice"),
+    ("all right, lowercase. ALL RIGHT, shouting.", "all right, lowercase. ALL RIGHT, shouting."),
+    ("The answers were all right.", "The answers were all right."),
+    ("All righty then. FAll right", "All righty then. FAll right"),
+])
+def test_replacements_apply_anywhere_with_the_same_case(text, expected):
+    assert _rewrite(text, Config(replacements={"All right": "Alright"})) == expected
+
+
+def test_each_spot_takes_the_longest_replacement_once():
+    config = Config(replacements={"All": "Every", "All right": "Alright", "Alright": "OK"})
+    assert _rewrite("All right then, All of it.", config) == "Alright then, Every of it."
+
+
+def test_replacements_leave_contractions_alone():
+    config = Config(replacements={"Can": "May", "s": "S"})
+    assert _rewrite("Can't go. Can’t stop. Can I? John's and John’s", config) == \
+        "Can't go. Can’t stop. May I? John's and John’s"
+    assert _rewrite("She said 'Can I' then", config) == "She said 'May I' then"
+    assert _rewrite("He said 'Can' and ‘Can’", config) == "He said 'May' and ‘May’"
+
+
+def test_a_matching_snippet_wins_over_replacements():
+    config = Config(snippets={"all right": "OK!"}, replacements={"All right": "Alright"})
+    assert _rewrite("All right.", config) == "OK!"
+    text = "hello"
+    assert _rewrite(text, Config(snippets={"hello": text}, replacements={"hello": "goodbye"})) == "hello"
+
+
+@pytest.mark.anyio
+async def test_replacements_are_pasted_and_stay_out_of_info_logs(speech, caplog):
+    kwargs = process_kwargs(config=Config(replacements={"All right": "Alright"}))
+    kwargs["batch_transcriber"].transcribe.return_value = "All right dude."
+    caplog.set_level(logging.INFO, logger="vox")
+    with patch("vox.daemon.detect_active_window", return_value=AppContext("", "", AppType.OTHER)), \
+         patch("vox.daemon.paste") as paste:
+        await _process(**kwargs)
+    paste.assert_called_once_with("Alright dude.", AppType.EDITOR)
+    assert "Applied a replacement 1 time(s)" in caplog.text
+    assert "dude" not in caplog.text
+
+
 @pytest.mark.anyio
 async def test_history_records_the_mode_the_recording_started_in(tmp_path, speech):
     history = HistoryDB(tmp_path / "history.db")
@@ -1267,6 +1314,17 @@ async def test_a_partial_transcription_that_history_cannot_keep_is_pasted(tmp_pa
     assert kwargs["queue"].get_nowait() == "process_done"
     if history is not None:
         history.close()
+
+
+@pytest.mark.anyio
+async def test_partial_text_gets_replacements_but_not_snippets(speech):
+    config = Config(snippets={"All right": "OK!"}, replacements={"All right": "Alright"}, keep_failed_audio=False)
+    kwargs = process_kwargs(config=config)
+    kwargs["batch_transcriber"].transcribe.side_effect = PartialTranscriptionError("part 2 of 2 failed", "All right")
+    with patch("vox.daemon.detect_active_window", return_value=AppContext("", "", AppType.OTHER)), \
+         patch("vox.daemon.paste") as paste:
+        await _process(**kwargs)
+    paste.assert_called_once_with("Alright", AppType.EDITOR)
 
 
 @pytest.mark.anyio

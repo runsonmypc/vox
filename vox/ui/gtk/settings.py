@@ -1,4 +1,4 @@
-"""Settings window for Linux (GTK 4 and libadwaita): General, Hotkey, Transcription, Vocabulary and Snippets pages.
+"""Settings window for Linux (GTK 4 and libadwaita): General, Hotkey, Transcription, Vocabulary, Snippets and Replacements pages.
 
 Built on the vocabulary window's view switcher. Every change is saved to config.toml
 as it is made, with no Save button; the API key keeps its own dialog with Save. The
@@ -416,7 +416,7 @@ class SettingsWindow(VocabWindow):
         hotkey.reload()
         super().__init__(vocab, **kwargs)
         self.set_title(TITLE)
-        self.set_default_size(900, 720)  # wide enough for the five page names
+        self.set_default_size(1000, 720)  # wide enough for the six page names
 
         off = label(DICTATION_OFF, "caption", "dim-label", xalign=0.5, margin_top=6, margin_bottom=6)
         self.view.add_bottom_bar(off)
@@ -482,7 +482,7 @@ class SettingsWindow(VocabWindow):
         if not self.settings.poll():
             return
         self.model.reload()
-        self.render()  # the Vocabulary and Snippets pages
+        self.render()  # the Vocabulary, Snippets and Replacements pages
         if self.hotkey.recording is None:
             self.hotkey_model.reload()
         self.render_pages(keep_prompt=True)
