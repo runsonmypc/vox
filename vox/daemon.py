@@ -1055,9 +1055,10 @@ async def _process(
         if overlay is not None:
             overlay.complete(overlay_generation, False)
         sounds.play("error")
-        saved = await _retain_recording(wav_data, config, history, context, mode, provider, e.text, tray, created_at, recovery_notice) if transcribing else False
+        partial = _apply_replacements(e.text, config)  # not a whole dictation, so no snippet
+        saved = await _retain_recording(wav_data, config, history, context, mode, provider, partial, tray, created_at, recovery_notice) if transcribing else False
         if saved is False and history is not None:
-            saved = await _record_history(history, e.text, context, wav_data, provider)
+            saved = await _record_history(history, partial, context, wav_data, provider)
         if saved:
             if tray is not None and not config.keep_failed_audio:
                 tray.history_changed()
@@ -1066,7 +1067,7 @@ async def _process(
             await asyncio.to_thread(overlay.hide_before_paste, overlay_generation)
             if overlay.is_cancelled(overlay_generation):
                 raise asyncio.CancelledError from None
-        await _paste(e.text, context, config)
+        await _paste(partial, context, config)
     except Exception as e:
         if overlay is not None and overlay.is_cancelled(overlay_generation):
             raise asyncio.CancelledError from None
@@ -1224,7 +1225,7 @@ def _apply_replacements(text: str, config: Config) -> str:
     replacements = {replacement_key(phrase): value for phrase, value in config.replacements.items()}
     phrases = sorted(replacements, key=len, reverse=True)  # longest first, so "All right" beats "All"
     words = "|".join(r"\s+".join(re.escape(word) for word in phrase.split()) for phrase in phrases)
-    pattern = re.compile(rf"(?<!\w)(?<!\w['’])(?:{words})(?![\w'’])")  # not "Can" in "Can't", or "s" in "John's"
+    pattern = re.compile(rf"(?<!\w)(?<!\w['’])(?:{words})(?!\w|['’]\w)")  # not "Can" in "Can't", or "s" in "John's"
     replaced, count = pattern.subn(lambda match: replacements[replacement_key(match.group())], text)
     if count:
         log.info("Applied a replacement %d time(s)", count)

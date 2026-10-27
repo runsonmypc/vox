@@ -1180,6 +1180,7 @@ def test_replacements_leave_contractions_alone():
     assert _rewrite("Can't go. Can’t stop. Can I? John's and John’s", config) == \
         "Can't go. Can’t stop. May I? John's and John’s"
     assert _rewrite("She said 'Can I' then", config) == "She said 'May I' then"
+    assert _rewrite("He said 'Can' and ‘Can’", config) == "He said 'May' and ‘May’"
 
 
 def test_a_matching_snippet_wins_over_replacements():
@@ -1313,6 +1314,17 @@ async def test_a_partial_transcription_that_history_cannot_keep_is_pasted(tmp_pa
     assert kwargs["queue"].get_nowait() == "process_done"
     if history is not None:
         history.close()
+
+
+@pytest.mark.anyio
+async def test_partial_text_gets_replacements_but_not_snippets(speech):
+    config = Config(snippets={"All right": "OK!"}, replacements={"All right": "Alright"}, keep_failed_audio=False)
+    kwargs = process_kwargs(config=config)
+    kwargs["batch_transcriber"].transcribe.side_effect = PartialTranscriptionError("part 2 of 2 failed", "All right")
+    with patch("vox.daemon.detect_active_window", return_value=AppContext("", "", AppType.OTHER)), \
+         patch("vox.daemon.paste") as paste:
+        await _process(**kwargs)
+    paste.assert_called_once_with("Alright", AppType.EDITOR)
 
 
 @pytest.mark.anyio
