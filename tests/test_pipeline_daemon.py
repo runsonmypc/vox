@@ -1161,17 +1161,18 @@ async def test_snippets_match_ignoring_case_and_punctuation_and_stay_out_of_info
     ("All right dude, I'm getting sick of this.", "Alright dude, I'm getting sick of this."),
     ("Fine. All right then! All right?", "Fine. Alright then! Alright?"),
     ("Sure.\nAll  right", "Sure.\nAlright"),
+    ("He said “All right” twice", "He said “Alright” twice"),
     ("all right, lowercase. ALL RIGHT, shouting.", "all right, lowercase. ALL RIGHT, shouting."),
     ("The answers were all right.", "The answers were all right."),
-    ("All righty then.", "All righty then."),
+    ("All righty then. FAll right", "All righty then. FAll right"),
 ])
-def test_replacements_apply_only_at_sentence_starts_with_the_same_case(text, expected):
+def test_replacements_apply_anywhere_with_the_same_case(text, expected):
     assert _rewrite(text, Config(replacements={"All right": "Alright"})) == expected
 
 
-def test_each_sentence_start_takes_the_longest_replacement_once():
+def test_each_spot_takes_the_longest_replacement_once():
     config = Config(replacements={"All": "Every", "All right": "Alright", "Alright": "OK"})
-    assert _rewrite("All right then. All of it.", config) == "Alright then. Every of it."
+    assert _rewrite("All right then, All of it.", config) == "Alright then, Every of it."
 
 
 def test_a_matching_snippet_wins_over_replacements():

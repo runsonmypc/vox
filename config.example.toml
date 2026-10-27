@@ -115,9 +115,9 @@
 #   "my address" = "123 Main St, Springfield, IL"
 
 [replacements]
-# Rewrites a phrase only where it starts a sentence (at the start of a dictation or after . ? or !)
-# and only with exactly the same capitals, so the same words mid-sentence are left alone. The
-# Replacements page of Settings edits these. For example:
+# Rewrites a phrase wherever it appears as whole words, but only with exactly the same capitals, so
+# "All right" below leaves "all right" alone. The Replacements page of Settings edits these. For
+# example:
 #   "All right" = "Alright"
 
 [window_classes]

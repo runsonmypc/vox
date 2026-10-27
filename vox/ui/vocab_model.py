@@ -23,11 +23,11 @@ from ..errors import ConfigError
 # What both windows say, so macOS and Linux never drift apart
 WORDS_INTRO = "Names, jargon and acronyms Vox Transfer should always spell exactly as written."
 SNIPPETS_INTRO = "Say a trigger phrase on its own and Vox Transfer types the expansion instead."
-REPLACEMENTS_INTRO = ("When a sentence starts with a phrase, written with exactly the same capitals, Vox Transfer "
-                      "writes your replacement instead. The same words mid-sentence are left alone.")
+REPLACEMENTS_INTRO = ("Wherever a phrase appears with exactly the same capitals, Vox Transfer writes your "
+                      "replacement instead.")
 NO_WORDS = ("No Words Yet", "Add names and terms Vox Transfer tends to get wrong.")
 NO_SNIPPETS = ("No Snippets Yet", "Type an address, a sign-off or a link just by saying a short phrase.")
-NO_REPLACEMENTS = ("No Replacements Yet", "Fix how a sentence keeps starting, like “All right” to “Alright”.")
+NO_REPLACEMENTS = ("No Replacements Yet", "Fix words that always come out wrong, like “All right” to “Alright”.")
 LOAD_FAILED_TITLE = "Couldn’t Read Your Settings"
 SAVE_FAILED_TITLE = "Couldn’t Save"
 
@@ -49,7 +49,7 @@ class PhraseKind:
 SNIPPETS = PhraseKind("snippets", "Snippet", SNIPPETS_INTRO, NO_SNIPPETS, "When you say", "Vox Transfer types",
                       "my email", "Vox Transfer will stop expanding this phrase.")
 REPLACEMENTS = PhraseKind("replacements", "Replacement", REPLACEMENTS_INTRO, NO_REPLACEMENTS,
-                          "When a sentence starts with", "Vox Transfer writes", "All right",
+                          "When Vox Transfer hears", "It writes", "All right",
                           "Vox Transfer will stop replacing this phrase.")
 _UPDATE = {SNIPPETS: update_snippet, REPLACEMENTS: update_replacement}
 _KEY = {SNIPPETS: snippet_key, REPLACEMENTS: replacement_key}  # how each kind tells phrases apart

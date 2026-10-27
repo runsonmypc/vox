@@ -1211,21 +1211,21 @@ async def _screen_text(future: asyncio.Future) -> str:
 
 
 def _rewrite(text: str, config: Config) -> str:
-    """Expand a whole-dictation snippet, or else apply the sentence-start replacements."""
+    """Expand a whole-dictation snippet, or else apply the replacements."""
     expanded = _expand_snippet(text, config)
-    return expanded if expanded is not text else _replace_sentence_starts(text, config)
+    return expanded if expanded is not text else _apply_replacements(text, config)
 
 
-def _replace_sentence_starts(text: str, config: Config) -> str:
-    """Rewrite a replacement phrase, matching its case exactly, where it starts the dictation or
-    follows .?! and whitespace. Each sentence start takes the longest phrase that matches it, once."""
+def _apply_replacements(text: str, config: Config) -> str:
+    """Rewrite each replacement phrase wherever it appears as whole words, matching its case exactly.
+    Each spot takes the longest phrase that matches it, once."""
     if not config.replacements:
         return text
     replacements = {replacement_key(phrase): value for phrase, value in config.replacements.items()}
     phrases = sorted(replacements, key=len, reverse=True)  # longest first, so "All right" beats "All"
     words = "|".join(r"\s+".join(re.escape(word) for word in phrase.split()) for phrase in phrases)
-    pattern = re.compile(rf"(^|[.?!]\s+)({words})(?!\w)")
-    replaced, count = pattern.subn(lambda match: match.group(1) + replacements[replacement_key(match.group(2))], text)
+    pattern = re.compile(rf"(?<!\w)(?:{words})(?!\w)")
+    replaced, count = pattern.subn(lambda match: replacements[replacement_key(match.group())], text)
     if count:
         log.info("Applied a replacement %d time(s)", count)
     return replaced

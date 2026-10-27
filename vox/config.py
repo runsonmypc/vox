@@ -52,7 +52,7 @@ class Config:
     # Snippets: trigger phrase -> expansion
     snippets: dict[str, str] = field(default_factory=dict)
 
-    # Replacements: phrase -> text, rewritten only where the phrase starts a sentence
+    # Replacements: phrase -> text, rewritten wherever the phrase appears with the same case
     replacements: dict[str, str] = field(default_factory=dict)
 
     # Custom dictionary words to preserve
@@ -346,7 +346,7 @@ def update_snippet(path: Path, trigger: str, expansion: str | None) -> dict[str,
 
 
 def update_replacement(path: Path, phrase: str, replacement: str | None) -> dict[str, str]:
-    """Set a sentence-start replacement in config.toml, or remove it when `replacement` is None.
+    """Set a replacement in config.toml, or remove it when `replacement` is None.
 
     Phrases match case-sensitively, so only one with the same words and case
     replaces an existing one. Returns the resulting replacements.
