@@ -5,6 +5,12 @@ All notable changes to Vox Transfer are listed here. Vox Transfer follows
 
 ## [Unreleased]
 
+### Added
+
+- A `[replacements]` table in config.toml rewrites a phrase only where it starts a sentence, such
+  as `"all right" = "alright"`, leaving the same words alone mid-sentence. Snippets still replace
+  only a whole dictation.
+
 ## [1.3.0] - 2026-10-24
 
 ### Changed

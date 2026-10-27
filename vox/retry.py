@@ -178,7 +178,7 @@ class RetryController:
         self.daemon.set_state(State.IDLE)
 
     async def run(self, entry_id, revision, snapshot, provider, wav):
-        from .daemon import Outcome, _expand_snippet
+        from .daemon import Outcome, _rewrite
 
         outcome = 'failed'
         committed = False
@@ -197,7 +197,7 @@ class RetryController:
                 self.db.fail_retry(entry_id, revision, snapshot.mode, problem)
                 revision += 1
                 return
-            text = _expand_snippet(text, snapshot)
+            text = _rewrite(text, snapshot)
             try:
                 # Commit is short and synchronous, serialized with live cancellation/config gates on the loop.
                 committed = self.db.finish_recovery(entry_id, revision, text, snapshot.mode)

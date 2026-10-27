@@ -52,6 +52,9 @@ class Config:
     # Snippets: trigger phrase -> expansion
     snippets: dict[str, str] = field(default_factory=dict)
 
+    # Replacements: phrase -> text, rewritten only where the phrase starts a sentence
+    replacements: dict[str, str] = field(default_factory=dict)
+
     # Custom dictionary words to preserve
     dictionary: list[str] = field(default_factory=list)
 
@@ -192,6 +195,10 @@ def _apply(config: Config, data: dict) -> None:
             break
     if "snippets" in data:
         config.snippets = _text_table("[snippets]", data["snippets"])
+    if "replacements" in data:
+        config.replacements = _text_table("[replacements]", data["replacements"])
+        if any(not phrase.strip() for phrase in config.replacements):
+            raise ConfigError("[replacements] phrases must not be empty")
     if "window_classes" in data:
         config.window_classes = _text_table("[window_classes]", data["window_classes"])
 

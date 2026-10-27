@@ -42,6 +42,7 @@ from vox.daemon import (
     _Daemon,
     _platform_notice,
     _process,
+    _rewrite,
 )
 from vox.errors import AudioError, ConfigError, StreamingError, TranscriptionError
 from vox.history import HistoryDB
@@ -1154,6 +1155,35 @@ async def test_snippets_match_ignoring_case_and_punctuation_and_stay_out_of_info
     assert "Expanded a snippet (16 chars)" in caplog.text
     assert "alex@example.com" not in caplog.text
     assert "my email" not in caplog.text
+
+
+@pytest.mark.parametrize("text, expected", [
+    ("All right dude, I'm getting sick of this.", "Alright dude, I'm getting sick of this."),
+    ("Fine. all right then! ALL RIGHT?", "Fine. alright then! Alright?"),
+    ("Sure.\nAll  right", "Sure.\nAlright"),
+    ("The answers were all right.", "The answers were all right."),
+    ("All righty then.", "All righty then."),
+])
+def test_replacements_apply_only_at_sentence_starts(text, expected):
+    assert _rewrite(text, Config(replacements={"all right": "alright"})) == expected
+
+
+def test_a_matching_snippet_wins_over_replacements():
+    config = Config(snippets={"all right": "OK!"}, replacements={"all right": "alright"})
+    assert _rewrite("All right.", config) == "OK!"
+
+
+@pytest.mark.anyio
+async def test_replacements_are_pasted_and_stay_out_of_info_logs(speech, caplog):
+    kwargs = process_kwargs(config=Config(replacements={"all right": "alright"}))
+    kwargs["batch_transcriber"].transcribe.return_value = "All right dude."
+    caplog.set_level(logging.INFO, logger="vox")
+    with patch("vox.daemon.detect_active_window", return_value=AppContext("", "", AppType.OTHER)), \
+         patch("vox.daemon.paste") as paste:
+        await _process(**kwargs)
+    paste.assert_called_once_with("Alright dude.", AppType.EDITOR)
+    assert "Applied a replacement 1 time(s)" in caplog.text
+    assert "dude" not in caplog.text
 
 
 @pytest.mark.anyio

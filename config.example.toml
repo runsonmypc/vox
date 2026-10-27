@@ -114,6 +114,12 @@
 #   "my email" = "alex@example.com"
 #   "my address" = "123 Main St, Springfield, IL"
 
+[replacements]
+# Rewrites a phrase, ignoring case, only where it starts a sentence: at the start of a dictation
+# or after . ? or !, so the same words mid-sentence are left alone. A capitalized phrase gets a
+# capitalized replacement. For example:
+#   "all right" = "alright"
+
 [window_classes]
 # Tell Vox Transfer what kind of app a window belongs to: TERMINAL, EDITOR, CHAT, EMAIL, BROWSER or
 # OTHER. Each key is matched, ignoring case, as part of the window's WM_CLASS on Linux, or of its

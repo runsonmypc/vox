@@ -6,6 +6,7 @@ import asyncio
 import io
 import logging
 import os
+import re
 import signal
 import sys
 import threading
@@ -1006,7 +1007,7 @@ async def _process(
                                   recovery_notice, failure_notice=EMPTY_NOTICE)
             return
 
-        text = _expand_snippet(text, config)
+        text = _rewrite(text, config)
         if overlay is not None:
             await asyncio.to_thread(overlay.hide_before_paste, overlay_generation)
             if overlay.is_cancelled(overlay_generation):
@@ -1201,6 +1202,33 @@ async def _screen_text(future: asyncio.Future) -> str:
     return text
 
 
+def _rewrite(text: str, config: Config) -> str:
+    """Expand a whole-dictation snippet, or else apply the sentence-start replacements."""
+    expanded = _expand_snippet(text, config)
+    return expanded if expanded is not text else _replace_sentence_starts(text, config)
+
+
+def _replace_sentence_starts(text: str, config: Config) -> str:
+    """Rewrite each replacement phrase, ignoring case, where it starts the dictation or follows .?! and
+    whitespace; a capitalized phrase gets a capitalized replacement."""
+    for phrase, replacement in config.replacements.items():
+        words = r"\s+".join(re.escape(word) for word in phrase.split())
+        pattern = re.compile(rf"(^|[.?!]\s+){words}(?!\w)", re.IGNORECASE)
+
+        def swap(match: re.Match[str], replacement: str = replacement) -> str:
+            start = match.group(1)
+            if match.group(0)[len(start)].isupper():
+                replacement = replacement[:1].upper() + replacement[1:]
+            return start + replacement
+
+        replaced, count = pattern.subn(swap, text)
+        if count:
+            log.info("Applied a replacement %d time(s)", count)
+            log.debug("Replacement: %r -> %r", phrase, replacement)
+            text = replaced
+    return text
+
+
 def _expand_snippet(text: str, config: Config) -> str:
     key = snippet_key(text)
     expansion = next((value for trigger, value in config.snippets.items() if snippet_key(trigger) == key), None)
@@ -1284,6 +1312,7 @@ class _ConfigApplier:
         """Apply ``new_config``; ``gone`` says config.toml was deleted, so these are the defaults."""
         config = self.config
         config.snippets = new_config.snippets
+        config.replacements = new_config.replacements
         config.dictionary = new_config.dictionary
         config.window_classes = new_config.window_classes
         config.context_screen = new_config.context_screen
