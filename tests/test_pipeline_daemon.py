@@ -1176,13 +1176,17 @@ def test_each_spot_takes_the_longest_replacement_once():
 
 
 def test_replacements_leave_contractions_alone():
-    config = Config(replacements={"Can": "May"})
-    assert _rewrite("Can't go. Can’t stop. Can I?", config) == "Can't go. Can’t stop. May I?"
+    config = Config(replacements={"Can": "May", "s": "S"})
+    assert _rewrite("Can't go. Can’t stop. Can I? John's and John’s", config) == \
+        "Can't go. Can’t stop. May I? John's and John’s"
+    assert _rewrite("She said 'Can I' then", config) == "She said 'May I' then"
 
 
 def test_a_matching_snippet_wins_over_replacements():
     config = Config(snippets={"all right": "OK!"}, replacements={"All right": "Alright"})
     assert _rewrite("All right.", config) == "OK!"
+    text = "hello"
+    assert _rewrite(text, Config(snippets={"hello": text}, replacements={"hello": "goodbye"})) == "hello"
 
 
 @pytest.mark.anyio

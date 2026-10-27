@@ -1213,7 +1213,7 @@ async def _screen_text(future: asyncio.Future) -> str:
 def _rewrite(text: str, config: Config) -> str:
     """Expand a whole-dictation snippet, or else apply the replacements."""
     expanded = _expand_snippet(text, config)
-    return expanded if expanded is not text else _apply_replacements(text, config)
+    return expanded if expanded is not None else _apply_replacements(text, config)
 
 
 def _apply_replacements(text: str, config: Config) -> str:
@@ -1224,18 +1224,19 @@ def _apply_replacements(text: str, config: Config) -> str:
     replacements = {replacement_key(phrase): value for phrase, value in config.replacements.items()}
     phrases = sorted(replacements, key=len, reverse=True)  # longest first, so "All right" beats "All"
     words = "|".join(r"\s+".join(re.escape(word) for word in phrase.split()) for phrase in phrases)
-    pattern = re.compile(rf"(?<!\w)(?:{words})(?![\w'’])")  # not "Can" in "Can't"
+    pattern = re.compile(rf"(?<!\w)(?<!\w['’])(?:{words})(?![\w'’])")  # not "Can" in "Can't", or "s" in "John's"
     replaced, count = pattern.subn(lambda match: replacements[replacement_key(match.group())], text)
     if count:
         log.info("Applied a replacement %d time(s)", count)
     return replaced
 
 
-def _expand_snippet(text: str, config: Config) -> str:
+def _expand_snippet(text: str, config: Config) -> str | None:
+    """The expansion of the snippet the whole dictation matches, or None when it matches none."""
     key = snippet_key(text)
     expansion = next((value for trigger, value in config.snippets.items() if snippet_key(trigger) == key), None)
     if expansion is None:
-        return text
+        return None
     log.info("Expanded a snippet (%d chars)", len(expansion))
     log.debug("Snippet match: %r -> %r", text, expansion)
     return expansion
