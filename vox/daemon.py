@@ -1224,7 +1224,7 @@ def _apply_replacements(text: str, config: Config) -> str:
     replacements = {replacement_key(phrase): value for phrase, value in config.replacements.items()}
     phrases = sorted(replacements, key=len, reverse=True)  # longest first, so "All right" beats "All"
     words = "|".join(r"\s+".join(re.escape(word) for word in phrase.split()) for phrase in phrases)
-    pattern = re.compile(rf"(?<!\w)(?:{words})(?!\w)")
+    pattern = re.compile(rf"(?<!\w)(?:{words})(?![\w'’])")  # not "Can" in "Can't"
     replaced, count = pattern.subn(lambda match: replacements[replacement_key(match.group())], text)
     if count:
         log.info("Applied a replacement %d time(s)", count)

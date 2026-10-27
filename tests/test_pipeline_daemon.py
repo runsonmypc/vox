@@ -1175,6 +1175,11 @@ def test_each_spot_takes_the_longest_replacement_once():
     assert _rewrite("All right then, All of it.", config) == "Alright then, Every of it."
 
 
+def test_replacements_leave_contractions_alone():
+    config = Config(replacements={"Can": "May"})
+    assert _rewrite("Can't go. Can’t stop. Can I?", config) == "Can't go. Can’t stop. May I?"
+
+
 def test_a_matching_snippet_wins_over_replacements():
     config = Config(snippets={"all right": "OK!"}, replacements={"All right": "Alright"})
     assert _rewrite("All right.", config) == "OK!"
